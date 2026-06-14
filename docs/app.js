@@ -1,8 +1,8 @@
-/* Atlas site — OS detection, release manifest, nav. Owner/repo synced from version.py
+/* Ember site — OS detection, release manifest, nav. Owner/repo synced from version.py
    by the release script (sed on the next line). */
-const ATLAS = { owner: "arancool3000", repo: "atlas" };
-ATLAS.repoUrl = `https://github.com/${ATLAS.owner}/${ATLAS.repo}`;
-ATLAS.releasesUrl = `${ATLAS.repoUrl}/releases/latest`;
+const EMBER = { owner: "arancool3000", repo: "ember" };
+EMBER.repoUrl = `https://github.com/${EMBER.owner}/${EMBER.repo}`;
+EMBER.releasesUrl = `${EMBER.repoUrl}/releases/latest`;
 
 function detectOS() {
   const ua = (navigator.userAgent || "") + " " + (navigator.platform || "");
@@ -12,12 +12,12 @@ function detectOS() {
 }
 const OS = detectOS();
 const OS_LABEL = { macos: "macOS", windows: "Windows" };
-const ASSET = { macos: "Atlas-macOS.zip", windows: "Atlas-Windows.zip" };
+const ASSET = { macos: "Ember-macOS.zip", windows: "Ember-Windows.zip" };
 
 function dlUrl(manifest, os) {
   const d = (manifest.downloads || {})[os];
   if (d && d.url) return d.url;
-  return `${ATLAS.releasesUrl}/download/${ASSET[os]}`;
+  return `${EMBER.releasesUrl}/download/${ASSET[os]}`;
 }
 
 function applyDownloads(manifest) {
@@ -44,7 +44,7 @@ function applyDownloads(manifest) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.querySelectorAll("[data-gh]").forEach(a => a.href = ATLAS.repoUrl);
+  document.querySelectorAll("[data-gh]").forEach(a => a.href = EMBER.repoUrl);
   document.querySelectorAll("[data-os-label]").forEach(e => e.textContent = OS_LABEL[OS]);
 
   let page = (location.pathname.split("/").pop() || "index.html").toLowerCase();

@@ -40,7 +40,7 @@ COOKIE_DISMISS_JS = r"""
                         'understood','i accept','i agree','consent','ok','okay','continue','enable all'];
   const REJECT_WORDS = ['reject all','reject','decline all','decline','disagree','refuse','no thanks',
                         'only essential','only necessary','required only'];
-  const wanted = window._atlas_cookie_pref === 'reject' ? REJECT_WORDS : ACCEPT_WORDS;
+  const wanted = window._ember_cookie_pref === 'reject' ? REJECT_WORDS : ACCEPT_WORDS;
   const candidates = Array.from(document.querySelectorAll(
       'button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex]'
   ));
@@ -332,7 +332,7 @@ class BrowserController:
         def _connect(target_tab):
             return websocket.create_connection(
                 target_tab["webSocketDebuggerUrl"], timeout=10,
-                origin="atlas://localhost",
+                origin="ember://localhost",
                 suppress_origin=True,
             )
 
@@ -504,7 +504,7 @@ class BrowserController:
 
     def dismiss_cookies(self, mode: str = "accept") -> dict:
         try:
-            self.evaluate(f"window._atlas_cookie_pref={json.dumps(mode)}")
+            self.evaluate(f"window._ember_cookie_pref={json.dumps(mode)}")
             res = self.evaluate(f"({COOKIE_DISMISS_JS})")
             return {"ok": True, **(res if isinstance(res, dict) else {"raw": res})}
         except Exception as e:

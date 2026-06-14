@@ -1,7 +1,7 @@
-"""Atlas Link - control this PC from a phone browser on the same Wi-Fi.
+"""Ember Link - control this PC from a phone browser on the same Wi-Fi.
 
 Self-contained: pure Python stdlib HTTP server (no Flask, no websockets, no cloud
-backend). Atlas starts it; you open the printed URL on your phone, enter the PIN, and
+backend). Ember starts it; you open the printed URL on your phone, enter the PIN, and
 you get a live view of the PC screen plus a trackpad/keyboard. Tap the screen image to
 click exactly there - so even with no working mouse/keyboard drivers on the PC, the phone
 drives it.
@@ -169,7 +169,7 @@ def _chat_snapshot() -> list[dict]:
 
 PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Atlas Link</title><style>
+<title>Ember Link</title><style>
 :root{--bg:#070708;--fg:rgba(255,255,255,.94);--mut:rgba(255,255,255,.62);--faint:rgba(255,255,255,.38);--glass:rgba(255,255,255,.105);--glass2:rgba(255,255,255,.16);--line:rgba(255,255,255,.2);--line2:rgba(255,255,255,.32);--solid:#fff;--dark:#0a0a0c;--err:#ff6b6b}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 input,textarea{-webkit-user-select:text;user-select:text}
@@ -208,7 +208,7 @@ button.small{flex:0;padding:8px 11px;font-size:12px;border-radius:14px}
 @media(max-width:410px){button{font-size:13px;padding:12px 8px}.top{gap:5px}.toolbar{left:10px;right:auto;top:auto;bottom:10px}.tag{top:10px}}
 </style></head><body>
 <div id=gate>
-  <h1><span>Atlas</span><b> Link</b></h1>
+  <h1><span>Ember</span><b> Link</b></h1>
   <div class=hint>Enter the PIN shown in the desktop app</div>
   <input id=pin inputmode=numeric placeholder="----">
   <button onclick="connect()" style="width:210px">Connect</button>
@@ -320,7 +320,7 @@ button.small{flex:0;padding:8px 11px;font-size:12px;border-radius:14px}
       <button class=small data-chat="Stop what you are doing.">Stop</button>
     </div>
     <div class=chatBox>
-      <textarea id=chatInput rows=2 placeholder="Tell Atlas what to do on the computer"></textarea>
+      <textarea id=chatInput rows=2 placeholder="Tell Ember what to do on the computer"></textarea>
       <button onclick="sendChat()">Send</button>
     </div>
   </div>
@@ -356,7 +356,7 @@ function cycleSpeed(){SPI=(SPI+1)%SPEEDS.length;SPEED=SPEEDS[SPI];document.getEl
 function toggleDragLock(){dragLock=!dragLock;["dragBtn","dragBtn2"].forEach(id=>{let b=document.getElementById(id);if(b){b.classList.toggle("dragOn",dragLock);b.textContent=dragLock?"Dragging On":"Drag Lock"}});if(!dragLock)post({t:"up"})}
 let livekb=document.getElementById("livekb");livekb.addEventListener("keydown",e=>{let k=e.key;if(k.length===1){post({t:"type",text:k});e.preventDefault()}else if(k==="Backspace"){key("backspace");e.preventDefault()}else if(k==="Enter"){key("enter");e.preventDefault()}else if(k==="Tab"){key("tab");e.preventDefault()}else if(k.indexOf("Arrow")===0){key(k.slice(5).toLowerCase());e.preventDefault()}livekb.value=""});
 function esc(s){return String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
-function renderChat(items){let log=document.getElementById("chatLog");log.innerHTML=(items&&items.length?items:[{role:"system",text:"Remote chat is ready. Tell Atlas what to do on the desktop."}]).map(m=>`<div class="msg ${esc(m.role)}">${esc(m.text)}</div>`).join("");log.scrollTop=log.scrollHeight}
+function renderChat(items){let log=document.getElementById("chatLog");log.innerHTML=(items&&items.length?items:[{role:"system",text:"Remote chat is ready. Tell Ember what to do on the desktop."}]).map(m=>`<div class="msg ${esc(m.role)}">${esc(m.text)}</div>`).join("");log.scrollTop=log.scrollHeight}
 function pollChat(){if(chatLoop||!PIN)return;chatLoop=true;chatTick()}
 async function chatTick(){if(!PIN){chatLoop=false;return}try{let r=await fetch("/api/chat?pin="+encodeURIComponent(PIN),{cache:"no-store"});if(r.ok){let j=await r.json();renderChat(j.messages||[])}}catch(e){}setTimeout(chatTick,MODE==="chat"?750:1800)}
 async function sendChat(){let i=document.getElementById("chatInput"),text=i.value.trim();if(!text)return;i.value="";await fetch("/api/chat",{method:"POST",body:JSON.stringify({pin:PIN,text})});pollChat()}
@@ -441,12 +441,12 @@ class _Handler(BaseHTTPRequestHandler):
             _chat_add("user", text)
             handler = _CHAT_HANDLER
             if handler is None:
-                _chat_add("system", "Atlas Link is connected, but the desktop AI bridge is not ready yet.")
+                _chat_add("system", "Ember Link is connected, but the desktop AI bridge is not ready yet.")
             else:
                 try:
                     handler(text)
                 except Exception as e:
-                    _chat_add("system", f"Could not send to Atlas: {type(e).__name__}: {e}")
+                    _chat_add("system", f"Could not send to Ember: {type(e).__name__}: {e}")
             body = json.dumps({"ok": True, "messages": _chat_snapshot()}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -513,11 +513,11 @@ def _data_dir():
     import sys
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas"
+        d = home / "Library" / "Application Support" / "Ember"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas"
+        d = home / "AppData" / "Roaming" / "Ember"
     else:
-        d = home / ".atlas"
+        d = home / ".ember"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -545,7 +545,7 @@ def stable_pin() -> str:
 
 
 def start(port: int = 8765, pin: str | None = None) -> dict:
-    """Start Atlas Link. Returns the phone URL + PIN to display in the UI.
+    """Start Ember Link. Returns the phone URL + PIN to display in the UI.
     Uses a stable PIN by default so it's the same every session/boot."""
     if _STATE["server"]:
         return {"ok": True, "url": _STATE["url"], "pin": _STATE["pin"], "already_running": True}

@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Docs — Atlas</title>
-<meta name="description" content="Getting started with Atlas: install, permissions, slash commands, Atlas Link phone remote, updates, and troubleshooting.">
-<link rel="icon" href="atlas-logo.svg" type="image/svg+xml">
+<title>Docs — Ember</title>
+<meta name="description" content="Getting started with Ember: install, permissions, slash commands, Ember Link phone remote, updates, and troubleshooting.">
+<link rel="icon" href="ember-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="nav"><div class="wrap">
-  <a class="brand" href="index.html"><img src="atlas-logo.svg" alt=""> Atlas</a>
+  <a class="brand" href="index.html"><img src="ember-logo.svg" alt=""> Ember</a>
   <nav class="navlinks">
     <a data-page="index.html" href="index.html">Home</a>
     <a data-page="features.html" href="features.html">Features</a>
@@ -25,57 +25,57 @@
   <section class="hero first" style="padding-bottom:6px">
     <div><span class="pill">Docs</span></div>
     <h1>Getting <span class="g">started</span></h1>
-    <p class="lead">Install, grant a couple of permissions, and start telling Atlas what to do.</p>
+    <p class="lead">Install, grant a couple of permissions, and start telling Ember what to do.</p>
   </section>
 
   <section class="first prose" style="border-top:0;padding-top:8px">
     <h2>1 · Install</h2>
     <ol class="steps">
       <li><b>Download</b> the build for your OS from the <a href="download.html">download page</a> and unzip it.</li>
-      <li><b>macOS:</b> drag <b>Atlas.app</b> to Applications, then right-click → Open the first time. &nbsp; <b>Windows:</b> run <b>Atlas.exe</b>; on the SmartScreen prompt choose More info → Run anyway.</li>
+      <li><b>macOS:</b> drag <b>Ember.app</b> to Applications, then right-click → Open the first time. &nbsp; <b>Windows:</b> run <b>Ember.exe</b>; on the SmartScreen prompt choose More info → Run anyway.</li>
       <li><b>Add an API key</b> in Settings — a free <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Gemini key</a> works great; add an Anthropic key to use Claude.</li>
     </ol>
 
     <h3>Permissions</h3>
-    <p><b>macOS</b> needs <b>Screen Recording</b> and <b>Accessibility</b> (System Settings → Privacy &amp; Security) so Atlas can see the screen and control input. <b>Windows</b> works out of the box; the global hotkey may ask for input access.</p>
+    <p><b>macOS</b> needs <b>Screen Recording</b> and <b>Accessibility</b> (System Settings → Privacy &amp; Security) so Ember can see the screen and control input. <b>Windows</b> works out of the box; the global hotkey may ask for input access.</p>
 
     <h2 style="margin-top:42px">2 · Talk to it</h2>
-    <p>Type or speak what you want — "find the cheapest flight to Tokyo next month and screenshot it", "clean up my desktop", "why is my Wi-Fi dropping". Atlas screenshots, reads the screen, and acts. Press <span class="kbd">Ctrl/Cmd + Shift + Space</span> to summon it from anywhere.</p>
+    <p>Type or speak what you want — "find the cheapest flight to Tokyo next month and screenshot it", "clean up my desktop", "why is my Wi-Fi dropping". Ember screenshots, reads the screen, and acts. Press <span class="kbd">Ctrl/Cmd + Shift + Space</span> to summon it from anywhere.</p>
 
     <h3>Slash commands</h3>
     <table class="cmds">
       <tr><td>/voice</td><td>Toggle hands-free voice chat</td></tr>
-      <tr><td>/remote</td><td>Start Atlas Link (control this computer from your phone)</td></tr>
+      <tr><td>/remote</td><td>Start Ember Link (control this computer from your phone)</td></tr>
       <tr><td>/manual</td><td>Bridge an external AI for a hard step</td></tr>
       <tr><td>/windows</td><td>List open windows</td></tr>
-      <tr><td>/update</td><td>Install the latest Atlas version</td></tr>
+      <tr><td>/update</td><td>Install the latest Ember version</td></tr>
       <tr><td>/clear</td><td>Clear the chat</td></tr>
       <tr><td>/forget</td><td>Wipe saved facts</td></tr>
       <tr><td>/help</td><td>Show all commands</td></tr>
     </table>
 
-    <h2 style="margin-top:42px">3 · Atlas Link — drive it from your phone</h2>
-    <p>Run <code>/remote</code> (or enable "start automatically" in Settings). Atlas prints a URL + PIN — open the URL on a phone <b>on the same Wi-Fi</b>, enter the PIN, and you get a live mirror of your screen with a trackpad, keyboard, full-screen mirror, and a chat tab that tells Atlas what to do. The PIN is stable, brute-force throttled, and stays on your LAN.</p>
+    <h2 style="margin-top:42px">3 · Ember Link — drive it from your phone</h2>
+    <p>Run <code>/remote</code> (or enable "start automatically" in Settings). Ember prints a URL + PIN — open the URL on a phone <b>on the same Wi-Fi</b>, enter the PIN, and you get a live mirror of your screen with a trackpad, keyboard, full-screen mirror, and a chat tab that tells Ember what to do. The PIN is stable, brute-force throttled, and stays on your LAN.</p>
 
     <h2 style="margin-top:42px">4 · Updates</h2>
-    <p>Atlas checks for a newer release on launch and offers to install it — or run <code>/update</code> any time. Updates are downloaded, checksum-verified, and swapped in place with a rollback backup, then Atlas relaunches. Toggle it in <b>Settings → Performance → Automatically check for updates</b>.</p>
+    <p>Ember checks for a newer release on launch and offers to install it — or run <code>/update</code> any time. Updates are downloaded, checksum-verified, and swapped in place with a rollback backup, then Ember relaunches. Toggle it in <b>Settings → Performance → Automatically check for updates</b>.</p>
 
     <h2 style="margin-top:42px">5 · Troubleshooting</h2>
-    <h3>macOS: "Atlas can't be opened"</h3>
+    <h3>macOS: "Ember can't be opened"</h3>
     <p>It's open-source and not notarized, so Gatekeeper asks once. <b>Right-click the app → Open → Open.</b> Updates afterward don't re-prompt.</p>
     <h3>It can see the screen but won't click</h3>
-    <p>On macOS, grant <b>Accessibility</b> (not just Screen Recording) and reopen Atlas. On Windows, make sure no other app is blocking simulated input.</p>
+    <p>On macOS, grant <b>Accessibility</b> (not just Screen Recording) and reopen Ember. On Windows, make sure no other app is blocking simulated input.</p>
     <h3>Glass looks dark instead of blurred</h3>
     <p>Toggle <b>Liquid Glass</b> in Settings → Appearance. The native blur is on by default; if a macOS/Windows version misbehaves it falls back to a frosted style automatically.</p>
     <h3>The hotkey doesn't work</h3>
     <p>macOS: grant <b>Input Monitoring</b> + Accessibility. Windows: another app may have claimed the same combo — change it in Settings → Performance.</p>
 
-    <p style="margin-top:30px"><a class="btn" data-dl="primary" href="#"><span data-dl-text>Download Atlas</span></a></p>
+    <p style="margin-top:30px"><a class="btn" data-dl="primary" href="#"><span data-dl-text>Download Ember</span></a></p>
   </section>
 </main>
 
 <footer><div class="wrap">
-  <a class="brand" href="index.html"><img src="atlas-logo.svg" alt="" style="width:22px;height:22px;border-radius:6px"> Atlas</a>
+  <a class="brand" href="index.html"><img src="ember-logo.svg" alt="" style="width:22px;height:22px;border-radius:6px"> Ember</a>
   <div class="muted">Open-source AI agent for macOS &amp; Windows · auto-updates in the background</div>
   <div><a data-gh href="#" target="_blank" rel="noopener">GitHub</a> · <a href="features.html">Features</a> · <a href="download.html">Download</a></div>
 </div></footer>

@@ -1,4 +1,4 @@
-"""In-app auto-updater for the Atlas desktop app — macOS (.app) and Windows (onedir).
+"""In-app auto-updater for the Ember desktop app — macOS (.app) and Windows (onedir).
 
 Flow: fetch latest.json from GitHub Releases -> pick this OS's download -> compare to
 version.__version__ -> download -> verify sha256 -> unpack -> swap the running install via
@@ -8,7 +8,7 @@ Platform specifics:
 - macOS: ad-hoc-signed .app; unpack with `ditto` (preserves symlinks + signature), strip the
   com.apple.quarantine xattr, swap the .app via a bash helper.
 - Windows: PyInstaller onedir folder; unpack with `zipfile`, swap the install folder via a
-  batch helper (robocopy /MOVE with rollback), relaunch Atlas.exe.
+  batch helper (robocopy /MOVE with rollback), relaunch Ember.exe.
 
 Robust by construction: any failure raises (caller surfaces it and aborts), the running
 install is kept as a `.old` backup during the swap and rolled back on failure, and the whole
@@ -45,11 +45,11 @@ def install_root() -> Path | None:
         return None
     exe = Path(sys.executable).resolve()
     if sys.platform == "darwin":
-        for parent in exe.parents:           # .../Atlas.app/Contents/MacOS/Atlas
+        for parent in exe.parents:           # .../Ember.app/Contents/MacOS/Ember
             if parent.suffix == ".app":
                 return parent
         return None
-    return exe.parent                        # .../Atlas/Atlas.exe -> .../Atlas
+    return exe.parent                        # .../Ember/Ember.exe -> .../Ember
 
 
 # Back-compat alias (older callers / tests).
@@ -81,7 +81,7 @@ def check_for_update(timeout: float = 8.0) -> dict | None:
         return None
     try:
         req = urllib.request.Request(version.manifest_url(),
-                                     headers={"User-Agent": "Atlas-Updater"})
+                                     headers={"User-Agent": "Ember-Updater"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             manifest = json.loads(r.read().decode("utf-8"))
     except Exception:
@@ -93,7 +93,7 @@ def check_for_update(timeout: float = 8.0) -> dict | None:
 
 
 def _download(url: str, dest: Path, progress=None, timeout: float = 60.0) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "Atlas-Updater"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Ember-Updater"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
@@ -121,13 +121,13 @@ def _sha256(path: Path) -> str:
 
 def _find_payload(extract_dir: Path) -> Path:
     """Locate the new install inside the extracted archive: the .app (mac) or the folder
-    containing the Atlas executable (Windows)."""
+    containing the Ember executable (Windows)."""
     if sys.platform == "darwin":
         apps = list(extract_dir.glob("*.app")) or list(extract_dir.rglob("*.app"))
         if not apps:
             raise RuntimeError("update archive did not contain an .app bundle")
         return apps[0]
-    exe_name = Path(sys.executable).name  # e.g. Atlas.exe
+    exe_name = Path(sys.executable).name  # e.g. Ember.exe
     for exe in [extract_dir / exe_name, *extract_dir.rglob(exe_name)]:
         if exe.exists():
             return exe.parent
@@ -138,8 +138,8 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
     """Download + verify + unpack the update. Returns the staged install path
     (the new .app on macOS, or the new install folder on Windows). Raises on failure."""
     url, expected_sha = _manifest_download(manifest)
-    tmp = Path(tempfile.mkdtemp(prefix="atlas_update_"))
-    zpath = tmp / "Atlas.zip"
+    tmp = Path(tempfile.mkdtemp(prefix="ember_update_"))
+    zpath = tmp / "Ember.zip"
     _download(url, zpath, progress=progress)
 
     if expected_sha:
@@ -198,7 +198,7 @@ def _spawn_macos_swap(staged: Path, target: Path, pid: int) -> None:
         "fi\n"
         f"/usr/bin/open {t}\n"
     )
-    helper_path = Path(tempfile.mkdtemp(prefix="atlas_swap_")) / "swap.sh"
+    helper_path = Path(tempfile.mkdtemp(prefix="ember_swap_")) / "swap.sh"
     helper_path.write_text(helper)
     helper_path.chmod(0o755)
     subprocess.Popen(["/bin/bash", str(helper_path)], start_new_session=True,
@@ -227,7 +227,7 @@ def _spawn_windows_swap(staged: Path, target: Path, pid: int) -> None:
         f'start "" "{target}\\{exe}"\r\n'
         'del "%~f0"\r\n'
     )
-    helper_path = Path(tempfile.mkdtemp(prefix="atlas_swap_")) / "swap.bat"
+    helper_path = Path(tempfile.mkdtemp(prefix="ember_swap_")) / "swap.bat"
     helper_path.write_text(bat, encoding="utf-8")
     DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS|NEW_GROUP|NO_WINDOW
     subprocess.Popen(["cmd", "/c", str(helper_path)], creationflags=DETACHED,

@@ -1,4 +1,4 @@
 @echo off
-REM Launch Atlas on Windows.
+REM Launch Ember on Windows.
 cd /d "%~dp0"
 start "" pythonw main.py

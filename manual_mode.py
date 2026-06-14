@@ -1,11 +1,11 @@
 """Manual mode: human-in-the-loop fallback when the API is exhausted/broken.
 
 Workflow:
-  1. Atlas builds a detailed prompt summarizing the user's request, recent chat, and tools.
+  1. Ember builds a detailed prompt summarizing the user's request, recent chat, and tools.
   2. User clicks 'Copy prompt', pastes it into Claude.ai / ChatGPT / any LLM.
   3. The external LLM returns code (Python or PowerShell).
   4. User pastes the code back into the manual-mode textarea and clicks 'Run'.
-  5. Atlas executes the code with a timeout and shows the output."""
+  5. Ember executes the code with a timeout and shows the output."""
 from __future__ import annotations
 
 import subprocess
@@ -15,7 +15,7 @@ import textwrap
 from pathlib import Path
 
 
-MANUAL_PROMPT_TEMPLATE = """You are helping a Windows automation agent called Atlas whose API quota
+MANUAL_PROMPT_TEMPLATE = """You are helping a Windows automation agent called Ember whose API quota
 has been exhausted. The user needs you to write working {language} code that completes their task.
 
 # User's request
@@ -27,11 +27,11 @@ has been exhausted. The user needs you to write working {language} code that com
 # Current screen description (best-effort, may be stale)
 {screen_summary}
 
-# Atlas's environment
+# Ember's environment
 - Windows 10/11
 - Python 3.10+ with these libraries already installed and importable:
   pyautogui, mss, pyperclip, PIL, requests, psutil, uiautomation, send2trash, subprocess, pathlib
-- The script will be run from Atlas's working directory.
+- The script will be run from Ember's working directory.
 - pyautogui.FAILSAFE = True (moving mouse to (0,0) aborts).
 
 # Your job

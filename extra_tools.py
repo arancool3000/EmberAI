@@ -186,7 +186,7 @@ $nodes.Item(1).AppendChild($xml.CreateTextNode({body!r})) | Out-Null
 $xml2 = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml2.LoadXml($xml.OuterXml)
 $toast = New-Object Windows.UI.Notifications.ToastNotification $xml2
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Atlas").Show($toast)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Ember").Show($toast)
 '''
         subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                        capture_output=True, timeout=8)
@@ -471,7 +471,7 @@ def record_audio(seconds: float = 5.0, path: str | None = None) -> dict:
         FORMAT = pyaudio.paInt16
         CHANNELS = 1
         RATE = 16000
-        dst = Path(path).expanduser() if path else Path.home() / "Downloads" / f"atlas_recording_{int(time.time())}.wav"
+        dst = Path(path).expanduser() if path else Path.home() / "Downloads" / f"ember_recording_{int(time.time())}.wav"
         dst.parent.mkdir(parents=True, exist_ok=True)
         pa = pyaudio.PyAudio()
         stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)

@@ -1,22 +1,22 @@
-# Atlas on Windows
+# Ember on Windows
 
-This folder is the macOS build of Atlas, but the codebase is largely cross-platform.
+This folder is the macOS build of Ember, but the codebase is largely cross-platform.
 Here is the honest state of the Windows version.
 
 ## Install & run (Windows)
 
 ```bat
 install.bat        REM installs deps (PyQt6, Gemini/Anthropic SDKs, uiautomation, ...)
-run.bat            REM launches Atlas
+run.bat            REM launches Ember
 ```
 
-Build a standalone `Atlas.exe`:
+Build a standalone `Ember.exe`:
 
 ```powershell
-./build-windows.ps1     # PyInstaller -> dist\Atlas\Atlas.exe
+./build-windows.ps1     # PyInstaller -> dist\Ember\Ember.exe
 ```
 
-`requirements.txt` and `Atlas.spec` are both platform-aware: Windows-only packages
+`requirements.txt` and `Ember.spec` are both platform-aware: Windows-only packages
 (`pywin32`, `uiautomation`, `comtypes`, `keyboard`, `pycaw`) and macOS-only packages
 (`pyobjc-framework-Vision`, `pyobjc-framework-Quartz`) install/bundle only on their
 own OS, so a plain `pip install -r requirements.txt` works on either platform.
@@ -45,7 +45,7 @@ On Windows these return errors (callers fall back where possible). To reach full
 port these to Windows UI Automation (`uiautomation`, already a Windows dependency):
 
 - `find_ui_elements` — enumerate the UIA tree (the Windows equivalent already shipped in
-  earlier Atlas builds; restore the `uiautomation`-based version here).
+  earlier Ember builds; restore the `uiautomation`-based version here).
 - `click_element_by_text`, `right_click_element_by_text` — click by accessible name via UIA.
 - `list_windows`, `focus_window`, `capture_window` — enumerate top-level windows via `win32gui`.
 

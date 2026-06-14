@@ -1,5 +1,5 @@
-# PyInstaller spec for Atlas (cross-platform: macOS + Windows)
-# Build with:  pyinstaller --noconfirm Atlas.spec
+# PyInstaller spec for Ember (cross-platform: macOS + Windows)
+# Build with:  pyinstaller --noconfirm Ember.spec
 import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
@@ -29,7 +29,7 @@ for pkg in common_pkgs + (win_pkgs if IS_WIN else []) + (mac_pkgs if IS_MAC else
         pass
 
 hiddenimports += collect_submodules("google")
-# Atlas's own modules.
+# Ember's own modules.
 hiddenimports += ["single_instance", "automation", "manual_mode", "more_tools",
                   "extra_tools", "screen_vision", "tools", "browser", "file_ops",
                   "memory", "safety", "models", "voice", "scheduled_tasks",
@@ -86,7 +86,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    name="Atlas",
+    name="Ember",
     icon=icon_file,
     debug=False,
     bootloader_ignore_signals=False,
@@ -110,7 +110,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="Atlas",
+    name="Ember",
 )
 
 # On macOS, wrap the binary in a proper .app bundle so Screen Recording /
@@ -118,18 +118,18 @@ coll = COLLECT(
 if IS_MAC:
     app = BUNDLE(
         coll,
-        name="Atlas.app",
+        name="Ember.app",
         icon="icon.png",
-        bundle_identifier="com.atlas.aiagent",
+        bundle_identifier="com.ember.aiagent",
         info_plist={
-            "CFBundleName": "Atlas",
-            "CFBundleDisplayName": "Atlas",
+            "CFBundleName": "Ember",
+            "CFBundleDisplayName": "Ember",
             "CFBundleShortVersionString": "2.0.0",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
             # Permission usage strings macOS shows on first prompt.
-            "NSCameraUsageDescription": "Atlas does not use the camera.",
-            "NSMicrophoneUsageDescription": "Atlas uses the microphone for voice commands.",
-            "NSAppleEventsUsageDescription": "Atlas controls other apps to automate tasks.",
+            "NSCameraUsageDescription": "Ember does not use the camera.",
+            "NSMicrophoneUsageDescription": "Ember uses the microphone for voice commands.",
+            "NSAppleEventsUsageDescription": "Ember controls other apps to automate tasks.",
         },
     )

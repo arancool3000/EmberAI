@@ -38,11 +38,11 @@ def _data_dir() -> Path:
         return _base_dir()
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas"
+        d = home / "Library" / "Application Support" / "Ember"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas"
+        d = home / "AppData" / "Roaming" / "Ember"
     else:
-        d = home / ".atlas"
+        d = home / ".ember"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -111,8 +111,8 @@ EXCLUDE_KEYWORDS = (
     "sign in", "log in", "login", "password", "credentials",
     "payment", "pay", "purchase", "credit card", "billing",
     "verify", "authenticate", "2fa", "two-factor", "captcha",
-    # Atlas's own UI - we should never click our own confirm/handoff dialogs
-    "atlas", "hand-off", "handoff", "approve risky", "manual mode",
+    # Ember's own UI - we should never click our own confirm/handoff dialogs
+    "ember", "hand-off", "handoff", "approve risky", "manual mode",
     "gemini is consulting", "claude",
     # Common destructive Windows / browser dialogs
     "send to recycle bin", "move to trash",
@@ -134,7 +134,7 @@ class AutomationEngine:
         self.on_fire = on_fire  # (rule_name, trigger, action) callback for UI logging
         self.poll_interval = poll_interval
         self.enabled = True
-        self.auto_confirm_popups = False  # set by AtlasWindow from settings
+        self.auto_confirm_popups = False  # set by EmberWindow from settings
         self.rules: list[dict] = load_rules()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -169,7 +169,7 @@ class AutomationEngine:
             save_rules(self.rules)
 
     def _snapshot_windows(self) -> set[str]:
-        """Return set of currently visible top-level window titles - EXCLUDES Atlas's own windows
+        """Return set of currently visible top-level window titles - EXCLUDES Ember's own windows
         so the engine never auto-acts on the agent's own confirmation/handoff dialogs."""
         import os
         my_pid = os.getpid()

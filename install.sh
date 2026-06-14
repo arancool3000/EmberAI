@@ -1,11 +1,11 @@
 #!/bin/bash
-# Atlas for macOS - one-time install.
+# Ember for macOS - one-time install.
 
 set -e
 cd "$(dirname "$0")"
 
 echo "==========================================="
-echo "  Atlas - macOS install"
+echo "  Ember - macOS install"
 echo "==========================================="
 
 # Verify Python 3.10+

@@ -35,8 +35,8 @@ TYPE_GROUPS = {
 
 
 def create_cluttered_demo_folder(path: str | None = None, overwrite: bool = False) -> dict:
-    """Create a deliberately messy demo folder for testing Atlas file organization."""
-    base = Path(path).expanduser() if path else Path.home() / "Desktop" / "Atlas_Clutter_Demo"
+    """Create a deliberately messy demo folder for testing Ember file organization."""
+    base = Path(path).expanduser() if path else Path.home() / "Desktop" / "Ember_Clutter_Demo"
     if base.exists() and not overwrite:
         return {"ok": True, "path": str(base), "already_exists": True,
                 "hint": "Pass overwrite=true to refresh the cluttered demo."}
@@ -70,7 +70,7 @@ def create_cluttered_demo_folder(path: str | None = None, overwrite: bool = Fals
         "archive of old junk.zip": "zip placeholder\n",
         "archive of old junk copy.zip": "zip placeholder\n",
         "installer copy copy.dmg": "installer placeholder\n",
-        "Atlas Test Installer 2 2 2.pkg": "installer placeholder\n",
+        "Ember Test Installer 2 2 2.pkg": "installer placeholder\n",
         "script_test_old.py": "print('old messy demo')\n",
         "script_test_old copy.py": "print('old messy demo')\n",
         "quick hack DO NOT USE.js": "console.log('temporary');\n",

@@ -169,7 +169,7 @@ class ClaudeAgent:
                             tool_results.append((tu.id, result, name))
                             continue
                     if name == "ask_claude":
-                        result = {"ok": True, "note": "Atlas is already running on Claude - no escalation needed"}
+                        result = {"ok": True, "note": "Ember is already running on Claude - no escalation needed"}
                     elif name == "pause_for_human":
                         result = self._handle_human_pause(args)
                     else:

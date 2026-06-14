@@ -1,11 +1,11 @@
 #!/bin/bash
-# Double-click this file to run Atlas on macOS.
+# Double-click this file to run Ember on macOS.
 # First run installs dependencies automatically; later runs just launch.
 cd "$(dirname "$0")"
 
-echo "Starting Atlas…"
+echo "Starting Ember…"
 if ! python3 -c "import PyQt6, google.genai" >/dev/null 2>&1; then
-    echo "First-time setup: installing Atlas dependencies (this takes a few minutes)…"
+    echo "First-time setup: installing Ember dependencies (this takes a few minutes)…"
     python3 -m pip install --upgrade pip >/dev/null 2>&1
     if ! python3 -m pip install -r requirements.txt; then
         echo ""

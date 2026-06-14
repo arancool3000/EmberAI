@@ -1,12 +1,12 @@
 #!/bin/bash
-# Install the ALWAYS-ON phone remote (AtlasConnect).
-# After this, your phone can control this Mac at login automatically — even if Atlas isn't
+# Install the ALWAYS-ON phone remote (EmberConnect).
+# After this, your phone can control this Mac at login automatically — even if Ember isn't
 # open and even if the keyboard/mouse drivers fail. Double-click to install.
 cd "$(dirname "$0")"
 DIR="$(pwd)"
 PY="$(command -v python3)"
-SUPPORT="$HOME/Library/Application Support/Atlas"
-PLIST="$HOME/Library/LaunchAgents/com.atlas.phoneremote.plist"
+SUPPORT="$HOME/Library/Application Support/Ember"
+PLIST="$HOME/Library/LaunchAgents/com.ember.phoneremote.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$SUPPORT"
 
 echo "Installing always-on phone remote…"
@@ -14,7 +14,7 @@ cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.atlas.phoneremote</string>
+  <key>Label</key><string>com.ember.phoneremote</string>
   <key>ProgramArguments</key><array>
     <string>$PY</string>
     <string>$DIR/remote_standalone.py</string>

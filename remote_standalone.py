@@ -1,6 +1,6 @@
-"""Headless AtlasConnect — runs ONLY the phone-remote server, no Atlas GUI.
+"""Headless EmberConnect — runs ONLY the phone-remote server, no Ember GUI.
 
-The boot LaunchAgent runs this at login so your phone can control this Mac even if Atlas
+The boot LaunchAgent runs this at login so your phone can control this Mac even if Ember
 isn't open — e.g. if the keyboard/mouse drivers fail, you open the URL on your phone and
 drive the Mac. Uses the stable PIN (same every boot).
 
@@ -20,7 +20,7 @@ import remote_server
 def main():
     r = remote_server.start()
     if not r.get("ok"):
-        print("AtlasConnect failed to start:", r.get("error"))
+        print("EmberConnect failed to start:", r.get("error"))
         # keep the process alive so KeepAlive doesn't thrash; retry on next boot
         time.sleep(3600)
         return

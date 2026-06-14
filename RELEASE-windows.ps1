@@ -1,10 +1,10 @@
-# Build + publish the WINDOWS Atlas release and update the auto-update manifest.
+# Build + publish the WINDOWS Ember release and update the auto-update manifest.
 #
 #   ./RELEASE-windows.ps1            # release the version currently in version.py (no bump)
 #   ./RELEASE-windows.ps1 -Version 1.1.0
 #
 # Run this for the SAME version as the macOS release (RELEASE.command). It uploads
-# Atlas-Windows.zip to the same GitHub release and merges its entry into latest.json,
+# Ember-Windows.zip to the same GitHub release and merges its entry into latest.json,
 # preserving the macOS download. One-time setup is in PUBLISH_SETUP.md.
 param([string]$Version = "")
 $ErrorActionPreference = "Stop"
@@ -20,21 +20,21 @@ $repo = (python -c "import version; print(version.GITHUB_REPO)").Trim()
 if ($Version -ne "") { python _release_helper.py bump $Version | Out-Null }
 $ver = (python -c "import version; print(version.__version__)").Trim()
 $tag = "v$ver"
-Write-Host "=== Releasing Atlas $tag (Windows) ===" -ForegroundColor Cyan
+Write-Host "=== Releasing Ember $tag (Windows) ===" -ForegroundColor Cyan
 
 python _release_helper.py sync-site | Out-Null
 
-Write-Host "Building Atlas.exe (first build: 3-6 min)..." -ForegroundColor Cyan
+Write-Host "Building Ember.exe (first build: 3-6 min)..." -ForegroundColor Cyan
 python -m pip install --upgrade pip | Out-Null
 python -m pip install -r requirements.txt
 python -m pip install pyinstaller | Out-Null
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
-pyinstaller --noconfirm Atlas.spec
+pyinstaller --noconfirm Ember.spec
 
-# Zip the onedir folder contents as Atlas-Windows.zip (the updater extracts with zipfile).
-$zip = "dist\Atlas-Windows.zip"
+# Zip the onedir folder contents as Ember-Windows.zip (the updater extracts with zipfile).
+$zip = "dist\Ember-Windows.zip"
 if (Test-Path $zip) { Remove-Item $zip }
-Compress-Archive -Path "dist\Atlas\*" -DestinationPath $zip
+Compress-Archive -Path "dist\Ember\*" -DestinationPath $zip
 Write-Host "Packed $zip" -ForegroundColor Green
 
 $pub = (Get-Date -Format "yyyy-MM-dd")
@@ -50,9 +50,9 @@ if ($hasGh) {
   if ($exists) {
     gh release upload $tag $zip dist\latest.json --clobber
   } else {
-    gh release create $tag $zip dist\latest.json --title "Atlas $tag" --notes-file RELEASE_NOTES.md
+    gh release create $tag $zip dist\latest.json --title "Ember $tag" --notes-file RELEASE_NOTES.md
   }
-  Write-Host "Release $tag: Atlas-Windows.zip + latest.json" -ForegroundColor Green
+  Write-Host "Release $tag: Ember-Windows.zip + latest.json" -ForegroundColor Green
 } else {
   Write-Host "gh CLI not available/authed - upload manually:" -ForegroundColor Yellow
   Write-Host "  https://github.com/$owner/$repo/releases  (tag $tag)"

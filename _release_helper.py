@@ -46,9 +46,9 @@ def sync_site() -> None:
     if not js.exists():
         return
     txt = js.read_text(encoding="utf-8")
-    repl = (f'const ATLAS = {{ owner: "{version.GITHUB_OWNER}", '
+    repl = (f'const EMBER = {{ owner: "{version.GITHUB_OWNER}", '
             f'repo: "{version.GITHUB_REPO}" }};')
-    txt = re.sub(r'const ATLAS = \{ owner: "[^"]*", repo: "[^"]*" \};', repl, txt, count=1)
+    txt = re.sub(r'const EMBER = \{ owner: "[^"]*", repo: "[^"]*" \};', repl, txt, count=1)
     js.write_text(txt, encoding="utf-8")
 
 

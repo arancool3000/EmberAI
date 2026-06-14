@@ -1,4 +1,4 @@
-"""Single source of truth for Atlas's version + update/distribution config.
+"""Single source of truth for Ember's version + update/distribution config.
 
 Everything that needs to know "what version is this and where do updates come from"
 reads from here: the app UI, the auto-updater (updater.py), the release script
@@ -18,10 +18,10 @@ __version__ = "1.0.0"
 # Set this to your GitHub username/org. The placeholder keeps the updater dormant
 # until you've actually created the repo (so a fresh checkout never errors).
 GITHUB_OWNER = "arancool3000"
-GITHUB_REPO = "atlas"
+GITHUB_REPO = "ember"
 
 # Per-OS release asset names (the updater downloads these; the release scripts produce them).
-ASSET_NAMES = {"macos": "Atlas-macOS.zip", "windows": "Atlas-Windows.zip"}
+ASSET_NAMES = {"macos": "Ember-macOS.zip", "windows": "Ember-Windows.zip"}
 MANIFEST_NAME = "latest.json"
 
 _PLACEHOLDER_OWNER = "YOUR_GITHUB_USERNAME"
@@ -37,7 +37,7 @@ def platform_key() -> str | None:
 
 
 def asset_name(plat: str | None = None) -> str:
-    return ASSET_NAMES.get(plat or platform_key() or "macos", "Atlas-macOS.zip")
+    return ASSET_NAMES.get(plat or platform_key() or "macos", "Ember-macOS.zip")
 
 
 def is_configured() -> bool:

@@ -1,7 +1,7 @@
-"""Screen vision for Atlas: exact on-screen text location + accurate clicking.
+"""Screen vision for Ember: exact on-screen text location + accurate clicking.
 
 This module removes the "blind guessing" of pixel coordinates. Instead of reading
-numbers off a grid overlay, Atlas locates targets by their real on-screen geometry:
+numbers off a grid overlay, Ember locates targets by their real on-screen geometry:
 
   1. Accessibility tree (macOS System Events / Windows UIA) -> exact element bounds.
   2. Apple Vision OCR (macOS) / Windows.Media.Ocr (Windows) -> exact text bounds,
@@ -190,7 +190,7 @@ def _ocr_win(img: Image.Image) -> list[dict]:
     import subprocess
     import tempfile
 
-    tmp = Path(tempfile.gettempdir()) / f"atlas_ocr_{int(time.time()*1000)}.png"
+    tmp = Path(tempfile.gettempdir()) / f"ember_ocr_{int(time.time()*1000)}.png"
     img.save(tmp)
     ps = r'''
 [Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime] | Out-Null
@@ -288,7 +288,7 @@ def read_screen_text(region: dict | None = None, query: str = "",
                      min_conf: float = 0.0, max_results: int = 120) -> dict:
     """Read every text fragment currently visible (optionally within a logical-point
     region), each with its exact clickable center. If `query` is given, results are
-    ranked by similarity to it (best first). This is how Atlas 'sees' text without
+    ranked by similarity to it (best first). This is how Ember 'sees' text without
     guessing coordinates off a grid."""
     try:
         img, sx, sy, ox, oy = _grab(region)

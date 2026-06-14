@@ -1,4 +1,4 @@
-# Publishing Atlas — download website + auto-updates
+# Publishing Ember — download website + auto-updates
 
 This wires up the **download website** (GitHub Pages) and the **in-app auto-updater**
 (GitHub Releases). One-time setup, then every release is a single `./RELEASE.command`.
@@ -10,26 +10,26 @@ Everything keys off **one value**: `GITHUB_OWNER` in `version.py`.
 ## One-time setup (≈10 min)
 
 ### 1. Create the GitHub repo
-Make a repo named **`atlas`** under your account (public, so Pages + release downloads are free).
-- Web: <https://github.com/new> → name `atlas` → Create.
-- Or CLI: `brew install gh && gh auth login` then `gh repo create atlas --public`.
+Make a repo named **`ember`** under your account (public, so Pages + release downloads are free).
+- Web: <https://github.com/new> → name `ember` → Create.
+- Or CLI: `brew install gh && gh auth login` then `gh repo create ember --public`.
 
 > Using a different name? Set `GITHUB_REPO` in `version.py` to match.
 
-### 2. Point Atlas at your account
+### 2. Point Ember at your account
 Edit `version.py`:
 ```python
 GITHUB_OWNER = "your-github-username"   # <- change this
-GITHUB_REPO  = "atlas"                   # (only if you named the repo differently)
+GITHUB_REPO  = "ember"                   # (only if you named the repo differently)
 ```
 That's the only edit needed — the updater, website, and release script all read from here.
 
 ### 3. Push the code
 ```bash
-cd ~/Desktop/AtlasMac
-git init && git add -A && git commit -m "Atlas"
+cd ~/Desktop/EmberMac
+git init && git add -A && git commit -m "Ember"
 git branch -M main
-git remote add origin https://github.com/your-github-username/atlas.git
+git remote add origin https://github.com/your-github-username/ember.git
 git push -u origin main
 ```
 
@@ -39,13 +39,13 @@ On GitHub: **repo → Settings → Pages**
 - **Branch:** `main`  ·  **Folder:** `/docs`  → Save.
 
 After ~1 minute your download page is live at:
-**`https://your-github-username.github.io/atlas/`**
+**`https://your-github-username.github.io/ember/`**
 
 ### 5. Cut the first release
 ```bash
 ./RELEASE.command 1.0.0
 ```
-This builds `Atlas.app`, zips it, generates `latest.json`, and (if `gh` is installed/authed)
+This builds `Ember.app`, zips it, generates `latest.json`, and (if `gh` is installed/authed)
 creates the GitHub release automatically. Without `gh`, it prints the exact manual upload steps.
 
 Done. The website's **Download** button now serves your build, and any installed copy
@@ -62,7 +62,7 @@ auto-updates to the newest release on launch.
    (uses the version already in `version.py` — no re-bump) or `./RELEASE-windows.ps1 -Version 1.1.0`
    if you're releasing Windows first.
 
-Each script: syncs the site → builds → packs its OS's zip (`Atlas-macOS.zip` / `Atlas-Windows.zip`)
+Each script: syncs the site → builds → packs its OS's zip (`Ember-macOS.zip` / `Ember-Windows.zip`)
 → checksums → updates **its own** entry in `latest.json` (preserving the other OS's download) →
 uploads to the same GitHub release tag → pushes `docs/` so Pages updates. The website auto-detects
 the visitor's OS and offers the right build; each installed app auto-updates from its own entry.
@@ -88,7 +88,7 @@ the visitor's OS and offers the right build; each installed app auto-updates fro
   Apple Developer ID and add `xcrun notarytool` to `RELEASE.command`.
 - **Bundle zipping must use `ditto`** (not `zip`) or the `.app` signature/symlinks break — the
   script already does, and the updater extracts with `ditto -x -k`.
-- **Auto-update only runs from the built `Atlas.app`** (not `python3 main.py`) and only once
+- **Auto-update only runs from the built `Ember.app`** (not `python3 main.py`) and only once
   `GITHUB_OWNER` is set — it's a silent no-op otherwise.
 - The updater keeps a `.app.old` backup during the swap and rolls back if the new bundle fails
   to install, so a bad update can't leave the user with no app.

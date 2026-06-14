@@ -7,7 +7,7 @@ from pathlib import Path
 import pyperclip
 
 BRIDGE_INSTRUCTIONS = """When Gemini needs deeper reasoning, it produces a detailed handoff prompt for Claude.
-The user copies the prompt into Claude.ai (free), then pastes Claude's reply back into Atlas.
+The user copies the prompt into Claude.ai (free), then pastes Claude's reply back into Ember.
 Optionally, an Anthropic API key can be set to automate this round-trip.
 """
 

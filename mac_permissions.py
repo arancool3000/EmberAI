@@ -1,4 +1,4 @@
-"""macOS permission helpers for Atlas.
+"""macOS permission helpers for Ember.
 
 This module intentionally contains only permission prompts/settings shortcuts. It does not
 register macOS Services or any system-wide selected-text menu items.
@@ -9,9 +9,9 @@ import sys
 
 
 def request_accessibility(prompt: bool = True) -> bool:
-    """Ask macOS for Accessibility access, which Atlas needs for mouse/keyboard control.
+    """Ask macOS for Accessibility access, which Ember needs for mouse/keyboard control.
 
-    macOS does not auto-prompt for Accessibility the way it does for Screen Recording, so Atlas
+    macOS does not auto-prompt for Accessibility the way it does for Screen Recording, so Ember
     explicitly calls AXIsProcessTrustedWithOptions. Returns True if already trusted. No-ops off
     macOS.
     """

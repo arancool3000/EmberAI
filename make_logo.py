@@ -1,4 +1,4 @@
-"""Generate the Atlas app logo: a modern squircle mark with a premium indigo->cyan
+"""Generate the Ember app logo: a modern squircle mark with a premium indigo->cyan
 gradient, a custom geometric 'A', and a thin orbital ring (the 'holds the world' nod).
 
 Outputs icon.png (1024) and a multi-size icon.ico. Pure-PIL, no extra deps.

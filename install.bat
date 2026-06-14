@@ -1,10 +1,10 @@
 @echo off
-REM Atlas for Windows - one-time install.
+REM Ember for Windows - one-time install.
 setlocal
 cd /d "%~dp0"
 
 echo ===========================================
-echo   Atlas - Windows install
+echo   Ember - Windows install
 echo ===========================================
 
 where python >nul 2>&1

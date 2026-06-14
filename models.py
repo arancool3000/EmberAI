@@ -84,5 +84,5 @@ def rate_limit_summary() -> str:
         lines.append(f"  {name:<26} {rpm:>3} RPM   {rpd:>4} RPD   {tpm:>7,} TPM")
     lines.append("")
     lines.append("Claude (Anthropic) is paid only - usage-based pricing.")
-    lines.append("Atlas falls back automatically if your primary model is overloaded.")
+    lines.append("Ember falls back automatically if your primary model is overloaded.")
     return "\n".join(lines)

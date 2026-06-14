@@ -1,9 +1,9 @@
-"""System control tools for Atlas on macOS.
+"""System control tools for Ember on macOS.
 
 Same function signatures as the Windows version so agent/ui/browser/etc. work unchanged.
 Uses AppleScript + shell + osascript so no Windows-only libraries are required.
 
-Permissions Atlas needs (System Settings -> Privacy & Security):
+Permissions Ember needs (System Settings -> Privacy & Security):
   - Screen Recording  (mss screenshots)
   - Accessibility     (mouse/keyboard control, find_ui_elements)
   - Input Monitoring  (global hotkey via pynput)
@@ -44,11 +44,11 @@ def _data_dir() -> Path:
         return _base_dir()
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas"
+        d = home / "Library" / "Application Support" / "Ember"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas"
+        d = home / "AppData" / "Roaming" / "Ember"
     else:
-        d = home / ".atlas"
+        d = home / ".ember"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -175,7 +175,7 @@ def take_screenshot(region=None, grid=True, show_cursor=True):
         path.write_bytes(data)
     except (FileNotFoundError, OSError):
         import tempfile
-        path = Path(tempfile.gettempdir()) / f"atlas_shot_{int(time.time() * 1000)}.jpg"
+        path = Path(tempfile.gettempdir()) / f"ember_shot_{int(time.time() * 1000)}.jpg"
         path.write_bytes(data)
     return {
         "ok": True, "width": img.size[0], "height": img.size[1],

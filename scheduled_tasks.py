@@ -1,6 +1,6 @@
-"""Persistent scheduled tasks for Atlas.
+"""Persistent scheduled tasks for Ember.
 
-Atlas can use these when the user asks for a future action. On macOS the task is
+Ember can use these when the user asks for a future action. On macOS the task is
 stored as a per-user LaunchAgent; on Windows it is created in Task Scheduler.
 """
 from __future__ import annotations
@@ -20,11 +20,11 @@ from pathlib import Path
 def _data_dir() -> Path:
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas" / "Scheduled Tasks"
+        d = home / "Library" / "Application Support" / "Ember" / "Scheduled Tasks"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas" / "Scheduled Tasks"
+        d = home / "AppData" / "Roaming" / "Ember" / "Scheduled Tasks"
     else:
-        d = home / ".atlas" / "scheduled_tasks"
+        d = home / ".ember" / "scheduled_tasks"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -50,9 +50,9 @@ def _parse_when(run_at: str) -> datetime:
 
 
 def _task_id(name: str) -> str:
-    base = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "atlas-task").strip().lower()).strip("-")
+    base = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "ember-task").strip().lower()).strip("-")
     if not base:
-        base = "atlas-task"
+        base = "ember-task"
     return f"{base[:38]}-{int(time.time())}"
 
 
@@ -79,7 +79,7 @@ def _mac_interval(dt: datetime, repeat: str) -> dict:
 
 def _schedule_macos(task_id: str, name: str, command: str, dt: datetime,
                     repeat: str, working_directory: str | None) -> dict:
-    label = f"com.atlas.task.{task_id}"
+    label = f"com.ember.task.{task_id}"
     launch_agents = Path.home() / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
     plist_path = launch_agents / f"{label}.plist"
@@ -142,7 +142,7 @@ def _schedule_macos(task_id: str, name: str, command: str, dt: datetime,
 
 def _schedule_windows(task_id: str, name: str, command: str, dt: datetime,
                       repeat: str, working_directory: str | None) -> dict:
-    task_name = rf"Atlas\{task_id}"
+    task_name = rf"Ember\{task_id}"
     script_path = _data_dir() / f"{task_id}.bat"
     wd = Path(working_directory).expanduser() if working_directory else Path.home()
     script_path.write_text(f"@echo off\r\ncd /d \"{wd}\"\r\n{command}\r\n", encoding="utf-8")
@@ -227,7 +227,7 @@ def cancel_scheduled_task(task_id: str) -> dict:
         meta = {}
     errors = []
     if sys.platform == "darwin":
-        label = ((meta.get("platform_result") or {}).get("label") or f"com.atlas.task.{task_id}")
+        label = ((meta.get("platform_result") or {}).get("label") or f"com.ember.task.{task_id}")
         plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
         uid = str(os.getuid())
         subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
@@ -240,7 +240,7 @@ def cancel_scheduled_task(task_id: str) -> dict:
             except OSError as e:
                 errors.append(str(e))
     elif sys.platform.startswith("win"):
-        task_name = ((meta.get("platform_result") or {}).get("task_name") or rf"Atlas\{task_id}")
+        task_name = ((meta.get("platform_result") or {}).get("task_name") or rf"Ember\{task_id}")
         r = subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name],
                            capture_output=True, text=True, timeout=20)
         if r.returncode != 0:

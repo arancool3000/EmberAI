@@ -5,13 +5,13 @@
   "min_windows": "10",
   "downloads": {
     "macos": {
-      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Atlas-macOS.zip",
+      "url": "https://github.com/arancool3000/ember/releases/latest/download/Ember-macOS.zip",
       "sha256": ""
     },
     "windows": {
-      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Atlas-Windows.zip",
+      "url": "https://github.com/arancool3000/ember/releases/latest/download/Ember-Windows.zip",
       "sha256": ""
     }
   },
-  "notes": "First public release of Atlas — the AI agent for your Mac and PC.\n\n• Sees the screen with on-device OCR (Apple Vision / Windows OCR) and clicks exact on-screen text\n• Gemini (free) + Claude Opus 4.8 with adaptive thinking and streaming\n• Real browser control, file management, shell, and system diagnostics\n• Atlas Link: drive your computer from your phone over Wi-Fi\n• Hands-free voice chat\n• Confirms before destructive commands, data sending, and risky key-combos\n• Background auto-update on both macOS and Windows"
+  "notes": "First public release of Ember — the AI agent for your Mac and PC.\n\n• Sees the screen with on-device OCR (Apple Vision / Windows OCR) and clicks exact on-screen text\n• Gemini (free) + Claude Opus 4.8 with adaptive thinking and streaming\n• Real browser control, file management, shell, and system diagnostics\n• Ember Link: drive your computer from your phone over Wi-Fi\n• Hands-free voice chat\n• Confirms before destructive commands, data sending, and risky key-combos\n• Background auto-update on both macOS and Windows"
 }

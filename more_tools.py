@@ -1,4 +1,4 @@
-"""Big batch of extra capabilities so Atlas can match (and exceed) what a person does on a PC.
+"""Big batch of extra capabilities so Ember can match (and exceed) what a person does on a PC.
 ~30 new tools: email, http, pdf, excel, translation, search, calc, system, hashing, qr, network, etc."""
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def web_search(query: str, max_results: int = 8) -> dict:
         r = requests.post(
             "https://html.duckduckgo.com/html/",
             data={"q": query},
-            headers={"User-Agent": "Mozilla/5.0 Atlas"},
+            headers={"User-Agent": "Mozilla/5.0 Ember"},
             timeout=15,
         )
         import re
@@ -708,9 +708,9 @@ def create_calendar_event(title: str, start: str, end: str | None = None,
         s = datetime.fromisoformat(start.replace("Z", "+00:00"))
         e = datetime.fromisoformat(end.replace("Z", "+00:00")) if end else s + timedelta(hours=1)
         ics = (
-            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Atlas//EN\r\n"
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Ember//EN\r\n"
             "BEGIN:VEVENT\r\n"
-            f"UID:{uuid.uuid4()}@atlas\r\n"
+            f"UID:{uuid.uuid4()}@ember\r\n"
             f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}\r\n"
             f"DTSTART:{s.strftime('%Y%m%dT%H%M%S')}\r\n"
             f"DTEND:{e.strftime('%Y%m%dT%H%M%S')}\r\n"

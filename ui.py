@@ -1,4 +1,4 @@
-"""Floating chat window UI for Atlas."""
+"""Floating chat window UI for Ember."""
 from __future__ import annotations
 
 import json
@@ -40,7 +40,7 @@ SLASH_COMMANDS = {
     "/research": "Open the browser, research the topic I give you, compare credible sources, keep notes, and return a concise answer with links or source names when available.",
     "/create": "Help me create the file or asset I describe. Ask what format only if it is unclear; otherwise choose the right local tools, save the result, and show the path.",
     "/automate": "Create or improve a background automation for a repetitive desktop task. Ask what should trigger it and what action it should perform, then create a safe rule.",
-    "/schedule": "Schedule a future computer task. Ask for the command/action and exact local time if missing, then use schedule_shell_command or list/cancel existing Atlas scheduled tasks.",
+    "/schedule": "Schedule a future computer task. Ask for the command/action and exact local time if missing, then use schedule_shell_command or list/cancel existing Ember scheduled tasks.",
     "/diagnose": "Diagnose my system thoroughly. Use get_reliability_events, get_minidumps, get_event_logs for the past 48 hours (System & Application), and check for problem drivers. Summarize the top issues and propose fixes.",
     "/diag": "Diagnose my system thoroughly. Use get_reliability_events, get_minidumps, get_event_logs for the past 48 hours (System & Application), and check for problem drivers. Summarize the top issues and propose fixes.",
     "/web": "Open the automation browser (browser_open) and tell me the page title and any cookie banner you see.",
@@ -101,12 +101,12 @@ Web
 
 Session
   /voice      toggle hands-free voice chat
-  /remote     start Atlas Link for phone control
+  /remote     start Ember Link for phone control
   /manual     bridge an external AI
   /windows    list open windows
   /clear      clear chat
   /forget     wipe saved facts
-  /update     install the latest Atlas version
+  /update     install the latest Ember version
   /help       this list
 
 Global hotkey: configurable in Settings -> Performance (default Ctrl+Shift+Space).
@@ -149,11 +149,11 @@ def _data_dir() -> Path:
         return _base_dir()
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas"
+        d = home / "Library" / "Application Support" / "Ember"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas"
+        d = home / "AppData" / "Roaming" / "Ember"
     else:
-        d = home / ".atlas"
+        d = home / ".ember"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -268,7 +268,7 @@ def load_chat_history() -> dict:
             return {"active_id": active, "sessions": sessions[:80]}
     except Exception:
         pass
-    first = _make_chat("Atlas workspace")
+    first = _make_chat("Ember workspace")
     return {"active_id": first["id"], "sessions": [first]}
 
 
@@ -683,7 +683,7 @@ QComboBox::drop-down {{ border: none; width: 20px; }}
 
 
 STYLE = """
-/* ===== Atlas — neutral liquid interface fallback ===== */
+/* ===== Ember — neutral liquid interface fallback ===== */
 /* Palette: graphite glass, frosted white controls, no colored glass tint. */
 
 /* Dialogs: dark panel + light text so native QMessageBox text is always readable. */
@@ -1077,7 +1077,7 @@ class EventBridge(QObject):
 
 
 class MiniPill(QWidget):
-    """Compact draggable widget shown when Atlas is minimized. Click to restore."""
+    """Compact draggable widget shown when Ember is minimized. Click to restore."""
     def __init__(self, parent_window):
         super().__init__()
         self.parent_window = parent_window
@@ -1102,7 +1102,7 @@ class MiniPill(QWidget):
         dot = QLabel("●")
         dot.setStyleSheet("color: #7aa2f7; font-size: 16px;")
         row.addWidget(dot)
-        label = QLabel("Atlas")
+        label = QLabel("Ember")
         label.setStyleSheet("color: #c0caf5; font-weight: bold; font-size: 12px;")
         row.addWidget(label)
         row.addStretch()
@@ -1117,7 +1117,7 @@ class MiniPill(QWidget):
         x = QPushButton("✕")
         x.setObjectName("closeBtn")
         x.setFixedSize(28, 28)
-        x.setToolTip("Quit Atlas")
+        x.setToolTip("Quit Ember")
         x.clicked.connect(self._quit)
         row.addWidget(x)
 
@@ -1171,7 +1171,7 @@ class ManualModeDialog(QDialog):
         layout = QVBoxLayout(self)
 
         info = QLabel(
-            "Use this when Atlas's API is exhausted or you want a stronger model.\n"
+            "Use this when Ember's API is exhausted or you want a stronger model.\n"
             "1) Edit your request below.   2) Copy the prompt → paste into Claude.ai / ChatGPT.\n"
             "3) Paste the response code back below → Run."
         )
@@ -1264,7 +1264,7 @@ class ManualModeDialog(QDialog):
             return
         confirm = QMessageBox.question(
             self, "Execute code?",
-            "Atlas will run the pasted code with full system access.\n"
+            "Ember will run the pasted code with full system access.\n"
             "Only run code you trust. Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
@@ -1294,7 +1294,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: dict, parent=None, automation_engine=None):
         super().__init__(parent)
-        self.setWindowTitle("Atlas Settings")
+        self.setWindowTitle("Ember Settings")
         self.setMinimumSize(820, 560)
         self.settings = dict(settings)
         self.automation_engine = automation_engine
@@ -1454,7 +1454,7 @@ class SettingsDialog(QDialog):
         layout.addRow("Accent color:", self.accent_combo)
 
         note = QLabel(
-            "Appearance changes apply when you save. Restart Atlas via Atlas.bat to fully refresh."
+            "Appearance changes apply when you save. Restart Ember via Ember.bat to fully refresh."
         )
         note.setStyleSheet("color: #565f89; font-size: 11px;")
         note.setWordWrap(True)
@@ -1504,12 +1504,12 @@ class SettingsDialog(QDialog):
         layout.addRow(self.auto_shot_check)
 
         self.remote_autostart_check = QCheckBox(
-            "Start Atlas Link (phone control) automatically when Atlas opens")
+            "Start Ember Link (phone control) automatically when Ember opens")
         self.remote_autostart_check.setChecked(bool(self.settings.get("remote_autostart", True)))
         layout.addRow(self.remote_autostart_check)
 
         self.auto_update_check = QCheckBox(
-            "Automatically check for Atlas updates on launch")
+            "Automatically check for Ember updates on launch")
         self.auto_update_check.setChecked(bool(self.settings.get("auto_update", True)))
         layout.addRow(self.auto_update_check)
 
@@ -1544,7 +1544,7 @@ class SettingsDialog(QDialog):
         v = QVBoxLayout(page)
 
         head = QLabel(
-            "Background rules. When the trigger fires, Atlas runs the action automatically - "
+            "Background rules. When the trigger fires, Ember runs the action automatically - "
             "no API calls needed. Edit automations.json next to the exe for advanced tweaks."
         )
         head.setStyleSheet("color: #565f89; font-size: 11px;")
@@ -1653,7 +1653,7 @@ class SettingsDialog(QDialog):
     def _build_memory_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
-        head = QLabel("Facts Atlas has remembered about your system / preferences.")
+        head = QLabel("Facts Ember has remembered about your system / preferences.")
         head.setStyleSheet("color: #565f89; font-size: 11px;")
         v.addWidget(head)
         import memory
@@ -1667,7 +1667,7 @@ class SettingsDialog(QDialog):
                 lines.append(f"{k} = {val}")
             view.setPlainText("\n".join(lines))
         else:
-            view.setPlainText("(no facts saved yet — Atlas adds them as it works)")
+            view.setPlainText("(no facts saved yet — Ember adds them as it works)")
         v.addWidget(view, 1)
         clear_btn = QPushButton("Forget all facts")
         clear_btn.clicked.connect(self._forget_all)
@@ -1691,7 +1691,7 @@ class SettingsDialog(QDialog):
         except Exception:
             _ver = "?"
         text = QLabel(
-            f"<b>Atlas</b> v{_ver} — AI agent for your computer.<br><br>"
+            f"<b>Ember</b> v{_ver} — AI agent for your computer.<br><br>"
             "Capabilities: hands-free voice chat, vision + mouse/keyboard control, DOM-driven browser, file organization, "
             f"{_diag}, background automations, voice in/out, persistent memory, "
             "phone remote control, and Claude fallback for hard reasoning.<br><br>"
@@ -1807,7 +1807,7 @@ class ClaudeHandoffDialog(QDialog):
         self.reject()
 
 
-class AtlasWindow(QWidget):
+class EmberWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
@@ -1844,7 +1844,7 @@ class AtlasWindow(QWidget):
         self._automation.auto_confirm_popups = bool(self.settings.get("auto_confirm_popups", False))
         self._automation.start()
         if self.settings.get("remote_autostart", True):
-            # Bring Atlas Link (phone control) up as soon as the app opens — deferred a beat
+            # Bring Ember Link (phone control) up as soon as the app opens — deferred a beat
             # so the window paints first. Starts silently; no modal on launch.
             QTimer.singleShot(1200, self._autostart_remote_control)
         if self.settings.get("auto_update", True):
@@ -1925,10 +1925,10 @@ class AtlasWindow(QWidget):
         # Surface to the user so they don't wonder
         try:
             if sys.platform == "darwin":
-                self._set_status("Hotkey failed — grant Atlas Input Monitoring + Accessibility "
+                self._set_status("Hotkey failed — grant Ember Input Monitoring + Accessibility "
                                  "in System Settings ▸ Privacy & Security")
             else:
-                self._set_status("Hotkey registration failed — try running Atlas as Administrator")
+                self._set_status("Hotkey registration failed — try running Ember as Administrator")
         except Exception:
             pass
 
@@ -1954,7 +1954,7 @@ class AtlasWindow(QWidget):
         """File picker - the chosen paths get attached to the user's next message
         the same way drag-and-drop does."""
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Upload files for Atlas",
+            self, "Upload files for Ember",
             str(Path.home()),
             "All files (*);;Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;"
             "Documents (*.pdf *.docx *.txt *.md *.csv *.json);;Spreadsheets (*.xlsx *.csv)",
@@ -2244,7 +2244,7 @@ class AtlasWindow(QWidget):
             self.max_btn.setToolTip("Toggle fullscreen")
 
     def _build_ui(self):
-        # NOTE: removed Qt.WindowType.Tool - it was hiding Atlas from the taskbar, which
+        # NOTE: removed Qt.WindowType.Tool - it was hiding Ember from the taskbar, which
         # blocked taskbar pinning. With just FramelessWindowHint + StaysOnTop, the window
         # shows up in the taskbar like a normal app and can be pinned.
         self.setWindowFlags(
@@ -2366,7 +2366,7 @@ class AtlasWindow(QWidget):
 
         # Title bar
         title_row = QHBoxLayout()
-        title = QLabel("● Atlas")
+        title = QLabel("● Ember")
         title.setObjectName("title")
         # Let clicks on the title text fall through to the window so the WHOLE bar drags,
         # not just the empty gaps between the label and the buttons.
@@ -2470,7 +2470,7 @@ class AtlasWindow(QWidget):
         self.upload_btn = QPushButton("↑")
         self.upload_btn.setObjectName("titleBtn")
         self.upload_btn.setFixedSize(36, 36)
-        self.upload_btn.setToolTip("Upload files for Atlas to read (images, PDFs, text, etc.)")
+        self.upload_btn.setToolTip("Upload files for Ember to read (images, PDFs, text, etc.)")
         self.upload_btn.clicked.connect(self._open_upload_dialog)
         input_row.addWidget(self.upload_btn)
 
@@ -2510,7 +2510,7 @@ class AtlasWindow(QWidget):
             if chat.get("id") == self.active_chat_id:
                 return chat
         if not sessions:
-            sessions.append(_make_chat("Atlas workspace"))
+            sessions.append(_make_chat("Ember workspace"))
         self.active_chat_id = sessions[0].get("id")
         self.chat_history["active_id"] = self.active_chat_id
         return sessions[0]
@@ -2549,7 +2549,7 @@ class AtlasWindow(QWidget):
         if not messages:
             hk = (self.settings.get("hotkey") or "ctrl+shift+space").upper().replace("+", "+")
             self._add_bubble("system",
-                "Hi — I'm Atlas, your computer's AI agent.\n"
+                "Hi — I'm Ember, your computer's AI agent.\n"
                 "I can organize files, browse the web, use desktop apps, debug crashes, automate tasks, "
                 "control the mouse and keyboard, read the screen, create local files, and recover context from chat history.\n"
                 "Use Voice Chat for hands-free work, the Command Center for common tasks, or just tell me the outcome you want.\n"
@@ -2566,7 +2566,7 @@ class AtlasWindow(QWidget):
         chat.setdefault("messages", []).append({"role": role, "text": text, "meta": meta, "ts": now})
         chat["messages"] = chat["messages"][-240:]
         chat["updated"] = now
-        if not chat.get("title") or chat.get("title") in {"New chat", "Atlas workspace"}:
+        if not chat.get("title") or chat.get("title") in {"New chat", "Ember workspace"}:
             if role == "user":
                 chat["title"] = self._local_chat_title(text)
                 self._queue_ai_chat_title(chat.get("id"), text)
@@ -2661,17 +2661,17 @@ class AtlasWindow(QWidget):
         recent = messages[-10:]
         lines = []
         for m in recent:
-            role = "User" if m.get("role") == "user" else "Atlas"
+            role = "User" if m.get("role") == "user" else "Ember"
             body = re.sub(r"\s+", " ", m.get("text", "")).strip()
             if body:
                 lines.append(f"{role}: {body[:600]}")
         if not lines:
             return text
         return (
-            "[Atlas UI conversation context. Use this as active chat history whenever relevant; "
+            "[Ember UI conversation context. Use this as active chat history whenever relevant; "
             "follow-ups like 'that', 'it', 'continue', and 'do the same' refer to this context.]\n"
             + "\n".join(lines)
-            + "\n[/Atlas UI conversation context]\n\nCurrent user message:\n"
+            + "\n[/Ember UI conversation context]\n\nCurrent user message:\n"
             + text
         )
 
@@ -2871,7 +2871,7 @@ class AtlasWindow(QWidget):
         dot_label = QLabel("●")
         dot_label.setObjectName("typingDots")
         h.addWidget(dot_label)
-        label = QLabel("Atlas is thinking…")
+        label = QLabel("Ember is thinking…")
         label.setStyleSheet("color: #565f89; font-size: 11px;")
         h.addWidget(label)
         h.addStretch()
@@ -2998,7 +2998,7 @@ class AtlasWindow(QWidget):
         self._on_send()
 
     def _start_remote_control(self):
-        """Start Atlas Link (phone control) and show the URL + PIN."""
+        """Start Ember Link (phone control) and show the URL + PIN."""
         try:
             import remote_server
             remote_server.set_chat_handler(lambda text: self._bridge.remote_chat.emit(text))
@@ -3011,20 +3011,20 @@ class AtlasWindow(QWidget):
             return
         url, pin = r.get("url", ""), r.get("pin", "")
         box = QMessageBox(self)
-        box.setWindowTitle("Atlas Link")
+        box.setWindowTitle("Ember Link")
         box.setText("Control this Mac from your phone:")
         box.setInformativeText(
             f"1.  Connect your phone to the SAME Wi-Fi as this Mac.\n"
             f"2.  Open this address in the phone browser:\n\n        {url}\n\n"
             f"3.  Enter PIN:  {pin}\n\n"
             "You get a faster mirrored screen, reliable click-and-drag, a full-screen mirror, "
-            "trackpad, keyboard, and a Chat tab that can tell Atlas what to do remotely."
+            "trackpad, keyboard, and a Chat tab that can tell Ember what to do remotely."
         )
         box.exec()
-        self._add_bubble("system", f"Atlas Link is live at **{url}** (PIN **{pin}**). Same Wi-Fi required.")
+        self._add_bubble("system", f"Ember Link is live at **{url}** (PIN **{pin}**). Same Wi-Fi required.")
 
     def _autostart_remote_control(self):
-        """Bring Atlas Link up automatically at launch — no modal, just a status note.
+        """Bring Ember Link up automatically at launch — no modal, just a status note.
         Best-effort: a bind failure (e.g. port already in use) is reported quietly and
         never blocks the app from opening."""
         try:
@@ -3032,10 +3032,10 @@ class AtlasWindow(QWidget):
             remote_server.set_chat_handler(lambda text: self._bridge.remote_chat.emit(text))
             r = remote_server.start()
         except Exception as e:
-            print(f"[Atlas Link autostart failed: {e}]")
+            print(f"[Ember Link autostart failed: {e}]")
             return
         if not r.get("ok"):
-            print(f"[Atlas Link autostart failed: {r.get('error')}]")
+            print(f"[Ember Link autostart failed: {r.get('error')}]")
             return
         url, pin = r.get("url", ""), r.get("pin", "")
         # Persist the URL + PIN so it's discoverable outside the app too.
@@ -3048,7 +3048,7 @@ class AtlasWindow(QWidget):
             return
         self._add_bubble(
             "system",
-            f"📱 Atlas Link is live at **{url}** (PIN **{pin}**). "
+            f"📱 Ember Link is live at **{url}** (PIN **{pin}**). "
             "Open it on a phone on the same Wi-Fi to control this Mac.",
         )
 
@@ -3080,7 +3080,7 @@ class AtlasWindow(QWidget):
         self._pending_update = manifest
         ver = manifest.get("version", "?")
         notes = (manifest.get("notes") or "").strip()
-        msg = (f"🔄 **Atlas {ver}** is available (you have {version.__version__}). "
+        msg = (f"🔄 **Ember {ver}** is available (you have {version.__version__}). "
                "Type **/update** to install it now.")
         if notes:
             msg += "\n\n" + notes[:500]
@@ -3096,9 +3096,9 @@ class AtlasWindow(QWidget):
             return
         if not updater.can_self_update():
             self._add_bubble("system",
-                "Auto-update only works on the installed **Atlas.app**. In dev mode, "
+                "Auto-update only works on the installed **Ember.app**. In dev mode, "
                 "rebuild with BUILD_DESKTOP_APP.command, or download the latest build "
-                "from the Atlas website.")
+                "from the Ember website.")
             return
         manifest = self._pending_update
         if not manifest:
@@ -3109,13 +3109,13 @@ class AtlasWindow(QWidget):
             return
         ver = manifest.get("version", "?")
         if QMessageBox.question(
-                self, "Update Atlas",
-                f"Install Atlas {ver} now?\n\nAtlas will download the update and restart.",
+                self, "Update Ember",
+                f"Install Ember {ver} now?\n\nEmber will download the update and restart.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 ) != QMessageBox.StandardButton.Yes:
             return
-        self._set_status(f"Downloading Atlas {ver}…")
-        self._add_bubble("system", f"Downloading Atlas {ver}…")
+        self._set_status(f"Downloading Ember {ver}…")
+        self._add_bubble("system", f"Downloading Ember {ver}…")
 
         def _post(fn):
             QTimer.singleShot(0, fn)
@@ -3125,7 +3125,7 @@ class AtlasWindow(QWidget):
                 import updater
                 staged = updater.download_and_stage(manifest)
                 updater.apply_update_and_relaunch(staged)
-                _post(lambda: self._add_bubble("system", "Update ready — restarting Atlas…"))
+                _post(lambda: self._add_bubble("system", "Update ready — restarting Ember…"))
                 _post(lambda: QApplication.instance().quit())
             except Exception as e:
                 _post(lambda: self._add_bubble("error", f"Update failed: {type(e).__name__}: {e}"))
@@ -3134,7 +3134,7 @@ class AtlasWindow(QWidget):
         threading.Thread(target=_work, daemon=True).start()
 
     def _on_remote_chat(self, text: str):
-        """Receive a command from Atlas Link and run it through the desktop agent."""
+        """Receive a command from Ember Link and run it through the desktop agent."""
         text = (text or "").strip()
         if not text:
             return
@@ -3145,24 +3145,24 @@ class AtlasWindow(QWidget):
         if text.lower() in {"stop", "stop what you are doing.", "cancel"}:
             if self.agent:
                 self.agent.stop()
-            self._set_status("Stopped from Atlas Link")
+            self._set_status("Stopped from Ember Link")
             self.send_btn.setEnabled(True)
             self._hide_typing_indicator()
-            self._add_bubble("system", "Atlas Link asked Atlas to stop.")
+            self._add_bubble("system", "Ember Link asked Ember to stop.")
             if remote_server:
                 remote_server.push_chat("system", "Stopped the current desktop turn.")
             return
         if not self.agent:
-            msg = "Atlas is not ready yet. Open Settings in the desktop app and add an API key first."
+            msg = "Ember is not ready yet. Open Settings in the desktop app and add an API key first."
             self._add_bubble("error", msg)
             if remote_server:
                 remote_server.push_chat("system", msg)
             return
         if text.startswith("/") and self._handle_slash(text):
             if remote_server:
-                remote_server.push_chat("system", f"Ran command from Atlas Link: {text}")
+                remote_server.push_chat("system", f"Ran command from Ember Link: {text}")
             return
-        self._submit_user_text(text, meta="Atlas Link", status="Remote command...")
+        self._submit_user_text(text, meta="Ember Link", status="Remote command...")
 
     def _open_manual_mode(self):
         # Pull the last ~12 chat bubbles for context
@@ -3228,14 +3228,14 @@ class AtlasWindow(QWidget):
 
     def _first_run_settings(self):
         box = QMessageBox(self)
-        box.setWindowTitle("Welcome to Atlas")
+        box.setWindowTitle("Welcome to Ember")
         box.setText("Let's get you set up — 2 quick steps:")
         box.setInformativeText(
             "1.  Get a FREE Gemini API key (no credit card) — tap 'Get free key'.\n"
             "2.  Paste it into Settings (opens next), pick a model, click Save.\n\n"
-            "Atlas will then ask for Screen Recording + Accessibility permissions so it can "
+            "Ember will then ask for Screen Recording + Accessibility permissions so it can "
             "see the screen and control the mouse and keyboard. Grant both, then quit and "
-            "reopen Atlas once."
+            "reopen Ember once."
         )
         get_btn = box.addButton("Get free key", QMessageBox.ButtonRole.ActionRole)
         box.addButton("I have a key →", QMessageBox.ButtonRole.AcceptRole)
@@ -3249,7 +3249,7 @@ class AtlasWindow(QWidget):
         self._open_settings()
 
     def _check_accessibility(self):
-        """Trigger the macOS Accessibility prompt if Atlas isn't trusted yet (needed to move the
+        """Trigger the macOS Accessibility prompt if Ember isn't trusted yet (needed to move the
         mouse / type). macOS doesn't ask for this automatically the way it does Screen Recording."""
         if sys.platform != "darwin":
             return
@@ -3259,9 +3259,9 @@ class AtlasWindow(QWidget):
                 return  # already trusted
             self._add_bubble(
                 "system",
-                "⚠️ Atlas needs **Accessibility** access to control the mouse and keyboard.\n"
-                "I've opened the request — enable **Atlas** under System Settings → Privacy & "
-                "Security → Accessibility, then quit and reopen Atlas.",
+                "⚠️ Ember needs **Accessibility** access to control the mouse and keyboard.\n"
+                "I've opened the request — enable **Ember** under System Settings → Privacy & "
+                "Security → Accessibility, then quit and reopen Ember.",
             )
             mac_permissions.open_accessibility_settings()
         except Exception:
@@ -3421,7 +3421,7 @@ class AtlasWindow(QWidget):
             elif ev.kind == "awaiting_claude":
                 pending: PendingClaudeResponse = ev.payload
                 if _remote:
-                    _remote.push_chat("system", "Atlas is waiting for a Claude handoff on the desktop.")
+                    _remote.push_chat("system", "Ember is waiting for a Claude handoff on the desktop.")
                 self._add_bubble("system",
                                  "Gemini is consulting Claude. The handoff prompt is on your clipboard. "
                                  "Paste it into Claude.ai and paste the reply in the dialog.")
@@ -3429,7 +3429,7 @@ class AtlasWindow(QWidget):
                 dlg.exec()
             elif ev.kind == "human_pause":
                 if _remote:
-                    _remote.push_chat("system", "Atlas paused for a manual step on the desktop.")
+                    _remote.push_chat("system", "Ember paused for a manual step on the desktop.")
                 self._show_human_pause_inline(ev.payload)
             elif ev.kind == "claude_handoff":
                 self._add_bubble("system", "Claude replied (via API):\n" + (ev.payload.get("auto_reply") or "")[:1500])
@@ -3585,7 +3585,7 @@ class AtlasWindow(QWidget):
 
 def main(instance_listener=None):
     app = QApplication(sys.argv)
-    app.setApplicationName("Atlas")
+    app.setApplicationName("Ember")
     app.setQuitOnLastWindowClosed(True)
 
     # Tray
@@ -3601,7 +3601,7 @@ def main(instance_listener=None):
         pix = QPixmap(16, 16)
         pix.fill(QColor("#7aa2f7"))
         tray.setIcon(QIcon(pix))
-    tray.setToolTip("Atlas")
+    tray.setToolTip("Ember")
     tray_menu = QMenu()
     show_action = QAction("Show")
     quit_action = QAction("Quit")
@@ -3610,10 +3610,10 @@ def main(instance_listener=None):
     tray.setContextMenu(tray_menu)
     tray.show()
 
-    window = AtlasWindow()
+    window = EmberWindow()
     window.show()
 
-    # If another instance of Atlas is started, it sends SUMMON through the lock socket.
+    # If another instance of Ember is started, it sends SUMMON through the lock socket.
     if instance_listener is not None:
         try:
             from single_instance import listen_for_summon

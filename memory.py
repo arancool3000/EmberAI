@@ -28,11 +28,11 @@ def _data_dir() -> Path:
         return _base_dir()
     home = Path.home()
     if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Atlas"
+        d = home / "Library" / "Application Support" / "Ember"
     elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Atlas"
+        d = home / "AppData" / "Roaming" / "Ember"
     else:
-        d = home / ".atlas"
+        d = home / ".ember"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

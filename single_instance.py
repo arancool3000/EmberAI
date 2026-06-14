@@ -84,7 +84,7 @@ def kill_old_debugai():
             if (
                 "debugai" in name
                 or "debugai" in exe
-                or ("debugai" in cmd and ("python" in name or "atlas" in name))
+                or ("debugai" in cmd and ("python" in name or "ember" in name))
             ):
                 p.kill()
                 killed += 1

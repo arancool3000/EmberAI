@@ -32,7 +32,7 @@ _MODKEY = "cmd" if _OS == "macOS" else "ctrl"
 _LAUNCHER = "cmd+space (Spotlight)" if _OS == "macOS" else "win (Start menu)"
 
 
-BASE_SYSTEM_PROMPT = f"""You are Atlas, an autonomous agent running on the user's {_OS} machine. You see the
+BASE_SYSTEM_PROMPT = f"""You are Ember, an autonomous agent running on the user's {_OS} machine. You see the
 screen, drive mouse and keyboard, control a real browser via the DOM, run shell commands, and manage files.
 You are capable and self-directed: figure things out and DO them. Describe only what you actually did.
 
@@ -102,8 +102,8 @@ smart_click -> read_screen_text to see exact labels -> find_ui_elements (try a p
 scope="desktop") -> keyboard navigation -> right_click_element_by_text then read the menu -> last, click(x,y)
 from a tool-sourced coordinate. Only after these: ask_claude (hard reasoning) or pause_for_human (truly blocked).
 
-# Who you are (answer this directly if asked "what is Atlas / what can you do")
-You are Atlas, a local AI agent that lives on the user's {_OS} computer. Unlike a chatbot, you can ACT on
+# Who you are (answer this directly if asked "what is Ember / what can you do")
+You are Ember, a local AI agent that lives on the user's {_OS} computer. Unlike a chatbot, you can ACT on
 this machine: see the screen, move the mouse and type, open and control apps, drive a real browser, read and
 organize files, diagnose problems, and run shell commands. You can also be controlled from the user's phone
 (the "Connect phone" button starts a live remote). When asked what you are, say this plainly and offer to do
@@ -121,12 +121,12 @@ something concrete.
    Use search_files first; it checks common overlooked places including Trash on macOS.
 
 # Conversation memory inside this session
-Treat every user message as part of one continuous conversation. Use the previous messages and the Atlas UI
+Treat every user message as part of one continuous conversation. Use the previous messages and the Ember UI
 context block by default, especially for pronouns ("it", "that", "same thing"), continuations, corrections, and
 "as I said" follow-ups. Do not make the user restate context unless it is genuinely ambiguous.
 
 # Voice chat mode
-Some messages may be live microphone transcripts from Atlas Voice Chat. Treat them as natural spoken commands:
+Some messages may be live microphone transcripts from Ember Voice Chat. Treat them as natural spoken commands:
 infer minor transcription glitches from context, answer more concisely than you would in a long written report,
 and keep the interaction moving unless a safety boundary, login, payment, CAPTCHA/2FA, or genuinely irreversible
 choice requires the human.
@@ -341,7 +341,7 @@ TOOL_DECLARATIONS = [
     {
         "name": "start_remote_control",
         "description": (
-            "Start Atlas Link: a phone remote for THIS PC. Returns a LAN URL + PIN; the user opens "
+            "Start Ember Link: a phone remote for THIS PC. Returns a LAN URL + PIN; the user opens "
             "the URL on a phone (same Wi-Fi), enters the PIN, and gets a live screen view they can tap "
             "to click, plus a trackpad and keyboard. Use when the user wants to control the PC from their "
             "phone (e.g. broken mouse/keyboard). Tell the user the returned url and pin."
@@ -350,12 +350,12 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "stop_remote_control",
-        "description": "Stop the Atlas Link phone-remote server.",
+        "description": "Stop the Ember Link phone-remote server.",
         "parameters": {"type": "OBJECT", "properties": {}, "required": []},
     },
     {
         "name": "remote_control_status",
-        "description": "Check whether Atlas Link phone-remote is running, and its url/pin.",
+        "description": "Check whether Ember Link phone-remote is running, and its url/pin.",
         "parameters": {"type": "OBJECT", "properties": {}, "required": []},
     },
     # ---- UI Automation (text-based clicking) ----
@@ -1045,10 +1045,10 @@ TOOL_DECLARATIONS = [
         "working_directory": {"type": "STRING"}},
         "required": ["name", "command", "run_at"]}},
     {"name": "list_scheduled_tasks",
-     "description": "List scheduled tasks that Atlas created.",
+     "description": "List scheduled tasks that Ember created.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "cancel_scheduled_task",
-     "description": "Cancel a scheduled task by Atlas task_id.",
+     "description": "Cancel a scheduled task by Ember task_id.",
      "parameters": {"type": "OBJECT", "properties": {"task_id": {"type": "STRING"}}, "required": ["task_id"]}},
     # ---- Window management ----
     {"name": "snap_window",
@@ -1168,7 +1168,7 @@ TOOL_DECLARATIONS = [
     # ---- Browser (DOM-driven Chrome/Edge via CDP) ----
     {
         "name": "browser_open",
-        "description": "Launch (or attach to) the Atlas automation browser and optionally navigate to a URL.",
+        "description": "Launch (or attach to) the Ember automation browser and optionally navigate to a URL.",
         "parameters": {
             "type": "OBJECT",
             "properties": {"url": {"type": "STRING"}},
@@ -1553,7 +1553,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     # desktop awareness
     "list_desktop_items": extra_tools.list_desktop_items,
     "desktop_overview": extra_tools.desktop_overview,
-    # remote phone control (Atlas Link)
+    # remote phone control (Ember Link)
     "start_remote_control": remote_server.start,
     "stop_remote_control": remote_server.stop,
     "remote_control_status": remote_server.status,
@@ -1561,7 +1561,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 
 
 # Read-only tools with no side effects (no input injection, no mouse, no writes).
-# When the model emits a batch of ONLY these, Atlas runs them concurrently instead of
+# When the model emits a batch of ONLY these, Ember runs them concurrently instead of
 # one-at-a-time - a meaningful latency win on multi-read turns (e.g. "diagnose my PC").
 PARALLEL_SAFE_TOOLS = frozenset({
     "take_screenshot", "capture_window", "get_screen_size", "zoom_screenshot",
