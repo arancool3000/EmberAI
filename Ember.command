@@ -3,6 +3,11 @@
 # First run installs dependencies automatically; later runs just launch.
 cd "$(dirname "$0")"
 
+# macOS Gatekeeper: once this file runs, clear the "quarantine" flag from the
+# whole folder so the other .command files open without the "Apple cannot
+# verify" prompt. (The very first launch still needs right-click -> Open.)
+xattr -dr com.apple.quarantine "$(pwd)" 2>/dev/null || true
+
 echo "Starting Ember…"
 if ! python3 -c "import PyQt6, google.genai" >/dev/null 2>&1; then
     echo "First-time setup: installing Ember dependencies (this takes a few minutes)…"

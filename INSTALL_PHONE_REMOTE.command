@@ -3,6 +3,12 @@
 # After this, your phone can control this Mac at login automatically — even if Ember isn't
 # open and even if the keyboard/mouse drivers fail. Double-click to install.
 cd "$(dirname "$0")"
+
+# macOS Gatekeeper: once this file runs, clear the "quarantine" flag from the
+# whole folder so the other .command files open without the "Apple cannot
+# verify" prompt. (The very first launch still needs right-click -> Open.)
+xattr -dr com.apple.quarantine "$(pwd)" 2>/dev/null || true
+
 DIR="$(pwd)"
 PY="$(command -v python3)"
 SUPPORT="$HOME/Library/Application Support/Ember"

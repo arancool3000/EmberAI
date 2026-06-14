@@ -3,6 +3,11 @@
 # Free: uses PyInstaller. Output lands in dist/Ember.app — drag it to /Applications.
 cd "$(dirname "$0")"
 
+# macOS Gatekeeper: once this file runs, clear the "quarantine" flag from the
+# whole folder so the other .command files open without the "Apple cannot
+# verify" prompt. (The very first launch still needs right-click -> Open.)
+xattr -dr com.apple.quarantine "$(pwd)" 2>/dev/null || true
+
 echo "==============================================="
 echo "  Building Ember.app  (first build: 3-6 min)"
 echo "==============================================="

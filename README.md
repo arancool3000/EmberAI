@@ -10,6 +10,16 @@ commands, manages files, and can be controlled from your phone. macOS + Windows.
 **macOS:** double-click **`Ember.command`**
 **Windows:** double-click **`Ember.bat`**
 
+> **macOS first-launch note:** Ember is free and unsigned, so on the very first
+> double-click macOS may say *"Apple cannot check it for malicious software."*
+> That's expected for any app not paid-notarized through Apple. Just **right-click
+> the file → Open → Open** once. The script then clears the quarantine flag from
+> the whole folder, so the other `.command` files open normally afterward.
+> Prefer one command? Run this in Terminal on the folder to clear them all at once:
+> ```bash
+> xattr -dr com.apple.quarantine /path/to/the/Ember/folder
+> ```
+
 The first launch installs everything automatically (a few minutes); after that it just opens.
 You need **Python 3.10+** installed first:
 - macOS: `brew install python@3.12`  (or grab it from python.org)
