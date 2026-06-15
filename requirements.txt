@@ -12,6 +12,10 @@ send2trash>=1.8.0
 anthropic>=0.40.0
 SpeechRecognition>=3.10.0
 pyttsx3>=2.99
+# pyaudio is OPTIONAL - only needed for voice/microphone INPUT. On modern Python
+# (3.10+, which uv installs) pip uses a prebuilt wheel; on older Python it tries
+# to compile and needs the portaudio C library. The launchers skip it gracefully
+# if it can't be installed - everything else (incl. voice output) still works.
 pyaudio>=0.2.14
 pynput>=1.7.0
 PyPDF2>=3.0.0

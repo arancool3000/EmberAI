@@ -35,9 +35,13 @@ commands, manages files, and can be controlled from your phone. macOS + Windows.
 > Ember.
 
 The first launch installs everything automatically (a few minutes); after that it just opens.
-You need **Python 3.10+** installed first:
-- macOS: `brew install python@3.12`  (or grab it from python.org)
-- Windows: install from [python.org](https://www.python.org/downloads/) and check **“Add Python to PATH.”**
+- **macOS:** nothing to install first — double-clicking `Ember.command` fetches `uv`
+  (which brings its own Python 3.12), so you need **neither Homebrew nor a system Python**.
+- **Windows:** install Python from [python.org](https://www.python.org/downloads/) and check **“Add Python to PATH.”**
+
+> Voice/microphone **input** (`pyaudio`) is optional. On the uv path it installs as a
+> prebuilt wheel; if it ever can't be installed, the launchers skip it and everything
+> else (including voice output) still works.
 
 On first run, paste a free **Gemini API key** (get one at https://aistudio.google.com/apikey)
 into Settings (⚙). For Claude models, add an Anthropic API key too.

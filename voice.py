@@ -67,7 +67,9 @@ def listen_once(on_transcript: Callable[[str, str | None], None],
         try:
             mic = sr.Microphone()
         except Exception as e:
-            on_transcript("", f"no microphone: {e}")
+            hint = ("voice input needs pyaudio: 'uv pip install pyaudio' "
+                    "(or pip install pyaudio)") if "pyaudio" in str(e).lower() else str(e)
+            on_transcript("", f"no microphone: {hint}")
             return
         try:
             with mic as source:

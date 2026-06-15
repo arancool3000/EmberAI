@@ -1,5 +1,7 @@
 #!/bin/bash
 # Ember for macOS - one-time install.
+# Uses uv (https://docs.astral.sh/uv/), which fetches its own Python 3.12 -
+# no Homebrew or pre-installed Python required.
 
 set -e
 cd "$(dirname "$0")"
@@ -8,28 +10,28 @@ echo "==========================================="
 echo "  Ember - macOS install"
 echo "==========================================="
 
-# Verify Python 3.10+
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "ERROR: python3 not found. Install Python 3.10+ from https://www.python.org/downloads/macos/"
-    echo "       or:  brew install python@3.12"
-    exit 1
+# --- Ensure uv is available -------------------------------------------------
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+    echo "Installing uv (Python toolchain, no admin needed)…"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Verify portaudio (for pyaudio / voice)
-if ! brew list portaudio >/dev/null 2>&1; then
-    if command -v brew >/dev/null 2>&1; then
-        echo "Installing portaudio (for microphone support)..."
-        brew install portaudio || echo "  (skipping - install manually if mic doesn't work)"
-    else
-        echo "NOTE: Homebrew not found. For microphone support, install portaudio manually."
-    fi
-fi
-
-echo "Upgrading pip..."
-python3 -m pip install --upgrade pip
+# --- Environment + dependencies --------------------------------------------
+echo "Creating Python 3.12 environment…"
+[ -d ".venv" ] || uv venv --python 3.12
 
 echo "Installing dependencies (PyQt6, Gemini SDK, Anthropic SDK, voice...)"
-python3 -m pip install -r requirements.txt
+if ! uv pip install -r requirements.txt; then
+    # pyaudio (microphone input) is optional and the only package that may need
+    # to compile from source. Don't let it block the whole install.
+    echo "NOTE: pyaudio (voice input) couldn't be installed; continuing without it."
+    echo "      Voice output and everything else still work."
+    grep -v '^pyaudio' requirements.txt > .requirements.core.txt
+    uv pip install -r .requirements.core.txt
+    rm -f .requirements.core.txt
+fi
 
 echo ""
 echo "==========================================="
@@ -41,6 +43,6 @@ echo "  - Accessibility (for UI control + global hotkey)"
 echo "  - Input Monitoring (for global hotkey)"
 echo "  - Microphone (only if you want voice input)"
 echo ""
-echo "  Run:  ./run.sh"
+echo "  Run:  ./run.sh   (or double-click Ember.command)"
 echo "  Free Gemini key at:  https://aistudio.google.com/apikey"
 echo "==========================================="
