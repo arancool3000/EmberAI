@@ -1081,6 +1081,7 @@ class EventBridge(QObject):
     chat_title = pyqtSignal(str, str)
     agent_ready = pyqtSignal()  # emitted from a worker thread once google.genai is imported
     update_available = pyqtSignal(object)  # emitted from the background update-check thread
+    notice = pyqtSignal(str)  # post a one-line system bubble from a background thread
 
 
 class MiniPill(QWidget):
@@ -1991,6 +1992,7 @@ class EmberWindow(QWidget):
         self._bridge.chat_title.connect(self._on_chat_title)
         self._bridge.agent_ready.connect(self._build_agent)
         self._bridge.update_available.connect(self._on_update_available)
+        self._bridge.notice.connect(lambda m: self._add_bubble("system", m))
         self._pending_update: dict | None = None
         # macOS never auto-prompts for Accessibility — explicitly request it shortly after launch.
         if not _SAFE_MODE:
@@ -2017,9 +2019,11 @@ class EmberWindow(QWidget):
             # so the window paints first. Starts silently; no modal on launch.
             QTimer.singleShot(1200, self._autostart_remote_control)
         if self.settings.get("auto_update", True):
-            # Check for a newer release shortly after launch (only does anything for a
-            # configured, frozen .app — a no-op in dev). Non-blocking, failure-silent.
+            # Auto-update on every launch. Frozen .app: check + auto-install a published
+            # release. Git/source checkout: fast-forward to the latest commit. Both are
+            # non-blocking and failure-silent.
             QTimer.singleShot(5000, self._check_for_update_async)
+            QTimer.singleShot(1500, self._git_self_update)
         if self.settings.get("gemini_api_key"):
             # Defer agent init (and the heavy google.genai import) so the window paints first.
             self._set_status("Starting…")
@@ -2403,7 +2407,12 @@ class EmberWindow(QWidget):
         # Swap the QSS theme. The frosted veil thins automatically when a real blur is active
         # (blurred=True) so the desktop blur shows; otherwise the gradient + specular rim carry
         # the glass look on their own.
-        if enabled:
+        # The translucent glass stylesheet is only safe when a REAL blur sits behind the
+        # window (Windows acrylic, or the opt-in macOS native blur via EMBER_NATIVE_BLUR).
+        # Without it, a frameless translucent window just shows the desktop through
+        # everything — the "see-through / overlapping / unreadable" bug. So only use the
+        # glass look when actually blurred; otherwise fall back to the solid opaque theme.
+        if enabled and blurred:
             self.setStyleSheet(_glass_style(200, self.settings.get("accent_color", "#58a6ff"),
                                             see_through=blur_level, blurred=blurred))
         else:
@@ -3272,12 +3281,42 @@ class EmberWindow(QWidget):
 
         threading.Thread(target=_work, daemon=True).start()
 
+    def _git_self_update(self):
+        """If Ember runs from a git checkout (source/dev), fast-forward to the latest commit
+        on launch so it stays current without a manual 'git pull'. Background + silent; only
+        fast-forwards (never clobbers local edits)."""
+        if getattr(sys, "frozen", False):
+            return
+        import shutil
+        base = _base_dir()
+        if not (base / ".git").exists() or not shutil.which("git"):
+            return
+
+        def _work():
+            try:
+                import subprocess
+                r = subprocess.run(["git", "-C", str(base), "pull", "--ff-only"],
+                                   capture_output=True, text=True, timeout=90)
+                out = ((r.stdout or "") + (r.stderr or "")).strip()
+                if r.returncode == 0 and "up to date" not in out.lower():
+                    self._bridge.notice.emit(
+                        "⬆️ Updated Ember to the latest version — **restart Ember** to apply.")
+            except Exception:
+                pass
+        threading.Thread(target=_work, daemon=True).start()
+
     def _on_update_available(self, manifest: dict):
-        """Announce an available update (non-blocking). Install happens via /update."""
+        """A newer release is available. With auto-update on (default) install it now;
+        otherwise just announce it (manual install via /update)."""
         import version
         self._pending_update = manifest
         ver = manifest.get("version", "?")
         notes = (manifest.get("notes") or "").strip()
+        if bool(self.settings.get("auto_update", True)):
+            self._add_bubble("system", f"🔄 Installing **Ember {ver}** automatically…")
+            self._set_status(f"Updating to {ver}…")
+            QTimer.singleShot(300, lambda: self._start_update(auto=True))
+            return
         msg = (f"🔄 **Ember {ver}** is available (you have {version.__version__}). "
                "Type **/update** to install it now.")
         if notes:
@@ -3285,8 +3324,9 @@ class EmberWindow(QWidget):
         self._add_bubble("system", msg)
         self._set_status(f"Update {ver} available — type /update")
 
-    def _start_update(self):
-        """Download + install the pending update, then relaunch (triggered by /update)."""
+    def _start_update(self, auto: bool = False):
+        """Download + install the pending update, then relaunch. Triggered by /update, or
+        automatically at launch when auto=True (skips the confirmation prompt)."""
         try:
             import updater
         except Exception as e:
@@ -3306,7 +3346,7 @@ class EmberWindow(QWidget):
             self._check_for_update_async()
             return
         ver = manifest.get("version", "?")
-        if QMessageBox.question(
+        if not auto and QMessageBox.question(
                 self, "Update Ember",
                 f"Install Ember {ver} now?\n\nEmber will download the update and restart.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
