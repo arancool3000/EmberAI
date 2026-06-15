@@ -1290,7 +1290,7 @@ class ManualModeDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Tabbed settings: Models · Performance · Automations · Memory · About."""
+    """Tabbed settings: Models · Performance · Automations · Memory · Security · About."""
 
     def __init__(self, settings: dict, parent=None, automation_engine=None):
         super().__init__(parent)
@@ -1313,6 +1313,7 @@ class SettingsDialog(QDialog):
         self._build_performance_tab()
         self._build_automations_tab()
         self._build_memory_tab()
+        self._build_security_tab()
         self._build_about_tab()
 
         btn_row = QHBoxLayout()
@@ -1704,6 +1705,165 @@ class SettingsDialog(QDialog):
         v.addWidget(text)
         v.addStretch()
         self.tabs.addTab(page, "About")
+
+    def _build_security_tab(self):
+        """Security & Pro: malware protection, web protection, agent mode, VPN, audit."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        try:
+            self._populate_security_tab(v)
+        except Exception as e:
+            v.addWidget(QLabel(f"Security panel unavailable: {e}"))
+        self.tabs.addTab(page, "Security")
+
+    def _populate_security_tab(self, v):
+        import antivirus, web_policy, safety, plan, audit, vpn
+
+        p = plan.get_plan()
+        plan_lbl = QLabel(
+            "<b>Plan:</b> " + ("Pro ✓ — all features unlocked (free for everyone)"
+                               if p.get("is_pro") else f"{p.get('plan')}"))
+        plan_lbl.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(plan_lbl)
+
+        def _section(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("color:#565f89; font-size:11px; margin-top:8px;")
+            v.addWidget(lbl)
+
+        # --- Malware protection ---
+        _section("Malware protection")
+        cfg = antivirus.get_config()
+        self._sec_scan_dl = QCheckBox("Scan files on download")
+        self._sec_scan_dl.setChecked(bool(cfg.get("scan_downloads", True)))
+        self._sec_scan_dl.stateChanged.connect(
+            lambda s: antivirus.set_config(scan_downloads=bool(s)))
+        v.addWidget(self._sec_scan_dl)
+        self._sec_scan_open = QCheckBox("Scan files before opening them")
+        self._sec_scan_open.setChecked(bool(cfg.get("scan_before_open", True)))
+        self._sec_scan_open.stateChanged.connect(
+            lambda s: antivirus.set_config(scan_before_open=bool(s)))
+        v.addWidget(self._sec_scan_open)
+
+        st = antivirus.security_status()
+        eng = QLabel("Engines: " + ", ".join(st.get("engines_available", []))
+                     + f"   ·   Sandbox: {st.get('sandbox_available')}")
+        eng.setStyleSheet("color:#565f89; font-size:11px;")
+        eng.setWordWrap(True)
+        v.addWidget(eng)
+
+        row = QHBoxLayout()
+        self._sec_quar_lbl = QLabel(f"Quarantine: {st.get('quarantine_count', 0)} item(s)")
+        row.addWidget(self._sec_quar_lbl)
+        view_btn = QPushButton("View quarantine")
+        view_btn.clicked.connect(self._show_quarantine)
+        row.addWidget(view_btn)
+        scan_btn = QPushButton("Scan a folder…")
+        scan_btn.clicked.connect(self._scan_folder)
+        row.addWidget(scan_btn)
+        row.addStretch()
+        v.addLayout(row)
+
+        # --- Web protection ---
+        _section("Web protection")
+        wp = web_policy.get_config()
+        self._sec_web = QCheckBox("Block malicious / phishing websites")
+        self._sec_web.setChecked(bool(wp.get("enabled", True)))
+        self._sec_web.stateChanged.connect(lambda s: web_policy.set_config(enabled=bool(s)))
+        v.addWidget(self._sec_web)
+        self._sec_web_rep = QCheckBox("Use live URL reputation (URLhaus / VirusTotal / Safe Browsing)")
+        self._sec_web_rep.setChecked(bool(wp.get("online_reputation", True)))
+        self._sec_web_rep.stateChanged.connect(
+            lambda s: web_policy.set_config(online_reputation=bool(s)))
+        v.addWidget(self._sec_web_rep)
+
+        # --- Agent capability mode ---
+        _section("Agent capability mode")
+        mrow = QHBoxLayout()
+        self._sec_mode = QComboBox()
+        self._sec_mode.addItems(["full", "restricted", "read_only"])
+        try:
+            self._sec_mode.setCurrentText(safety.current_mode())
+        except Exception:
+            pass
+        self._sec_mode.currentTextChanged.connect(lambda m: safety.set_mode(m))
+        mrow.addWidget(self._sec_mode)
+        mrow.addStretch()
+        v.addLayout(mrow)
+        mhint = QLabel("full = all tools · restricted = no high-risk actions · "
+                       "read_only = safe read-only tools only")
+        mhint.setStyleSheet("color:#565f89; font-size:11px;")
+        mhint.setWordWrap(True)
+        v.addWidget(mhint)
+
+        # --- VPN ---
+        _section("VPN (bring-your-own WireGuard)")
+        try:
+            vs = vpn.status()
+            vl = vpn.list_locations()
+            vtxt = ("Connected ✓" if vs.get("connected") else "Not connected")
+            vtxt += f"   ·   {len(vl.get('locations', []))} location(s)"
+            if not vl.get("wireguard_installed"):
+                vtxt += "   ·   WireGuard not installed (brew install wireguard-tools)"
+            vlbl = QLabel(vtxt)
+            vlbl.setStyleSheet("color:#565f89; font-size:11px;")
+            vlbl.setWordWrap(True)
+            v.addWidget(vlbl)
+        except Exception:
+            pass
+
+        # --- Audit log ---
+        _section("Tamper-evident audit log")
+        arow = QHBoxLayout()
+        averify = QPushButton("Verify audit log")
+        averify.clicked.connect(self._verify_audit)
+        arow.addWidget(averify)
+        arow.addStretch()
+        v.addLayout(arow)
+        v.addStretch()
+
+    def _show_quarantine(self):
+        import antivirus
+        items = antivirus.list_quarantine().get("items", [])
+        if not items:
+            QMessageBox.information(self, "Quarantine", "Quarantine is empty.")
+            return
+        blocks = []
+        for it in items[:30]:
+            reasons = ", ".join(it.get("reasons", []) or []) or "—"
+            blocks.append(f"{it.get('original_path')}\n  {reasons}\n  auto-deletes: {it.get('deletes_on')}")
+        QMessageBox.information(self, "Quarantine", "\n\n".join(blocks))
+
+    def _scan_folder(self):
+        import antivirus
+        from PyQt6.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
+        if not folder:
+            return
+        r = antivirus.scan_directory(folder, deep=False)
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Scan", r.get("error", "scan failed"))
+            return
+        flagged = r.get("flagged", [])
+        detail = "\n".join(f"{f['verdict']}: {f['path']}" for f in flagged[:20]) or "Nothing suspicious found."
+        QMessageBox.information(
+            self, "Scan complete",
+            f"Scanned {r.get('scanned', 0)} files — flagged {r.get('flagged_count', 0)}.\n\n{detail}")
+        try:
+            self._sec_quar_lbl.setText(
+                f"Quarantine: {antivirus.security_status().get('quarantine_count', 0)} item(s)")
+        except Exception:
+            pass
+
+    def _verify_audit(self):
+        import audit
+        r = audit.verify()
+        if r.get("valid"):
+            QMessageBox.information(self, "Audit log",
+                                    f"✓ Intact — {r.get('entries', 0)} entries, no tampering detected.")
+        else:
+            QMessageBox.warning(self, "Audit log",
+                                f"⚠ Tampering detected at entry {r.get('broken_at')}: {r.get('reason')}")
 
     def _show_rates(self):
         QMessageBox.information(self, "Free-tier rate limits", model_catalog.rate_limit_summary())
