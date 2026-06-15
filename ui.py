@@ -2058,6 +2058,21 @@ class EmberWindow(QWidget):
         combo = (self.settings.get("hotkey") or "ctrl+shift+space").lower().strip()
         errors = []
 
+        # On macOS, a global key listener is a Quartz CGEventTap. Creating one while the
+        # process is NOT trusted for Accessibility prints "This process is not trusted!"
+        # and can hard-crash the app (segfault) under Python 3.12. So only start it once
+        # access is actually granted; _check_accessibility re-calls this after a grant.
+        if sys.platform == "darwin":
+            try:
+                import mac_permissions
+                if not mac_permissions.request_accessibility(prompt=False):
+                    self._hotkey_combo = None
+                    self._hotkey_status = "off (grant Accessibility to enable the global hotkey)"
+                    print(f"[hotkey] {self._hotkey_status}")
+                    return
+            except Exception:
+                pass
+
         # Attempt 1: pynput (works reliably without admin on most Windows installs).
         try:
             from pynput import keyboard as pk
