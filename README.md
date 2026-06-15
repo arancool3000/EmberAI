@@ -10,15 +10,29 @@ commands, manages files, and can be controlled from your phone. macOS + Windows.
 **macOS:** double-click **`Ember.command`**
 **Windows:** double-click **`Ember.bat`**
 
-> **macOS first-launch note:** Ember is free and unsigned, so on the very first
-> double-click macOS may say *"Apple cannot check it for malicious software."*
-> That's expected for any app not paid-notarized through Apple. Just **right-click
-> the file → Open → Open** once. The script then clears the quarantine flag from
-> the whole folder, so the other `.command` files open normally afterward.
-> Prefer one command? Run this in Terminal on the folder to clear them all at once:
+> **macOS first-launch note:** Ember is free and unsigned, so macOS Gatekeeper
+> blocks the `.command` files on first use with *"Apple could not verify … is free
+> of malware."* On **macOS 15 (Sequoia)** the old right-click → **Open** trick is
+> gone — the dialog only offers *Done* / *Move to Bin*. **Don't pick "Move to Bin"**
+> (it deletes the file); click **Done**, then clear the block once with any one of
+> these:
+>
+> **Easiest — run the one-time unblock in Terminal:**
+> ```bash
+> bash /path/to/the/Ember/folder/unblock-mac.sh
+> # tip: type "bash " then drag unblock-mac.sh from Finder into Terminal, press Return
+> ```
+> **Or strip the quarantine flag yourself:**
 > ```bash
 > xattr -dr com.apple.quarantine /path/to/the/Ember/folder
 > ```
+> **Or via System Settings:** Privacy & Security → scroll to the blocked file →
+> **Open Anyway**.
+>
+> After that, the `.command` files double-click normally (each one also re-clears
+> the folder's quarantine flag when it runs). This is expected for any app not
+> paid-notarized through Apple — it's a macOS packaging gate, not a problem with
+> Ember.
 
 The first launch installs everything automatically (a few minutes); after that it just opens.
 You need **Python 3.10+** installed first:
@@ -45,8 +59,10 @@ Turn Ember into a double-clickable app that needs **no Python and no terminal** 
   Drag it to Applications. (Uses PyInstaller — completely free.)
 - **Windows:** run `python -m PyInstaller --noconfirm Ember.spec` → produces `dist/Ember/Ember.exe`.
 
-The build is unsigned, so the first launch needs **right-click → Open** (macOS) or
-“More info → Run anyway” (Windows). That’s normal for free, self-built apps.
+The build is unsigned, so Gatekeeper gates the first launch. On **macOS** double-click
+`Ember.app`, then open System Settings → Privacy & Security → **Open Anyway** (on macOS
+versions before Sequoia, right-click → **Open** also works). On **Windows** choose
+“More info → Run anyway.” That’s normal for free, self-built apps.
 
 ---
 
@@ -115,6 +131,7 @@ It’s LAN-only and PIN-gated; stop it when done.
 | File | Purpose |
 |---|---|
 | `Ember.command` / `Ember.bat` | one-click run |
+| `unblock-mac.sh` | one-time macOS Gatekeeper unblock (`bash unblock-mac.sh`) |
 | `BUILD_DESKTOP_APP.command` | build standalone `Ember.app` |
 | `main.py` | entry point |
 | `ui.py` | the desktop UI |
