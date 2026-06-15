@@ -30,11 +30,18 @@ dot_clean -m dist/Ember.app 2>/dev/null
 codesign --force --deep --sign - dist/Ember.app 2>/dev/null
 codesign --verify --verbose=1 dist/Ember.app 2>/dev/null && echo "  ✓ signature valid" || echo "  (signature check skipped)"
 
+# Package a drag-to-Applications .dmg too (the normal Mac app-download experience).
+if command -v hdiutil >/dev/null 2>&1; then
+  bash make_dmg.sh 2>/dev/null && echo "Packaged dist/Ember.dmg (drag-to-Applications)."
+fi
+
 echo ""
 echo "==============================================="
-echo "  Done →  dist/Ember.app"
-echo "  1. Drag dist/Ember.app to your Applications folder."
-echo "  2. First launch: right-click → Open (unsigned app)."
+echo "  Done →  dist/Ember.app   (+ dist/Ember.dmg)"
+echo "  1. Open dist/Ember.dmg and drag Ember into Applications"
+echo "     (or drag dist/Ember.app there directly)."
+echo "  2. First launch: open it, then System Settings → Privacy"
+echo "     & Security → Open Anyway  (older macOS: right-click → Open)."
 echo "  3. Grant Screen Recording + Accessibility in"
 echo "     System Settings → Privacy & Security."
 echo "==============================================="

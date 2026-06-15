@@ -42,12 +42,37 @@ You need **Python 3.10+** installed first:
 On first run, paste a free **Gemini API key** (get one at https://aistudio.google.com/apikey)
 into Settings (⚙). For Claude models, add an Anthropic API key too.
 
-### Run from a terminal instead
+### Run from source in Terminal (no build, no Homebrew)
+
+The quickest way to run Ember without building an app. It uses
+**[uv](https://docs.astral.sh/uv/)**, which installs its *own* Python — so you do
+**not** need Homebrew or any pre-installed Python, and it avoids the slow
+dependency-resolution stalls you can hit with the old system Python.
+
+**1. Install uv** (one line — no Homebrew):
 ```bash
-cd EmberMac
-./install.sh        # one-time (macOS).  Windows: pip install -r requirements.txt
-./run.sh            # or:  python3 main.py
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
 ```
+
+**2. Go into this folder.** In Terminal type `cd ` (with a trailing space), then
+drag the Ember folder from Finder onto the window and press Return. Confirm you're
+in the right place — this must list both files:
+```bash
+ls main.py requirements.txt
+```
+
+**3. Install dependencies and launch:**
+```bash
+uv venv --python 3.12
+uv pip install -r requirements.txt
+uv run python main.py
+```
+
+> ⚠️ When copying commands, **never paste lines that start with `#`** — your shell
+> tries to run them and errors. Copy only the actual commands.
+
+Prefer your own Python? `python3 -m pip install -r requirements.txt --prefer-binary && python3 main.py` (needs Python 3.10+).
 
 ---
 
@@ -55,14 +80,24 @@ cd EmberMac
 
 Turn Ember into a double-clickable app that needs **no Python and no terminal** to run:
 
-- **macOS:** double-click **`BUILD_DESKTOP_APP.command`** → produces **`dist/Ember.app`**.
-  Drag it to Applications. (Uses PyInstaller — completely free.)
+- **macOS:** double-click **`BUILD_DESKTOP_APP.command`** → produces **`dist/Ember.app`**
+  *and* **`dist/Ember.dmg`**. (Uses PyInstaller — completely free.)
+- **macOS drag-to-Applications:** open **`dist/Ember.dmg`** and drag Ember into the
+  Applications folder — the same experience as a normal Mac app download. (You can
+  rebuild just the dmg any time with `bash make_dmg.sh`.)
 - **Windows:** run `python -m PyInstaller --noconfirm Ember.spec` → produces `dist/Ember/Ember.exe`.
 
 The build is unsigned, so Gatekeeper gates the first launch. On **macOS** double-click
 `Ember.app`, then open System Settings → Privacy & Security → **Open Anyway** (on macOS
 versions before Sequoia, right-click → **Open** also works). On **Windows** choose
 “More info → Run anyway.” That’s normal for free, self-built apps.
+
+> **“Why isn’t this just drag-and-drop like the Claude app?”** It can be — that’s
+> what `dist/Ember.dmg` gives you (open it, drag Ember into Applications). The one
+> remaining difference: apps like Claude are **notarized** by Apple (a paid Developer
+> ID), so macOS shows no warning at all. Ember is free and unsigned, so the very
+> first launch still needs the one-time **Open Anyway** step above. Add Apple
+> notarization and even that disappears.
 
 ---
 
@@ -185,7 +220,8 @@ what protection is currently active.
 |---|---|
 | `Ember.command` / `Ember.bat` | one-click run |
 | `unblock-mac.sh` | macOS: clear Gatekeeper quarantine + launch, in one `bash unblock-mac.sh` |
-| `BUILD_DESKTOP_APP.command` | build standalone `Ember.app` |
+| `BUILD_DESKTOP_APP.command` | build standalone `Ember.app` (+ `Ember.dmg`) |
+| `make_dmg.sh` | package `Ember.app` into a drag-to-Applications `.dmg` |
 | `main.py` | entry point |
 | `ui.py` | the desktop UI |
 | `agent.py` | the AI agent loop + tool declarations |
