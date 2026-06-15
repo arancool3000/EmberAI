@@ -3028,23 +3028,15 @@ class EmberWindow(QWidget):
         self._clamp_bubble_widths()
 
     def _fade_in(self, widget: QWidget, duration: int = 220):
-        """Animated opacity 0 -> 1 so new chat bubbles smoothly appear."""
-        if not bool(self.settings.get("animations_enabled", True)):
-            return
-        effect = QGraphicsOpacityEffect(widget)
-        effect.setOpacity(0.0)
-        widget.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", widget)
-        anim.setDuration(duration)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        if not hasattr(self, "_anims"):
-            self._anims = []
-        self._anims.append(anim)
-        # Trim refs to avoid memory leak
-        self._anims = self._anims[-50:]
+        """Bubbles appear instantly.
+
+        This used to fade each bubble in with a QGraphicsOpacityEffect. But a widget that
+        has a QGraphicsEffect attached is rendered through an offscreen pixmap at its
+        UNCONSTRAINED natural size — which made chat bubbles ignore the column width
+        (overflowing under the Command Center) and leave ghosted/empty-box artifacts.
+        Correct rendering beats the fade, so this is now a no-op. The window-open fade
+        (showEvent, window-level opacity) is unaffected."""
+        return
 
     def _scroll_to_bottom_smooth(self, duration: int = 190):
         try:
