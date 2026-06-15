@@ -2879,6 +2879,10 @@ class EmberWindow(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        # The real chat-viewport width is only known once shown; re-clamp bubbles added
+        # during init (welcome / history) so they don't render at a stale width and end
+        # up visually off to the side.
+        QTimer.singleShot(0, self._clamp_bubble_widths)
         if not bool(self.settings.get("animations_enabled", True)):
             return
         try:
@@ -2989,11 +2993,15 @@ class EmberWindow(QWidget):
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame)
         self._fade_in(frame, 180)
         QTimer.singleShot(35, self._scroll_to_bottom_smooth)
+        # Re-clamp once layout settles so a bubble added before geometry is known
+        # (e.g. during init) doesn't sit at the wrong width.
+        QTimer.singleShot(0, self._clamp_bubble_widths)
         return frame
 
-    def resizeEvent(self, e):
-        """When the window resizes, update every bubble's max width so they stay contained."""
-        super().resizeEvent(e)
+    def _clamp_bubble_widths(self):
+        """Cap every bubble to the current chat viewport width. Called on resize and once
+        the window is shown, so bubbles added before the 3-column layout settled (the
+        welcome / restored-history messages) don't keep a stale, too-wide width."""
         try:
             view_w = self.chat_scroll.viewport().width() - 24
             if view_w > 100 and hasattr(self, "chat_layout"):
@@ -3004,6 +3012,11 @@ class EmberWindow(QWidget):
                         w.setMaximumWidth(view_w)
         except Exception:
             pass
+
+    def resizeEvent(self, e):
+        """When the window resizes, update every bubble's max width so they stay contained."""
+        super().resizeEvent(e)
+        self._clamp_bubble_widths()
 
     def _fade_in(self, widget: QWidget, duration: int = 220):
         """Animated opacity 0 -> 1 so new chat bubbles smoothly appear."""

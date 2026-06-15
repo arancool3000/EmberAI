@@ -1,6 +1,12 @@
 """Ember entry point."""
+import faulthandler
 import sys
 import traceback
+
+# If a native library segfaults (e.g. a macOS event tap / Quartz call), dump a Python
+# traceback to stderr instead of dying silently with "python3 quit unexpectedly". This
+# prints the exact module/function that triggered the crash, right in the terminal.
+faulthandler.enable()
 
 
 def _set_taskbar_app_id():
