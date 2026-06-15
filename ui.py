@@ -2132,6 +2132,14 @@ class EmberWindow(QWidget):
         self.input_box.setFocus()
 
     def _keep_overlay_on_top(self):
+        # The main window is a stay-on-top overlay we periodically re-raise so it stays above
+        # other apps. But don't fight our OWN dialogs/popups: raising over a modal Settings
+        # (or a confirm box, menu, or combo dropdown) sends it behind, so it appears to flicker
+        # back and forth. Skip the raise whenever one of those is active.
+        app = QApplication.instance()
+        if app is not None and (app.activeModalWidget() is not None
+                                or app.activePopupWidget() is not None):
+            return
         if self.isVisible() and not self.isMinimized():
             try:
                 self.raise_()
