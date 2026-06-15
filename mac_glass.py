@@ -14,9 +14,16 @@ Robust by construction:
 """
 from __future__ import annotations
 
+import os
 import sys
 
 _AVAILABLE = sys.platform == "darwin"
+
+# The native NSVisualEffectView blur reparents Qt's NSWindow view hierarchy, which
+# segfaults on some macOS versions (notably macOS 26 "Tahoe"). It is therefore OFF by
+# default and only attempted when explicitly opted in via EMBER_NATIVE_BLUR=1. With it
+# off, the caller's frosted stylesheet still provides a convincing glass look — no crash.
+_NATIVE_OK = os.environ.get("EMBER_NATIVE_BLUR", "").strip().lower() not in ("", "0", "false", "no")
 
 # NSVisualEffectView constants (raw ints — avoids importing the AppKit enums).
 _BLENDING_BEHIND_WINDOW = 0
@@ -54,7 +61,7 @@ def _teardown(qwidget):
 def set_blur(qwidget, enabled: bool, level: int = 60, radius: float = 26.0) -> bool:
     """Mount (or remove) a frosted blur behind the Qt content. Returns True iff a native
     blur is now active (so the caller can thin its stylesheet veil to let it show)."""
-    if not _AVAILABLE:
+    if not _AVAILABLE or not _NATIVE_OK:
         return False
     if not enabled:
         # Only touch native APIs if we actually mounted an effect before. Otherwise do
