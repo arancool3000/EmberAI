@@ -76,7 +76,24 @@ def download_file(url: str, destination: str, timeout: int = 60) -> dict:
                     if chunk:
                         f.write(chunk)
                         total += len(chunk)
-        return {"ok": True, "path": str(dst), "bytes": total, "size_mb": round(total / (1024 * 1024), 2)}
+        result = {"ok": True, "path": str(dst), "bytes": total,
+                  "size_mb": round(total / (1024 * 1024), 2)}
+        # Scan the freshly downloaded file; quarantine it if it is malicious.
+        try:
+            import antivirus
+            gate = antivirus.gate_download(str(dst))
+            if gate.get("scanned"):
+                result["security"] = {k: gate[k] for k in ("verdict", "reasons", "engines")
+                                      if k in gate}
+                if gate.get("blocked"):
+                    result["blocked"] = True
+                    result["path"] = None
+                    result["quarantined"] = gate.get("handled")
+                    result["warning"] = ("Downloaded file was malicious and has been "
+                                         "quarantined/removed.")
+        except Exception:
+            pass
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

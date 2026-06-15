@@ -58,6 +58,13 @@ if __name__ == "__main__":
             # Another Ember is already running; we've already told it to summon itself.
             sys.exit(0)
 
+        # Purge any quarantined files past their auto-delete grace period.
+        try:
+            import antivirus
+            antivirus.startup()
+        except Exception:
+            pass
+
         from ui import main
         main(instance_listener=listener)
     except ImportError as e:

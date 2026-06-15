@@ -766,8 +766,18 @@ def open_app(name):
 
 
 def open_path(path):
+    target = os.path.expanduser(os.path.expandvars(path))
+    # Scan before opening; refuse malicious/suspicious files until they are cleared.
     try:
-        subprocess.Popen(["open", os.path.expanduser(os.path.expandvars(path))])
+        import antivirus
+        gate = antivirus.gate_open(target)
+        if gate.get("scanned") and not gate.get("allowed", True):
+            return {"ok": False, "blocked": True, "verdict": gate.get("verdict"),
+                    "reasons": gate.get("reasons"), "error": gate.get("message")}
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(["open", target])
         return {"ok": True, "opened": path}
     except Exception as e:
         return {"ok": False, "error": str(e)}

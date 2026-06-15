@@ -148,6 +148,18 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
             raise RuntimeError(f"checksum mismatch (expected {expected_sha[:12]}…, "
                                f"got {actual[:12]}…) — refusing to install")
 
+    # Defense in depth: scan the downloaded archive before unpacking it.
+    try:
+        import antivirus
+        scan = antivirus.scan_file(str(zpath), deep=True)
+        if scan.get("verdict") == "malicious":
+            raise RuntimeError("update archive flagged as malicious by the on-device "
+                               "scanner — refusing to install")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
     extract_dir = tmp / "extracted"
     extract_dir.mkdir()
     if sys.platform == "darwin":

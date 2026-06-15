@@ -120,6 +120,7 @@ SAFE_READONLY = {
     "get_battery", "get_volume", "env_get", "env_list",
     "color_at", "clipboard_get", "clipboard_history_get", "clipboard_history_snapshot",
     "git_status", "git_log", "git_diff",
+    "scan_file", "list_quarantine", "security_status",
 }
 
 SAFE_INTERACTION = {
@@ -264,6 +265,13 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
             if sensitive in path:
                 return "high", f"writing to sensitive path: {sensitive}"
         return "medium", "file write"
+
+    if tool_name == "run_in_sandbox":
+        return "medium", "runs a program inside an isolated sandbox"
+    if tool_name == "restore_quarantined":
+        return "high", "restores a quarantined (malicious) file"
+    if tool_name == "delete_quarantined":
+        return "medium", "permanently deletes a quarantined file"
 
     return "medium", "unclassified tool"
 

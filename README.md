@@ -107,6 +107,40 @@ It’s LAN-only and PIN-gated; stop it when done.
 
 ---
 
+## 🛡️ Built-in malware defense
+
+Ember scans what it downloads and what you ask it to open, isolates anything it
+can't vouch for, and quarantines confirmed threats.
+
+- **Scan on download / before open** — every downloaded file (and any file Ember
+  is about to open) is scanned with local heuristics (executable-disguised-as-a-
+  document, double extensions like `invoice.pdf.exe`, macro-laden Office files,
+  known-bad hashes), the platform antivirus (**Windows Defender** / **ClamAV** if
+  installed), and **VirusTotal** (hash lookup, plus uploading unknown files when a
+  key is set). Suspicious or malicious files are **not opened until the scan finishes**.
+- **Quarantine + auto-delete** — confirmed-malicious files are moved to a locked,
+  non-executable vault and automatically deleted after 7 days. Nothing is deleted
+  on a mere hunch — only a definitive detection quarantines a file, so a false
+  positive can't destroy your data. Manage it with the `list_quarantine`,
+  `restore_quarantined`, and `delete_quarantined` tools.
+- **Sandbox unknown programs** — `run_in_sandbox` runs a file in the strongest
+  isolation available (Docker with no network → macOS `sandbox-exec` / Windows
+  restricted token → otherwise refuse) so its behaviour can be observed without
+  risking your machine. If no isolation is available, Ember refuses to run it
+  rather than running it unprotected.
+
+**Optional, stronger protection** (all auto-detected — none required):
+- **VirusTotal:** set a `VIRUSTOTAL_API_KEY` (free at virustotal.com) for cloud
+  multi-engine scanning. Only file hashes are sent unless upload is enabled.
+- **ClamAV** (`brew install clamav` / `apt install clamav`) for an on-device engine.
+- **Docker** for the strongest sandbox.
+
+Settings live in `~/Library/Application Support/Ember/security.json` (macOS) /
+`%LOCALAPPDATA%\Ember\security.json` (Windows); the `security_status` tool reports
+what protection is currently active.
+
+---
+
 ## 🧠 What makes Ember accurate
 
 - **`smart_click("Sign in")`** — finds the real on-screen target via the macOS/Windows
@@ -139,5 +173,6 @@ It’s LAN-only and PIN-gated; stop it when done.
 | `tools.py`, `more_tools.py`, `extra_tools.py` | the tool set |
 | `screen_vision.py` | exact clicking + on-screen OCR |
 | `remote_server.py` | Ember Link phone control |
+| `antivirus.py` | malware scan, quarantine vault & sandbox |
 | `voice.py` | speech input + text-to-speech for Voice Chat |
 | `make_logo.py` | regenerate the app icon |

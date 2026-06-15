@@ -17,6 +17,7 @@ from google.genai import types
 import tools
 import memory
 import safety
+import antivirus
 import file_ops
 import more_tools
 import extra_tools
@@ -1363,6 +1364,34 @@ TOOL_DECLARATIONS = [
             "required": ["situation", "gemini_summary", "specific_question"],
         },
     },
+    # ---- Security / antivirus ----
+    {"name": "scan_file",
+     "description": "Scan a file for malware (local heuristics + platform AV + VirusTotal). "
+                    "Returns a verdict: clean | suspicious | malicious, with the reasons.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "deep": {"type": "BOOLEAN"}}, "required": ["path"]}},
+    {"name": "run_in_sandbox",
+     "description": "Run an unknown/suspicious program in an isolated sandbox (Docker if "
+                    "available, else OS-native confinement) to observe it safely. Refuses to "
+                    "run files already known to be malicious.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "args": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "timeout": {"type": "INTEGER"}}, "required": ["path"]}},
+    {"name": "list_quarantine",
+     "description": "List files Ember has quarantined as malicious, and when each auto-deletes.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "restore_quarantined",
+     "description": "Restore a quarantined file (by id) to its original location. DANGEROUS: "
+                    "this re-arms a file flagged as malicious — confirm with the user first.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "id": {"type": "STRING"}, "destination": {"type": "STRING"}}, "required": ["id"]}},
+    {"name": "delete_quarantined",
+     "description": "Permanently delete a single quarantined file by id.",
+     "parameters": {"type": "OBJECT", "properties": {"id": {"type": "STRING"}}, "required": ["id"]}},
+    {"name": "security_status",
+     "description": "Report Ember's malware-protection status: engines available, settings, "
+                    "sandbox type, and quarantine count.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
 ]
 
 
@@ -1450,6 +1479,13 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "http_get": more_tools.http_get,
     "http_post": more_tools.http_post,
     "download_file": more_tools.download_file,
+    # security / antivirus
+    "scan_file": antivirus.scan_file,
+    "run_in_sandbox": antivirus.run_in_sandbox,
+    "list_quarantine": antivirus.list_quarantine,
+    "restore_quarantined": antivirus.restore_quarantined,
+    "delete_quarantined": antivirus.delete_quarantined,
+    "security_status": antivirus.security_status,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

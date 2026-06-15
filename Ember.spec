@@ -32,7 +32,7 @@ hiddenimports += collect_submodules("google")
 # Ember's own modules.
 hiddenimports += ["single_instance", "automation", "manual_mode", "more_tools",
                   "extra_tools", "screen_vision", "tools", "browser", "file_ops",
-                  "memory", "safety", "models", "voice", "scheduled_tasks",
+                  "memory", "safety", "antivirus", "models", "voice", "scheduled_tasks",
                   "claude_bridge", "claude_agent",
                   "mac_permissions",
                   "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets",
