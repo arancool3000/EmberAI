@@ -5,11 +5,11 @@
   "min_windows": "10",
   "downloads": {
     "macos": {
-      "url": "https://github.com/arancool3000/ember/releases/latest/download/Ember-macOS.zip",
+      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Ember-macOS.zip",
       "sha256": ""
     },
     "windows": {
-      "url": "https://github.com/arancool3000/ember/releases/latest/download/Ember-Windows.zip",
+      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Ember-Windows.zip",
       "sha256": ""
     }
   },

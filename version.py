@@ -9,6 +9,7 @@ then run RELEASE.command. Until GITHUB_OWNER is set, the auto-updater stays dorm
 """
 from __future__ import annotations
 
+import os
 import sys
 
 # Bump this for every release (RELEASE.command does it for you). Semantic versioning.
@@ -17,8 +18,9 @@ __version__ = "1.0.0"
 # --- GitHub Pages + Releases distribution -----------------------------------
 # Set this to your GitHub username/org. The placeholder keeps the updater dormant
 # until you've actually created the repo (so a fresh checkout never errors).
-GITHUB_OWNER = "arancool3000"
-GITHUB_REPO = "ember"
+# Defaults match this repo; override via env (e.g. in CI) without editing the file.
+GITHUB_OWNER = os.environ.get("EMBER_GITHUB_OWNER", "arancool3000")
+GITHUB_REPO = os.environ.get("EMBER_GITHUB_REPO", "atlas")
 
 # Per-OS release asset names (the updater downloads these; the release scripts produce them).
 ASSET_NAMES = {"macos": "Ember-macOS.zip", "windows": "Ember-Windows.zip"}

@@ -17,12 +17,13 @@ Make a repo named **`ember`** under your account (public, so Pages + release dow
 > Using a different name? Set `GITHUB_REPO` in `version.py` to match.
 
 ### 2. Point Ember at your account
-Edit `version.py`:
+`version.py` defaults to this repo (`arancool3000/atlas`). For a different
+account/repo, edit it — or set env vars (handy for CI) without editing the file:
 ```python
-GITHUB_OWNER = "your-github-username"   # <- change this
-GITHUB_REPO  = "ember"                   # (only if you named the repo differently)
+GITHUB_OWNER = os.environ.get("EMBER_GITHUB_OWNER", "your-github-username")
+GITHUB_REPO  = os.environ.get("EMBER_GITHUB_REPO", "atlas")
 ```
-That's the only edit needed — the updater, website, and release script all read from here.
+The updater, website, and release script all read from here.
 
 ### 3. Push the code
 ```bash
@@ -81,11 +82,36 @@ the visitor's OS and offers the right build; each installed app auto-updates fro
 | Website | `docs/index.html` | Static landing page; reads `latest.json` live |
 | Release pipeline | `RELEASE.command` + `_release_helper.py` | Build → publish |
 
+## Notarization (optional — zero Gatekeeper warning, like the Claude app)
+
+By default the build is **ad-hoc signed** (free, but the first launch needs **Open
+Anyway**). To make Ember open with **no warning at all** — exactly like a notarized
+app such as Claude — give `RELEASE.command` an Apple Developer ID and it will sign,
+notarize, and staple automatically (and notarize the `.dmg` too). This needs a paid
+**Apple Developer account ($99/yr)**.
+
+One-time setup:
+1. In Xcode (or developer.apple.com) create a **Developer ID Application** certificate
+   and install it in your login keychain.
+2. Make an **app-specific password** at <https://appleid.apple.com> → Sign-In & Security.
+3. Store notary credentials once:
+   ```bash
+   xcrun notarytool store-credentials ember-notary \
+     --apple-id you@example.com --team-id TEAMID --password APP-SPECIFIC-PASSWORD
+   ```
+4. Export these before running `./RELEASE.command` (e.g. add to `~/.zshrc`):
+   ```bash
+   export EMBER_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+   export EMBER_NOTARY_PROFILE="ember-notary"
+   ```
+That's it — `RELEASE.command` (via `notarize_mac.sh`) detects the identity and produces
+a notarized, stapled `Ember.app`, `Ember-macOS.zip`, and `Ember.dmg`. Without those env
+vars it stays on the free ad-hoc path unchanged.
+
 ## Notes & gotchas
-- **Gatekeeper:** builds are ad-hoc signed (not notarized), so first launch needs
-  **right-click → Open** (the site says so). The updater strips the download quarantine
-  automatically, so *updates* don't re-prompt. To remove the warning entirely, notarize with an
-  Apple Developer ID and add `xcrun notarytool` to `RELEASE.command`.
+- **Gatekeeper:** ad-hoc builds (no `EMBER_SIGN_IDENTITY`) need **Open Anyway** on first
+  launch; the updater strips the download quarantine so *updates* don't re-prompt. Set up
+  notarization (above) to remove the warning entirely.
 - **Bundle zipping must use `ditto`** (not `zip`) or the `.app` signature/symlinks break — the
   script already does, and the updater extracts with `ditto -x -k`.
 - **Auto-update only runs from the built `Ember.app`** (not `python3 main.py`) and only once

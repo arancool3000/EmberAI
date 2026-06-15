@@ -33,16 +33,42 @@ python3 -m pip install --quiet --upgrade pyinstaller
 rm -rf build dist
 python3 -m PyInstaller --noconfirm Ember.spec
 
-echo "▶ Signing bundle (ad-hoc — fixes slow first launch)…"
+# Sign the bundle. With an Apple Developer ID configured (EMBER_SIGN_IDENTITY) this
+# does a real notarizable signature; otherwise it falls back to a free ad-hoc signature.
 rm -f dist/Ember 2>/dev/null || true
-xattr -cr dist/Ember.app 2>/dev/null || true
-find dist/Ember.app -exec xattr -c {} \; 2>/dev/null || true
-dot_clean -m dist/Ember.app 2>/dev/null || true
-codesign --force --deep --sign - dist/Ember.app 2>/dev/null || true
+if bash notarize_mac.sh enabled; then
+  echo "▶ Signing with Developer ID (hardened runtime)…"
+  bash notarize_mac.sh sign dist/Ember.app
+else
+  echo "▶ Signing bundle (ad-hoc — free/unsigned; first launch needs Open Anyway)…"
+  xattr -cr dist/Ember.app 2>/dev/null || true
+  find dist/Ember.app -exec xattr -c {} \; 2>/dev/null || true
+  dot_clean -m dist/Ember.app 2>/dev/null || true
+  codesign --force --deep --sign - dist/Ember.app 2>/dev/null || true
+fi
 
 echo "▶ Zipping bundle (ditto — preserves symlinks + signature)…"
 rm -f dist/Ember-macOS.zip
 /usr/bin/ditto -c -k --keepParent dist/Ember.app dist/Ember-macOS.zip
+
+# Notarize the app (submitted via the zip), staple the ticket onto the .app, then
+# re-zip so the downloaded/auto-updated app is stapled (verifies offline).
+if bash notarize_mac.sh enabled; then
+  echo "▶ Notarizing the app…"
+  bash notarize_mac.sh notarize dist/Ember-macOS.zip dist/Ember.app
+  rm -f dist/Ember-macOS.zip
+  /usr/bin/ditto -c -k --keepParent dist/Ember.app dist/Ember-macOS.zip
+fi
+
+# Package a drag-to-Applications .dmg (notarized + stapled when signing is configured).
+DMG_ASSET=""
+if command -v hdiutil >/dev/null 2>&1; then
+  echo "▶ Packaging dist/Ember.dmg (drag-to-Applications)…"
+  if bash make_dmg.sh; then
+    DMG_ASSET="dist/Ember.dmg"
+    bash notarize_mac.sh enabled && bash notarize_mac.sh notarize dist/Ember.dmg || true
+  fi
+fi
 
 echo "▶ Writing latest.json + checksum…"
 PUBDATE="$(date +%F)"
@@ -52,18 +78,18 @@ echo "  sha256: ${SHA:0:16}…"
 echo "▶ Publishing the GitHub release…"
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   if gh release view "$TAG" >/dev/null 2>&1; then
-    gh release upload "$TAG" dist/Ember-macOS.zip dist/latest.json --clobber
+    gh release upload "$TAG" dist/Ember-macOS.zip dist/latest.json $DMG_ASSET --clobber
   else
-    gh release create "$TAG" dist/Ember-macOS.zip dist/latest.json \
+    gh release create "$TAG" dist/Ember-macOS.zip dist/latest.json $DMG_ASSET \
        --title "Ember $TAG" --notes-file RELEASE_NOTES.md
   fi
-  echo "  ✓ release $TAG: Ember-macOS.zip + latest.json"
+  echo "  ✓ release $TAG: Ember-macOS.zip + latest.json${DMG_ASSET:+ + Ember.dmg}"
 else
   cat <<EOF
   gh CLI not available/authed — finish the release in the browser:
     1. https://github.com/$OWNER/$REPO/releases/new   (or edit the existing $TAG release)
     2. Tag: $TAG   Title: Ember $TAG
-    3. Upload assets:  dist/Ember-macOS.zip   and   dist/latest.json
+    3. Upload assets:  dist/Ember-macOS.zip   dist/latest.json   dist/Ember.dmg
     4. Paste RELEASE_NOTES.md as the description, then Publish release.
     (Tip: 'brew install gh && gh auth login' automates this next time.)
 EOF
