@@ -1540,6 +1540,11 @@ class SettingsDialog(QDialog):
         self.timeout_input.setPlaceholderText("seconds, 10-60 (lower = faster failover)")
         layout.addRow("API request timeout (s):", self.timeout_input)
 
+        self.lean_tools_check = QCheckBox("Lean tools — faster calls / fewer rate limits "
+                                          "(loads only core tools, hides niche utilities)")
+        self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", False)))
+        layout.addRow(self.lean_tools_check)
+
         # Show whether the parent window successfully registered the hotkey
         parent_w = self.parent()
         status_text = getattr(parent_w, "_hotkey_status", "unknown")
@@ -2023,6 +2028,7 @@ class SettingsDialog(QDialog):
         self.settings["auto_screenshot"] = self.auto_shot_check.isChecked()
         self.settings["remote_autostart"] = self.remote_autostart_check.isChecked()
         self.settings["auto_update"] = self.auto_update_check.isChecked()
+        self.settings["lean_tools"] = self.lean_tools_check.isChecked()
         self.settings["voice_output"] = self.voice_check.isChecked()
         self.settings["voice_chat_spoken_replies"] = self.voice_chat_reply_check.isChecked()
         self.settings["voice_chat_auto_send"] = self.voice_auto_send_check.isChecked()
@@ -3851,6 +3857,7 @@ class EmberWindow(QWidget):
                     anthropic_model=self.settings.get("anthropic_model", "claude-opus-4-8"),
                     auto_screenshot=bool(self.settings.get("auto_screenshot", True)),
                     request_timeout_seconds=int(self.settings.get("request_timeout_seconds", 30)),
+                    lean_tools=bool(self.settings.get("lean_tools", False)),
                 )
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
             self._set_status(f"Ready ({model_id})")

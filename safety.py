@@ -131,6 +131,11 @@ SAFE_READONLY = {
     "read_document", "scan_secrets", "unit_convert", "network_connections",
     "local_ai_status", "local_ai_ask", "list_macros", "get_macro", "run_macro",
     "describe_image", "transcribe_audio", "security_checkup", "free_vpn_configs",
+    "url_quote", "url_unquote", "json_pretty", "case_convert", "slugify", "text_stats",
+    "word_frequency", "extract_emails", "extract_urls", "regex_find", "find_replace",
+    "sort_lines", "dedupe_lines", "reverse_text", "rot13", "uuid4", "random_int",
+    "random_pick", "lorem_ipsum", "int_to_roman", "roman_to_int", "hex_to_rgb", "rgb_to_hex",
+    "number_to_words", "is_prime", "days_between", "tip_calculator", "bmi_calculator",
 }
 
 SAFE_INTERACTION = {

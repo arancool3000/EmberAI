@@ -35,6 +35,7 @@ import local_ai
 import macros
 import creative
 import security_extras
+import text_tools
 import file_ops
 import more_tools
 import extra_tools
@@ -1643,6 +1644,62 @@ TOOL_DECLARATIONS = [
     {"name": "free_vpn_configs",
      "description": "List providers that give a FREE personal WireGuard VPN config to add to Ember.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "url_quote", "description": "Percent-encode text for a URL.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "url_unquote", "description": "Decode percent-encoded URL text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "json_pretty", "description": "Validate and pretty-print a JSON string.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "case_convert", "description": "Convert text case: upper/lower/title/snake/kebab/camel.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}, "mode": {"type": "STRING"}}, "required": ["text", "mode"]}},
+    {"name": "slugify", "description": "Make a URL-friendly slug from text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "text_stats", "description": "Count characters/words/lines/sentences + reading time.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "word_frequency", "description": "Most common words in text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}, "top": {"type": "INTEGER"}}, "required": ["text"]}},
+    {"name": "extract_emails", "description": "Find email addresses in text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "extract_urls", "description": "Find URLs in text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "regex_find", "description": "Find all regex matches in text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}, "pattern": {"type": "STRING"}}, "required": ["text", "pattern"]}},
+    {"name": "find_replace", "description": "Replace all occurrences of a substring in text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}, "find": {"type": "STRING"}, "replace": {"type": "STRING"}}, "required": ["text", "find"]}},
+    {"name": "sort_lines", "description": "Sort the lines of a block of text (optionally reverse/numeric).",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}, "reverse": {"type": "BOOLEAN"}, "numeric": {"type": "BOOLEAN"}}, "required": ["text"]}},
+    {"name": "dedupe_lines", "description": "Remove duplicate lines from text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "reverse_text", "description": "Reverse a string.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "rot13", "description": "ROT13-encode/decode text.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "uuid4", "description": "Generate a random UUID.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "random_int", "description": "Random integer between minimum and maximum (inclusive).",
+     "parameters": {"type": "OBJECT", "properties": {"minimum": {"type": "INTEGER"}, "maximum": {"type": "INTEGER"}}, "required": []}},
+    {"name": "random_pick", "description": "Pick a random item from a comma-separated list.",
+     "parameters": {"type": "OBJECT", "properties": {"items": {"type": "STRING"}}, "required": ["items"]}},
+    {"name": "lorem_ipsum", "description": "Generate placeholder lorem-ipsum text of N words.",
+     "parameters": {"type": "OBJECT", "properties": {"words": {"type": "INTEGER"}}, "required": []}},
+    {"name": "int_to_roman", "description": "Convert an integer (1-3999) to a Roman numeral.",
+     "parameters": {"type": "OBJECT", "properties": {"number": {"type": "INTEGER"}}, "required": ["number"]}},
+    {"name": "roman_to_int", "description": "Convert a Roman numeral to an integer.",
+     "parameters": {"type": "OBJECT", "properties": {"roman": {"type": "STRING"}}, "required": ["roman"]}},
+    {"name": "hex_to_rgb", "description": "Convert a hex color (#rrggbb) to RGB.",
+     "parameters": {"type": "OBJECT", "properties": {"hex_color": {"type": "STRING"}}, "required": ["hex_color"]}},
+    {"name": "rgb_to_hex", "description": "Convert RGB values to a hex color.",
+     "parameters": {"type": "OBJECT", "properties": {"r": {"type": "INTEGER"}, "g": {"type": "INTEGER"}, "b": {"type": "INTEGER"}}, "required": ["r", "g", "b"]}},
+    {"name": "number_to_words", "description": "Spell an integer in English words.",
+     "parameters": {"type": "OBJECT", "properties": {"number": {"type": "INTEGER"}}, "required": ["number"]}},
+    {"name": "is_prime", "description": "Check whether a number is prime.",
+     "parameters": {"type": "OBJECT", "properties": {"number": {"type": "INTEGER"}}, "required": ["number"]}},
+    {"name": "days_between", "description": "Days between two dates (YYYY-MM-DD).",
+     "parameters": {"type": "OBJECT", "properties": {"date1": {"type": "STRING"}, "date2": {"type": "STRING"}}, "required": ["date1", "date2"]}},
+    {"name": "tip_calculator", "description": "Calculate tip + total, optionally split per person.",
+     "parameters": {"type": "OBJECT", "properties": {"amount": {"type": "NUMBER"}, "percent": {"type": "NUMBER"}, "people": {"type": "INTEGER"}}, "required": ["amount"]}},
+    {"name": "bmi_calculator", "description": "Calculate BMI from weight (kg) and height (cm).",
+     "parameters": {"type": "OBJECT", "properties": {"weight_kg": {"type": "NUMBER"}, "height_cm": {"type": "NUMBER"}}, "required": ["weight_kg", "height_cm"]}},
 ]
 
 
@@ -1806,6 +1863,34 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "transcribe_audio": creative.transcribe_audio,
     "security_checkup": security_extras.security_checkup,
     "free_vpn_configs": vpn.free_providers,
+    "url_quote": text_tools.url_quote,
+    "url_unquote": text_tools.url_unquote,
+    "json_pretty": text_tools.json_pretty,
+    "case_convert": text_tools.case_convert,
+    "slugify": text_tools.slugify,
+    "text_stats": text_tools.text_stats,
+    "word_frequency": text_tools.word_frequency,
+    "extract_emails": text_tools.extract_emails,
+    "extract_urls": text_tools.extract_urls,
+    "regex_find": text_tools.regex_find,
+    "find_replace": text_tools.find_replace,
+    "sort_lines": text_tools.sort_lines,
+    "dedupe_lines": text_tools.dedupe_lines,
+    "reverse_text": text_tools.reverse_text,
+    "rot13": text_tools.rot13,
+    "uuid4": text_tools.uuid4,
+    "random_int": text_tools.random_int,
+    "random_pick": text_tools.random_pick,
+    "lorem_ipsum": text_tools.lorem_ipsum,
+    "int_to_roman": text_tools.int_to_roman,
+    "roman_to_int": text_tools.roman_to_int,
+    "hex_to_rgb": text_tools.hex_to_rgb,
+    "rgb_to_hex": text_tools.rgb_to_hex,
+    "number_to_words": text_tools.number_to_words,
+    "is_prime": text_tools.is_prime,
+    "days_between": text_tools.days_between,
+    "tip_calculator": text_tools.tip_calculator,
+    "bmi_calculator": text_tools.bmi_calculator,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,
@@ -1999,7 +2084,9 @@ class Agent:
                  anthropic_model: str = "claude-opus-4-8",
                  fallback_models: list[str] | None = None,
                  auto_screenshot: bool = True,
-                 request_timeout_seconds: int = 15):
+                 request_timeout_seconds: int = 15,
+                 lean_tools: bool = False):
+        self.lean_tools = bool(lean_tools)
         # Strip ALL whitespace from keys (incl. accidental newlines from a bad paste) so a key
         # can never become an illegal HTTP header value (LocalProtocolError).
         self.api_key = "".join((api_key or "").split())
@@ -2049,7 +2136,17 @@ class Agent:
     def _init_chat(self, model: str | None = None):
         if model:
             self.active_model = model
-        tool_decls = [types.FunctionDeclaration(**td) for td in TOOL_DECLARATIONS]
+        decls = TOOL_DECLARATIONS
+        if getattr(self, "lean_tools", False):
+            # Lean mode: drop the niche utility tools to shrink the per-call tool list (faster
+            # responses, fewer tokens). Core computer-control / browser / file / security tools stay.
+            niche = {"text_tools", "chart_tools", "quick_tools", "power_tools", "ai_detect",
+                     "local_ai", "macros", "creative", "security_extras", "cleanup",
+                     "nettools", "mediatools", "privacy"}
+            drop = {name for name, fn in TOOL_DISPATCH.items()
+                    if getattr(fn, "__module__", "") in niche}
+            decls = [td for td in TOOL_DECLARATIONS if td["name"] not in drop]
+        tool_decls = [types.FunctionDeclaration(**td) for td in decls]
         tool_obj = types.Tool(function_declarations=tool_decls)
         # Speed-tuned generation:
         #  - low temperature for faster, more deterministic tool selection
