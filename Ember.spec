@@ -34,10 +34,11 @@ hiddenimports += ["single_instance", "automation", "manual_mode", "more_tools",
                   "extra_tools", "screen_vision", "tools", "browser", "file_ops",
                   "memory", "safety", "antivirus", "web_policy", "audit", "redaction",
                   "plan", "vpn", "utilities", "cleanup", "nettools", "mediatools", "privacy",
-                  "models", "voice", "scheduled_tasks",
+                  "models", "voice", "scheduled_tasks", "ember_browser",
                   "claude_bridge", "claude_agent",
                   "mac_permissions",
                   "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets",
+                  "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore",
                   "PyPDF2", "openpyxl", "qrcode", "qrcode.image.pil"]
 
 if IS_WIN:

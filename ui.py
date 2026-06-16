@@ -69,6 +69,7 @@ SLASH_COMMANDS = {
     "/voice": "__voice_chat__",
     "/remote": "__remote__",
     "/link": "__remote__",
+    "/browser": "__browser_app__",
     "/manual": "__manual__",
     "/help": "__help__",
     "/clear": "__clear__",
@@ -126,6 +127,7 @@ Tip: just say "organize my Downloads", "find duplicates in Pictures",
 
 COMMAND_CENTER_ACTIONS = [
     ("Phone Link", "__remote__"),
+    ("Ember Browser", "__browser_app__"),
     ("Autopilot", "/autopilot"),
     ("Use App", "/apps"),
     ("Research", "/research"),
@@ -3301,11 +3303,35 @@ class EmberWindow(QWidget):
         if cmd == "__remote__":
             self._start_remote_control()
             return
+        if cmd == "__browser_app__":
+            self._open_ember_browser()
+            return
         if cmd == "__update__":
             self._start_update()
             return
         self.input_box.setPlainText(cmd)
         self._on_send()
+
+    def _open_ember_browser(self):
+        """Open the secure, AI-assisted Ember Browser window (Qt WebEngine)."""
+        try:
+            import ember_browser
+        except Exception as e:
+            self._add_bubble("error", f"Ember Browser unavailable: {e}")
+            return
+        if not ember_browser.WEBENGINE_OK:
+            self._add_bubble("system",
+                "Ember Browser needs the web engine. Install it once:\n"
+                "  uv pip install PyQt6-WebEngine\nthen reopen Ember.")
+            return
+        try:
+            if getattr(self, "_browser_win", None) is None:
+                self._browser_win = ember_browser.EmberBrowser(self.settings)
+            self._browser_win.show()
+            self._browser_win.raise_()
+            self._browser_win.activateWindow()
+        except Exception as e:
+            self._add_bubble("error", f"Could not open Ember Browser: {e}")
 
     def _start_remote_control(self):
         """Start Ember Link (phone control) and show the URL + PIN."""

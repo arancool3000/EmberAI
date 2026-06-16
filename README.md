@@ -269,5 +269,6 @@ tunnel up — and it never claims to be connected when it isn't.
 | `nettools.py` | network toolkit: port scan, LAN devices, Wi-Fi info |
 | `mediatools.py` | file info + media conversion (ffmpeg) |
 | `privacy.py` | keychain secrets, file encryption, breached-password check |
+| `ember_browser.py` | Ember Browser: secure, AI-assisted web browser (Qt WebEngine) |
 | `voice.py` | speech input + text-to-speech for Voice Chat |
 | `make_logo.py` | regenerate the app icon |

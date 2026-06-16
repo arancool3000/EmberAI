@@ -1,5 +1,6 @@
 google-genai>=1.0.0
 PyQt6>=6.6.0
+PyQt6-WebEngine>=6.6.0
 mss>=9.0.1
 pyautogui>=0.9.54
 Pillow>=10.0.0
