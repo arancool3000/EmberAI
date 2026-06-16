@@ -2528,7 +2528,7 @@ class EmberWindow(QWidget):
             self.max_btn.setText("❐")
             self.max_btn.setToolTip("Window: full screen — click for compact chat")
         elif mode == "chatbot":
-            w, margin = 400, 24
+            w, margin = 340, 24
             h = min(640, screen.height() - 2 * margin)
             self.setGeometry(screen.right() - w - margin, screen.bottom() - h - margin, w, h)
             self.max_btn.setText("▭")
