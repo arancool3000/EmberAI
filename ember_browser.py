@@ -79,6 +79,7 @@ class EmberBrowser(QWidget):
         self.settings = settings or {}
         self.setWindowTitle("Ember Browser")
         self.resize(1180, 800)
+        self.setMinimumSize(640, 480)
         self._ai_result.connect(self._show_ai_result)
 
         # A private, in-memory profile (no history/cache persisted) with the tracker guard.
@@ -302,20 +303,45 @@ class EmberBrowser(QWidget):
         )
         threading.Thread(target=self._ai_thread, args=(prompt,), daemon=True).start()
 
+    def _ai_provider_model(self):
+        """Pick (provider, model) from settings — browser AI supports Claude or Gemini."""
+        model = (self.settings.get("model_id") or self.settings.get("gemini_model") or "").strip()
+        provider = (self.settings.get("provider") or "").strip().lower()
+        if not provider:
+            provider = "claude" if "claude" in model.lower() else "gemini"
+        if provider == "claude":
+            if "claude" not in model.lower():
+                model = self.settings.get("anthropic_model") or "claude-opus-4-8"
+        else:
+            if not model or "claude" in model.lower():
+                model = "gemini-3.1-flash-lite"
+        return provider, model
+
     def _ai_thread(self, prompt: str):
-        key = "".join((self.settings.get("gemini_api_key") or "").split())
-        if not key:
-            self._ai_result.emit("Add a Gemini API key in Ember Settings (⚙) to use AI browsing.")
-            return
+        provider, model = self._ai_provider_model()
         try:
-            from google import genai
-            client = genai.Client(api_key=key)
-            model = (self.settings.get("model_id") or self.settings.get("gemini_model")
-                     or "gemini-3.1-flash-lite")
-            if "claude" in str(model).lower():
-                model = "gemini-3.1-flash-lite"  # browser AI uses Gemini
-            resp = client.models.generate_content(model=model, contents=prompt)
-            self._ai_result.emit((getattr(resp, "text", None) or "(no response)").strip())
+            if provider == "claude":
+                key = "".join((self.settings.get("anthropic_api_key") or "").split())
+                if not key:
+                    self._ai_result.emit("Add an Anthropic API key in Ember Settings (⚙) to use Claude.")
+                    return
+                import anthropic
+                client = anthropic.Anthropic(api_key=key)
+                resp = client.messages.create(
+                    model=model, max_tokens=1024,
+                    messages=[{"role": "user", "content": prompt}])
+                text = "".join(getattr(b, "text", "") for b in (resp.content or [])) or "(no response)"
+                self._ai_result.emit(text.strip())
+            else:
+                key = "".join((self.settings.get("gemini_api_key") or "").split())
+                if not key:
+                    self._ai_result.emit("Add a Gemini API key in Ember Settings (⚙), or pick a Claude "
+                                         "model + add an Anthropic key, to use AI browsing.")
+                    return
+                from google import genai
+                client = genai.Client(api_key=key)
+                resp = client.models.generate_content(model=model, contents=prompt)
+                self._ai_result.emit((getattr(resp, "text", None) or "(no response)").strip())
         except Exception as e:
             self._ai_result.emit(f"AI error: {e}")
 

@@ -1815,18 +1815,33 @@ class SettingsDialog(QDialog):
         # --- VPN ---
         _section("VPN (bring-your-own WireGuard)")
         try:
+            from PyQt6.QtWidgets import QComboBox
             vs = vpn.status()
             vl = vpn.list_locations()
+            locs = vl.get("locations", [])
             vtxt = ("Connected ✓" if vs.get("connected") else "Not connected")
-            vtxt += f"   ·   {len(vl.get('locations', []))} location(s)"
+            vtxt += f"   ·   {len(locs)} location(s)"
             if not vl.get("wireguard_installed"):
                 vtxt += "   ·   WireGuard not installed (brew install wireguard-tools)"
-            vlbl = QLabel(vtxt)
-            vlbl.setStyleSheet("color:#565f89; font-size:11px;")
-            vlbl.setWordWrap(True)
-            v.addWidget(vlbl)
-        except Exception:
-            pass
+            self._vpn_status_lbl = QLabel(vtxt)
+            self._vpn_status_lbl.setStyleSheet("color:#565f89; font-size:11px;")
+            self._vpn_status_lbl.setWordWrap(True)
+            v.addWidget(self._vpn_status_lbl)
+
+            self._vpn_combo = QComboBox()
+            for loc in locs:
+                self._vpn_combo.addItem(loc.get("name", "?"))
+            vrow = QHBoxLayout()
+            vrow.addWidget(self._vpn_combo, 1)
+            for lbl, fn in (("Connect", self._vpn_connect),
+                            ("Disconnect", self._vpn_disconnect),
+                            ("Add config…", self._vpn_add)):
+                b = QPushButton(lbl)
+                b.clicked.connect(fn)
+                vrow.addWidget(b)
+            v.addLayout(vrow)
+        except Exception as e:
+            v.addWidget(QLabel(f"VPN unavailable: {e}"))
 
         # --- Audit log ---
         _section("Tamper-evident audit log")
@@ -1837,6 +1852,53 @@ class SettingsDialog(QDialog):
         arow.addStretch()
         v.addLayout(arow)
         v.addStretch()
+
+    def _refresh_vpn_status(self):
+        try:
+            import vpn
+            vs = vpn.status()
+            vl = vpn.list_locations()
+            if getattr(self, "_vpn_status_lbl", None) is not None:
+                t = ("Connected ✓" if vs.get("connected") else "Not connected")
+                t += f"   ·   {len(vl.get('locations', []))} location(s)"
+                self._vpn_status_lbl.setText(t)
+        except Exception:
+            pass
+
+    def _vpn_connect(self):
+        import vpn
+        name = self._vpn_combo.currentText() if getattr(self, "_vpn_combo", None) else ""
+        if not name:
+            QMessageBox.information(self, "VPN", "Add a WireGuard config first (Add config…).")
+            return
+        r = vpn.connect(name)
+        QMessageBox.information(self, "VPN", "Connected ✓" if r.get("ok") else f"Failed: {r.get('error')}")
+        self._refresh_vpn_status()
+
+    def _vpn_disconnect(self):
+        import vpn
+        r = vpn.disconnect()
+        QMessageBox.information(self, "VPN", "Disconnected" if r.get("ok") else f"Failed: {r.get('error')}")
+        self._refresh_vpn_status()
+
+    def _vpn_add(self):
+        import vpn
+        from PyQt6.QtWidgets import QFileDialog, QInputDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a WireGuard .conf file", "",
+                                              "WireGuard config (*.conf);;All files (*)")
+        if not path:
+            return
+        name, ok = QInputDialog.getText(self, "VPN location", "Name this location:")
+        if not ok or not name.strip():
+            return
+        r = vpn.add_location(name.strip(), path)
+        if r.get("ok"):
+            if getattr(self, "_vpn_combo", None) is not None:
+                self._vpn_combo.addItem(name.strip())
+            QMessageBox.information(self, "VPN", "Added ✓")
+        else:
+            QMessageBox.warning(self, "VPN", f"Failed: {r.get('error')}")
+        self._refresh_vpn_status()
 
     def _show_quarantine(self):
         import antivirus
@@ -2521,6 +2583,9 @@ class EmberWindow(QWidget):
     def _apply_size_mode(self, mode: str):
         screen = QApplication.primaryScreen().availableGeometry()
         compact = (mode == "chatbot")
+        # Relax the minimum width for the narrow chat widget; restore it for the full layout
+        # (the 3-column layout needs the room).
+        self.setMinimumSize(300, 420) if compact else self.setMinimumSize(640, 540)
         # The side panels don't fit a narrow chat-widget width, so hide them in compact mode.
         for w in (getattr(self, "_sidebar", None), getattr(self, "_command_panel", None)):
             if w is not None:
@@ -3139,6 +3204,18 @@ class EmberWindow(QWidget):
         """When the window resizes, update every bubble's max width so they stay contained."""
         super().resizeEvent(e)
         self._clamp_bubble_widths()
+        self._position_size_grip()
+
+    def _position_size_grip(self):
+        """A bottom-right grip makes the frameless window resizable (drag to resize)."""
+        g = getattr(self, "_size_grip", None)
+        if g is None:
+            from PyQt6.QtWidgets import QSizeGrip
+            g = self._size_grip = QSizeGrip(self)
+            g.setFixedSize(18, 18)
+        g.move(self.width() - g.width() - 6, self.height() - g.height() - 6)
+        g.raise_()
+        g.show()
 
     def _fade_in(self, widget: QWidget, duration: int = 220):
         """Bubbles appear instantly.
