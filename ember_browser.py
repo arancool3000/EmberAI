@@ -161,11 +161,16 @@ class EmberBrowser(QWidget):
         self._ai_result.connect(self._show_ai_result)
         self._search_result.connect(self._load_search_results)
         self._bookmarks = self._load_bookmarks()
+        self._history = self._load_history()
 
         self._profile = QWebEngineProfile(self)
         self._guard = _Guard()
         try:
             self._profile.setUrlRequestInterceptor(self._guard)
+        except Exception:
+            pass
+        try:
+            self._profile.downloadRequested.connect(self._on_download)
         except Exception:
             pass
 
@@ -199,6 +204,9 @@ class EmberBrowser(QWidget):
         bar.addWidget(self.address, 1)
         bar.addWidget(_btn("★", "Bookmark this page", self._bookmark_current))
         bar.addWidget(_btn("📑", "Bookmarks", self._show_bookmarks_menu))
+        bar.addWidget(_btn("📜", "History", self._show_history_menu))
+        bar.addWidget(_btn("📖", "Reader mode", self._reader_mode))
+        bar.addWidget(_btn("🌙", "Dark mode for this site", self._toggle_dark))
         bar.addWidget(_btn("🔎", "Find on page (Ctrl+F)", self._toggle_find))
         bar.addWidget(_btn("✓AI", "Check if the page text is AI-generated", self._ai_check_page, w=50))
         bar.addWidget(_btn("+", "New tab", lambda: self._new_tab()))
@@ -351,6 +359,7 @@ class EmberBrowser(QWidget):
         i = self.tabs.indexOf(view)
         if i >= 0:
             self.tabs.setTabText(i, (title or "New tab")[:24])
+        self._record_history(view.url().toString(), title)
 
     def _refresh_status(self):
         self._status.setText(f"🛡 {self._guard.blocked} trackers blocked this session"
@@ -572,3 +581,86 @@ class EmberBrowser(QWidget):
             act = menu.addAction(b.get("title", b.get("url", "?"))[:60])
             act.triggered.connect(lambda _=False, u=b.get("url"): self._navigate(u))
         menu.exec(self.cursor().pos())
+
+    # ---- history ----
+    def _hist_path(self):
+        return self._data_file().with_name("history.json")
+
+    def _load_history(self):
+        try:
+            return json.loads(self._hist_path().read_text())
+        except Exception:
+            return []
+
+    def _save_history(self):
+        try:
+            self._hist_path().write_text(json.dumps(self._history[-300:]))
+        except Exception:
+            pass
+
+    def _record_history(self, url, title):
+        if not url or SEARCH_HOST in url or url.startswith("data:"):
+            return
+        if self._history and self._history[-1].get("url") == url:
+            if title:
+                self._history[-1]["title"] = title
+            return
+        self._history.append({"url": url, "title": title or url})
+        self._history = self._history[-300:]
+        self._save_history()
+
+    def _show_history_menu(self):
+        menu = QMenu(self)
+        if not self._history:
+            menu.addAction("(no history yet)").setEnabled(False)
+        for h in reversed(self._history[-40:]):
+            act = menu.addAction((h.get("title") or h.get("url") or "?")[:60])
+            act.triggered.connect(lambda _=False, u=h.get("url"): self._navigate(u))
+        menu.exec(self.cursor().pos())
+
+    # ---- downloads ----
+    def _on_download(self, item):
+        try:
+            dl = Path.home() / "Downloads"
+            dl.mkdir(parents=True, exist_ok=True)
+            try:
+                item.setDownloadDirectory(str(dl))
+            except Exception:
+                pass
+            item.accept()
+            name = item.downloadFileName() if hasattr(item, "downloadFileName") else "file"
+            self._status.setText(f"⬇ Downloading {name}…")
+            try:
+                item.isFinishedChanged.connect(lambda: self._status.setText(f"✓ Saved {name} to Downloads"))
+            except Exception:
+                pass
+        except Exception as e:
+            self._status.setText(f"Download error: {e}")
+
+    # ---- reader / dark mode ----
+    def _reader_mode(self):
+        v = self._cur()
+        if v is not None:
+            v.page().toPlainText(self._show_reader)
+
+    def _show_reader(self, text):
+        body = _html.escape((text or "").strip()).replace("\n\n", "</p><p>").replace("\n", "<br>")
+        css = ("body{background:#15140f;color:#e8e6df;margin:0}"
+               ".r{max-width:680px;margin:0 auto;padding:48px 22px;font:19px/1.75 Georgia,serif}")
+        v = self._cur()
+        if v is not None:
+            v.setHtml(f"<!doctype html><html><head><meta charset='utf-8'><style>{css}</style></head>"
+                      f"<body><div class='r'><p>{body}</p></div></body></html>",
+                      QUrl(f"https://{SEARCH_HOST}/"))
+
+    def _toggle_dark(self):
+        v = self._cur()
+        if v is None:
+            return
+        js = ("(function(){var id='__ember_dark';var e=document.getElementById(id);"
+              "if(e){e.remove();}else{var s=document.createElement('style');s.id=id;"
+              "s.textContent='html{filter:invert(1) hue-rotate(180deg)!important;background:#fff!important}"
+              "img,video,picture,canvas,iframe,svg,[style*=\"background-image\"]"
+              "{filter:invert(1) hue-rotate(180deg)!important}';"
+              "document.documentElement.appendChild(s);}})();")
+        v.page().runJavaScript(js)

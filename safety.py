@@ -128,6 +128,7 @@ SAFE_READONLY = {
     "list_startup_items", "scan_host_ports", "network_devices", "wifi_info",
     "file_info", "password_pwned_check", "keychain_get",
     "ai_detect_text", "ai_detect_image", "password_generate",
+    "read_document", "scan_secrets", "unit_convert",
 }
 
 SAFE_INTERACTION = {
@@ -289,6 +290,8 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
         return "medium", "VPN / plan configuration change"
     if tool_name == "scan_directory":
         return "medium", "scans a folder and may quarantine malware"
+    if tool_name == "secure_delete":
+        return "high", "permanently shreds a file (irreversible)"
     if tool_name == "clean_temp":
         if str(a.get("dry_run", "true")).lower() == "false":
             return "high", "deletes temp/cache files"

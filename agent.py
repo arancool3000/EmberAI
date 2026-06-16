@@ -29,6 +29,7 @@ import mediatools
 import privacy
 import ai_detect
 import quick_tools
+import power_tools
 import file_ops
 import more_tools
 import extra_tools
@@ -1563,6 +1564,23 @@ TOOL_DECLARATIONS = [
                     "image before sharing; writes a cleaned copy.",
      "parameters": {"type": "OBJECT", "properties": {
         "path": {"type": "STRING"}, "output": {"type": "STRING"}}, "required": ["path"]}},
+    {"name": "read_document",
+     "description": "Extract text from a document (PDF, txt, csv, docx, xlsx) so it can be "
+                    "summarized or queried — 'chat with your documents'.",
+     "parameters": {"type": "OBJECT", "properties": {"path": {"type": "STRING"}}, "required": ["path"]}},
+    {"name": "scan_secrets",
+     "description": "Flag likely API keys / tokens / PII in text before sharing it (counts only; "
+                    "never echoes the values).",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "secure_delete",
+     "description": "Securely shred a file: overwrite with random data, then delete. Irreversible.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "passes": {"type": "INTEGER"}}, "required": ["path"]}},
+    {"name": "unit_convert",
+     "description": "Convert a value between units (length, mass, data size, temperature).",
+     "parameters": {"type": "OBJECT", "properties": {
+        "value": {"type": "NUMBER"}, "from_unit": {"type": "STRING"}, "to_unit": {"type": "STRING"}},
+        "required": ["value", "from_unit", "to_unit"]}},
 ]
 
 
@@ -1708,6 +1726,10 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "password_generate": quick_tools.password_generate,
     "qr_make": quick_tools.qr_make,
     "strip_metadata": quick_tools.strip_metadata,
+    "read_document": power_tools.read_document,
+    "scan_secrets": power_tools.scan_secrets,
+    "secure_delete": power_tools.secure_delete,
+    "unit_convert": power_tools.unit_convert,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

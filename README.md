@@ -271,6 +271,8 @@ tunnel up — and it never claims to be connected when it isn't.
 | `privacy.py` | keychain secrets, file encryption, breached-password check |
 | `ember_browser.py` | Ember Browser: secure, AI-first web browser + Ember Search (Qt WebEngine) |
 | `ai_detect.py` | AI-content detector for text + images (heuristics + provenance) |
+| `quick_tools.py` | password generator, QR maker, image metadata stripper |
+| `power_tools.py` | read documents (PDF/docx/xlsx), secret scan, secure-delete, unit convert |
 | `extension/` | Ember Chrome extension (summarize / ask / AI-check, uses your Gemini key) |
 | `voice.py` | speech input + text-to-speech for Voice Chat |
 | `make_logo.py` | regenerate the app icon |
