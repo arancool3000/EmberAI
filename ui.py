@@ -238,6 +238,7 @@ def load_settings() -> dict:
         "auto_confirm_popups": False,
         "remote_autostart": True,
         "auto_update": True,
+        "lean_tools": True,
         "hotkey": "ctrl+shift+space",
         "request_timeout_seconds": 15,
         "animations_enabled": True,
@@ -1542,7 +1543,7 @@ class SettingsDialog(QDialog):
 
         self.lean_tools_check = QCheckBox("Lean tools — faster calls / fewer rate limits "
                                           "(loads only core tools, hides niche utilities)")
-        self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", False)))
+        self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", True)))
         layout.addRow(self.lean_tools_check)
 
         # Show whether the parent window successfully registered the hotkey
@@ -3857,7 +3858,7 @@ class EmberWindow(QWidget):
                     anthropic_model=self.settings.get("anthropic_model", "claude-opus-4-8"),
                     auto_screenshot=bool(self.settings.get("auto_screenshot", True)),
                     request_timeout_seconds=int(self.settings.get("request_timeout_seconds", 30)),
-                    lean_tools=bool(self.settings.get("lean_tools", False)),
+                    lean_tools=bool(self.settings.get("lean_tools", True)),
                 )
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
             self._set_status(f"Ready ({model_id})")
