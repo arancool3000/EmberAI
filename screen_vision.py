@@ -441,8 +441,14 @@ def smart_click(target: str, double: bool = False, button: str = "left",
                 "hint": "try take_screenshot to inspect, or read_screen_text to list visible text"}
 
     candidates.sort(key=lambda c: -c["score"])
-    best = candidates[0]
-    runners = candidates[1:4]
+    # Collapse near-duplicate hits (same spot found by both AX and OCR) so one target isn't
+    # counted as two occurrences.
+    distinct: list[dict] = []
+    for c in candidates:
+        if not any(abs(c["x"] - d["x"]) < 12 and abs(c["y"] - d["y"]) < 12 for d in distinct):
+            distinct.append(c)
+    best = distinct[0]
+    runners = distinct[1:4]
 
     # Refuse to click on a weak match - this is the anti-blind-guess guarantee.
     CONFIDENT = 70.0
@@ -451,6 +457,18 @@ def smart_click(target: str, double: bool = False, button: str = "left",
                 f"(best '{best['label']}' scored {best['score']:.0f}/100)",
                 "best_guess": best, "alternatives": runners,
                 "hint": "refine the target text, or call read_screen_text to see exact labels"}
+
+    # Ambiguity guard: if the target matches several DISTINCT, similarly-confident spots, don't
+    # blindly click the first — report every occurrence so the caller can pick the right one.
+    ambiguous = [c for c in distinct if c["score"] >= CONFIDENT and (best["score"] - c["score"]) <= 12]
+    if len(ambiguous) >= 2:
+        return {"ok": False, "ambiguous": True,
+                "error": f"'{target}' matches {len(ambiguous)} places on screen — which one?",
+                "occurrences": [{"label": c["label"], "x": c["x"], "y": c["y"],
+                                 "score": round(c["score"], 1), "method": c["method"]}
+                                for c in ambiguous],
+                "hint": "narrow it: pass a region, use more specific target text, or click exact "
+                        "coordinates (click x,y) for the intended occurrence listed above"}
 
     res = tools.click(best["x"], best["y"], button=button, double=double)
     res["matched"] = {"label": best["label"], "method": best["method"],

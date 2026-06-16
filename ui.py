@@ -1784,6 +1784,9 @@ class SettingsDialog(QDialog):
         scan_btn = QPushButton("Scan a folder…")
         scan_btn.clicked.connect(self._scan_folder)
         row.addWidget(scan_btn)
+        sandbox_btn = QPushButton("Run a file in sandbox…")
+        sandbox_btn.clicked.connect(self._run_in_sandbox_ui)
+        row.addWidget(sandbox_btn)
         row.addStretch()
         v.addLayout(row)
 
@@ -1905,6 +1908,34 @@ class SettingsDialog(QDialog):
         else:
             QMessageBox.warning(self, "VPN", f"Failed: {r.get('error')}")
         self._refresh_vpn_status()
+
+    def _run_in_sandbox_ui(self):
+        """Run a chosen file/app inside the strongest available sandbox (Docker or OS-native
+        confinement) so it can't touch the real system. Surfaces antivirus.run_in_sandbox."""
+        import antivirus
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file/app to run safely in the sandbox")
+        if not path:
+            return
+        self._set_status("Running in sandbox…")
+        r = antivirus.run_in_sandbox(path)
+        self._set_status("Ready")
+        if r.get("refused"):
+            QMessageBox.warning(self, "Sandbox", r.get("message", "Refused: file is malicious."))
+            return
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Sandbox", r.get("error", "Could not run in the sandbox."))
+            return
+        parts = [f"Ran via: {r.get('method', 'sandbox')}",
+                 f"Result: {r.get('verdict_hint', '?')}",
+                 f"Exit code: {r.get('exit_code')}"]
+        out = (r.get("stdout") or "").strip()
+        err = (r.get("stderr") or "").strip()
+        if out:
+            parts.append("\nOutput:\n" + out[:800])
+        if err:
+            parts.append("\nErrors:\n" + err[:400])
+        QMessageBox.information(self, "Sandbox result", "\n".join(parts))
 
     def _show_quarantine(self):
         import antivirus

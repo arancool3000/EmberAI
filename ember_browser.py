@@ -259,7 +259,9 @@ class EmberBrowser(QWidget):
     def _new_tab(self, url: str | None = None):
         view = QWebEngineView()
         page = _Page(self._profile, view)
-        page.searchRequested.connect(self._ember_search)
+        # Queued, NOT direct: _ember_search calls setHtml, and doing that synchronously from
+        # inside acceptNavigationRequest re-enters QtWebEngine and crashes. Defer to the loop.
+        page.searchRequested.connect(self._ember_search, Qt.ConnectionType.QueuedConnection)
         view.setPage(page)
         s = view.settings()
         try:

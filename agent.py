@@ -30,6 +30,7 @@ import privacy
 import ai_detect
 import quick_tools
 import power_tools
+import chart_tools
 import file_ops
 import more_tools
 import extra_tools
@@ -92,8 +93,10 @@ browser_click_text(..., mode="double"). If the first click does not activate the
 keyboard Enter before giving up. Use zoom_screenshot/read_screen_text for small or ambiguous controls.
 
 # Speed
-- Spend API calls like a scarce resource. Aim for one observe call, one batched action call, and one final
-  verification call. If a tool result fully answers the user, answer immediately instead of gathering more.
+- Spend model calls like a scarce resource: the free tier allows only ~15 PER MINUTE, and every step you take
+  is one call. Do the maximum useful work per step. Aim for one observe call, one batched action call, and one
+  final verification. Request multiple INDEPENDENT tool calls together in a single step rather than one at a
+  time. If a tool result already answers the user, answer immediately instead of gathering more.
 - Batch deterministic steps with do_sequence (one API request). Include waits and a final assertion inside
   the same do_sequence whenever the next action is obvious. Don't screenshot between every action -
   screenshot/assert_text_visible once at the END to verify.
@@ -1581,6 +1584,16 @@ TOOL_DECLARATIONS = [
      "parameters": {"type": "OBJECT", "properties": {
         "value": {"type": "NUMBER"}, "from_unit": {"type": "STRING"}, "to_unit": {"type": "STRING"}},
         "required": ["value", "from_unit", "to_unit"]}},
+    {"name": "make_chart",
+     "description": "Make a chart/graph (kind: bar, line, pie, scatter) from numbers and save it "
+                    "as a PNG that can be shown or attached.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "kind": {"type": "STRING"},
+        "values": {"type": "ARRAY", "items": {"type": "NUMBER"}},
+        "labels": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "title": {"type": "STRING"}, "xlabel": {"type": "STRING"}, "ylabel": {"type": "STRING"},
+        "output": {"type": "STRING"}},
+        "required": ["kind", "values"]}},
 ]
 
 
@@ -1730,6 +1743,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "scan_secrets": power_tools.scan_secrets,
     "secure_delete": power_tools.secure_delete,
     "unit_convert": power_tools.unit_convert,
+    "make_chart": chart_tools.make_chart,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

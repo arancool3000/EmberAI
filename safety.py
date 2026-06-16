@@ -297,7 +297,7 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
             return "high", "deletes temp/cache files"
         return "low", "temp/cache scan (dry run)"
     if tool_name in {"keychain_store", "encrypt_file", "decrypt_file", "media_convert",
-                     "qr_make", "strip_metadata"}:
+                     "qr_make", "strip_metadata", "make_chart"}:
         return "medium", "writes a file / stores a secret"
 
     return "medium", "unclassified tool"
