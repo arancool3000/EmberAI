@@ -2433,21 +2433,44 @@ class EmberWindow(QWidget):
         self.update()
 
     def _toggle_max(self):
-        screen = QApplication.primaryScreen().availableGeometry()
-        if not getattr(self, "_is_maxed", False):
+        """Cycle the window size via the title-bar button:
+        normal -> full screen -> compact chat (a website-style chat widget) -> normal."""
+        order = ["normal", "full", "chatbot"]
+        cur = getattr(self, "_size_mode", "normal")
+        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "full"
+        # Remember the user's hand-sized geometry the first time we leave 'normal'.
+        if cur == "normal":
             self._pre_max_geometry = self.geometry()
+        self._apply_size_mode(nxt)
+
+    def _apply_size_mode(self, mode: str):
+        screen = QApplication.primaryScreen().availableGeometry()
+        compact = (mode == "chatbot")
+        # The side panels don't fit a narrow chat-widget width, so hide them in compact mode.
+        for w in (getattr(self, "_sidebar", None), getattr(self, "_command_panel", None)):
+            if w is not None:
+                w.setVisible(not compact)
+        if mode == "full":
             self.setGeometry(screen)
-            self._is_maxed = True
             self.max_btn.setText("❐")
-            self.max_btn.setToolTip("Restore size")
-        else:
-            if getattr(self, "_pre_max_geometry", None) is not None:
-                self.setGeometry(self._pre_max_geometry)
+            self.max_btn.setToolTip("Window: full screen — click for compact chat")
+        elif mode == "chatbot":
+            w, margin = 400, 24
+            h = min(640, screen.height() - 2 * margin)
+            self.setGeometry(screen.right() - w - margin, screen.bottom() - h - margin, w, h)
+            self.max_btn.setText("▭")
+            self.max_btn.setToolTip("Window: compact chat — click to restore normal")
+        else:  # normal
+            g = getattr(self, "_pre_max_geometry", None)
+            if g is not None:
+                self.setGeometry(g)
             else:
-                self.resize(440, 700)
-            self._is_maxed = False
+                self.resize(1040, 760)
             self.max_btn.setText("□")
-            self.max_btn.setToolTip("Toggle fullscreen")
+            self.max_btn.setToolTip("Window: normal — click for full screen")
+        self._size_mode = mode
+        # Re-clamp bubbles to the new chat width.
+        QTimer.singleShot(0, self._clamp_bubble_widths)
 
     def _build_ui(self):
         # NOTE: removed Qt.WindowType.Tool - it was hiding Ember from the taskbar, which
@@ -2510,6 +2533,7 @@ class EmberWindow(QWidget):
         self.history_hint.setObjectName("sideHint")
         self.history_hint.setWordWrap(True)
         side_layout.addWidget(self.history_hint)
+        self._sidebar = sidebar
         root_row.addWidget(sidebar)
 
         main_panel = QWidget()
@@ -2569,6 +2593,7 @@ class EmberWindow(QWidget):
             command_layout.addWidget(b)
 
         command_layout.addStretch(1)
+        self._command_panel = command_panel
         root_row.addWidget(command_panel)
 
         # Title bar
