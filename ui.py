@@ -3774,22 +3774,33 @@ class EmberWindow(QWidget):
 
     def _first_run_settings(self):
         box = QMessageBox(self)
-        box.setWindowTitle("Welcome to Ember")
-        box.setText("Let's get you set up — 2 quick steps:")
+        box.setWindowTitle("Welcome to Ember 👋")
+        box.setText("Ember is an AI agent that can use your computer for you.")
         box.setInformativeText(
-            "1.  Get a FREE Gemini API key (no credit card) — tap 'Get free key'.\n"
-            "2.  Paste it into Settings (opens next), pick a model, click Save.\n\n"
-            "Ember will then ask for Screen Recording + Accessibility permissions so it can "
-            "see the screen and control the mouse and keyboard. Grant both, then quit and "
-            "reopen Ember once."
+            "Quick setup:\n\n"
+            "1.  Get a FREE Gemini API key (no credit card) — click 'Get free key'.\n"
+            "2.  Paste it into Settings (opens next) and click Save.\n"
+            "3.  When prompted, grant Screen Recording + Accessibility so Ember can see the "
+            "screen and control the mouse/keyboard, then reopen Ember once.\n\n"
+            "Tip: pick a Claude model in Settings for harder tasks, or run a local model "
+            "(Ollama) to work offline with no rate limits."
         )
         get_btn = box.addButton("Get free key", QMessageBox.ButtonRole.ActionRole)
+        perm_btn = (box.addButton("Open permissions", QMessageBox.ButtonRole.ActionRole)
+                    if sys.platform == "darwin" else None)
         box.addButton("I have a key →", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
-        if box.clickedButton() is get_btn:
+        clicked = box.clickedButton()
+        if clicked is get_btn:
             try:
                 import webbrowser
                 webbrowser.open("https://aistudio.google.com/apikey")
+            except Exception:
+                pass
+        elif perm_btn is not None and clicked is perm_btn:
+            try:
+                import mac_permissions
+                mac_permissions.open_accessibility_settings()
             except Exception:
                 pass
         self._open_settings()
