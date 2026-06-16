@@ -28,6 +28,7 @@ import nettools
 import mediatools
 import privacy
 import ai_detect
+import quick_tools
 import file_ops
 import more_tools
 import extra_tools
@@ -1549,6 +1550,19 @@ TOOL_DECLARATIONS = [
      "description": "Estimate whether an IMAGE is AI-generated from its metadata / EXIF / "
                     "content-credentials. Returns a 0-100 likelihood + signals.",
      "parameters": {"type": "OBJECT", "properties": {"path": {"type": "STRING"}}, "required": ["path"]}},
+    {"name": "password_generate",
+     "description": "Generate a strong random password (mixed character classes).",
+     "parameters": {"type": "OBJECT", "properties": {
+        "length": {"type": "INTEGER"}, "symbols": {"type": "BOOLEAN"}}, "required": []}},
+    {"name": "qr_make",
+     "description": "Create a QR-code PNG for text / a URL / a Wi-Fi string.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "text": {"type": "STRING"}, "output": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "strip_metadata",
+     "description": "Remove EXIF / embedded metadata (GPS, camera, AI-generator tags) from an "
+                    "image before sharing; writes a cleaned copy.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "output": {"type": "STRING"}}, "required": ["path"]}},
 ]
 
 
@@ -1691,6 +1705,9 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "decrypt_file": privacy.decrypt_file,
     "ai_detect_text": ai_detect.detect_text,
     "ai_detect_image": ai_detect.detect_image,
+    "password_generate": quick_tools.password_generate,
+    "qr_make": quick_tools.qr_make,
+    "strip_metadata": quick_tools.strip_metadata,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

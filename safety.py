@@ -127,7 +127,7 @@ SAFE_READONLY = {
     "disk_usage", "list_open_ports", "password_strength", "system_health",
     "list_startup_items", "scan_host_ports", "network_devices", "wifi_info",
     "file_info", "password_pwned_check", "keychain_get",
-    "ai_detect_text", "ai_detect_image",
+    "ai_detect_text", "ai_detect_image", "password_generate",
 }
 
 SAFE_INTERACTION = {
@@ -293,7 +293,8 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
         if str(a.get("dry_run", "true")).lower() == "false":
             return "high", "deletes temp/cache files"
         return "low", "temp/cache scan (dry run)"
-    if tool_name in {"keychain_store", "encrypt_file", "decrypt_file", "media_convert"}:
+    if tool_name in {"keychain_store", "encrypt_file", "decrypt_file", "media_convert",
+                     "qr_make", "strip_metadata"}:
         return "medium", "writes a file / stores a secret"
 
     return "medium", "unclassified tool"
