@@ -1960,6 +1960,7 @@ class Agent:
         self._client = self._make_client(self.api_keys[self._api_key_index])
         # Per-session latency tracking so we auto-prefer fast models on later turns.
         self._model_latencies: dict[str, float] = {}
+        self._call_times: list[float] = []
         self._chat = None
         self._event_subs: list[Callable[[AgentEvent], None]] = []
         self._stop_flag = threading.Event()
@@ -2041,6 +2042,24 @@ class Agent:
 
     def _image_part(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> types.Part:
         return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+
+    def _pace(self):
+        """Keep under the free tier's ~15 model requests/minute. If 14 calls happened in the
+        last 60s, wait for the oldest to age out before sending — this PREVENTS 429 rate-limit
+        errors rather than just reacting to them."""
+        now = time.time()
+        self._call_times = [c for c in self._call_times if now - c < 60.0]
+        if len(self._call_times) >= 14 and not self._stop_flag.is_set():
+            wait = max(0.0, 60.0 - (now - self._call_times[0]) + 0.25)
+            if wait > 0:
+                self._emit(AgentEvent("message",
+                    f"[pacing the ~15/min free-tier limit — waiting {wait:.0f}s to avoid a rate-limit error]"))
+                deadline = now + min(wait, 62.0)
+                while time.time() < deadline and not self._stop_flag.is_set():
+                    time.sleep(0.3)
+                now = time.time()
+                self._call_times = [c for c in self._call_times if now - c < 60.0]
+        self._call_times.append(time.time())
 
     def _send_streaming(self, parts):
         """Stream the response when SAFE (i.e. when parts don't contain function_response).
@@ -2227,6 +2246,7 @@ class Agent:
         # user still sees the model's text immediately via the "message" event in _process_response.
         if self._stop_flag.is_set():
             raise RuntimeError("stopped by user")
+        self._pace()
         t0 = time.time()
         try:
             resp = self._chat.send_message(parts)

@@ -128,6 +128,8 @@ Tip: just say "organize my Downloads", "find duplicates in Pictures",
 COMMAND_CENTER_ACTIONS = [
     ("Phone Link", "__remote__"),
     ("Ember Browser", "__browser_app__"),
+    ("Antivirus", "__scan_folder__"),
+    ("Sandbox", "__sandbox__"),
     ("Autopilot", "/autopilot"),
     ("Use App", "/apps"),
     ("Research", "/research"),
@@ -3437,6 +3439,12 @@ class EmberWindow(QWidget):
             return
         if cmd == "__browser_app__":
             self._open_ember_browser()
+            return
+        if cmd == "__scan_folder__":
+            self._scan_folder()
+            return
+        if cmd == "__sandbox__":
+            self._run_in_sandbox_ui()
             return
         if cmd == "__update__":
             self._start_update()
