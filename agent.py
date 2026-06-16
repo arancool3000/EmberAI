@@ -31,6 +31,10 @@ import ai_detect
 import quick_tools
 import power_tools
 import chart_tools
+import local_ai
+import macros
+import creative
+import security_extras
 import file_ops
 import more_tools
 import extra_tools
@@ -1597,6 +1601,45 @@ TOOL_DECLARATIONS = [
     {"name": "network_connections",
      "description": "List active established network connections + owning process (security monitor).",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "local_ai_status",
+     "description": "Check if a local Ollama model server is running and list local models.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "local_ai_ask",
+     "description": "Answer a prompt with a LOCAL model via Ollama (offline, no API key, no rate "
+                    "limit). Use to offload text work when cloud-limited.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "prompt": {"type": "STRING"}, "model": {"type": "STRING"}}, "required": ["prompt"]}},
+    {"name": "save_macro",
+     "description": "Save a reusable named task (macro) to replay later.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "name": {"type": "STRING"}, "task": {"type": "STRING"}}, "required": ["name", "task"]}},
+    {"name": "list_macros",
+     "description": "List saved task macros.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "get_macro",
+     "description": "Get a saved macro's task text.",
+     "parameters": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}}, "required": ["name"]}},
+    {"name": "run_macro",
+     "description": "Fetch a saved macro's task so you can execute it now (carry out the returned task).",
+     "parameters": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}}, "required": ["name"]}},
+    {"name": "delete_macro",
+     "description": "Delete a saved macro.",
+     "parameters": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}}, "required": ["name"]}},
+    {"name": "generate_image",
+     "description": "Generate an image from a text prompt (saves a PNG; needs a Gemini key with "
+                    "image-model access).",
+     "parameters": {"type": "OBJECT", "properties": {
+        "prompt": {"type": "STRING"}, "output": {"type": "STRING"}}, "required": ["prompt"]}},
+    {"name": "describe_image",
+     "description": "Vision Q&A: describe an image file or answer a question about it.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "question": {"type": "STRING"}}, "required": ["path"]}},
+    {"name": "transcribe_audio",
+     "description": "Transcribe an audio file and summarize it.",
+     "parameters": {"type": "OBJECT", "properties": {"path": {"type": "STRING"}}, "required": ["path"]}},
+    {"name": "security_checkup",
+     "description": "Summarize Ember's protection status (antivirus, web protection, sandbox) + a score.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
 ]
 
 
@@ -1748,6 +1791,17 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "unit_convert": power_tools.unit_convert,
     "make_chart": chart_tools.make_chart,
     "network_connections": nettools.network_connections,
+    "local_ai_status": local_ai.local_ai_status,
+    "local_ai_ask": local_ai.local_ai_ask,
+    "save_macro": macros.save_macro,
+    "list_macros": macros.list_macros,
+    "get_macro": macros.get_macro,
+    "run_macro": macros.run_macro,
+    "delete_macro": macros.delete_macro,
+    "generate_image": creative.generate_image,
+    "describe_image": creative.describe_image,
+    "transcribe_audio": creative.transcribe_audio,
+    "security_checkup": security_extras.security_checkup,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

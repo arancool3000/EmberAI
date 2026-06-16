@@ -273,6 +273,10 @@ tunnel up — and it never claims to be connected when it isn't.
 | `ai_detect.py` | AI-content detector for text + images (heuristics + provenance) |
 | `quick_tools.py` | password generator, QR maker, image metadata stripper |
 | `power_tools.py` | read documents (PDF/docx/xlsx), secret scan, secure-delete, unit convert |
+| `local_ai.py` | local AI via Ollama (offline, no API key / rate limit) |
+| `macros.py` | save/replay named task workflows |
+| `creative.py` | image generation, vision Q&A, audio transcription (Gemini) |
+| `security_extras.py` | aggregate security checkup + score |
 | `extension/` | Ember Chrome extension (summarize / ask / AI-check, uses your Gemini key) |
 | `voice.py` | speech input + text-to-speech for Voice Chat |
 | `make_logo.py` | regenerate the app icon |
