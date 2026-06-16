@@ -2053,7 +2053,7 @@ class Agent:
         errors rather than just reacting to them."""
         now = time.time()
         self._call_times = [c for c in self._call_times if now - c < 60.0]
-        if len(self._call_times) >= 14 and not self._stop_flag.is_set():
+        if len(self._call_times) >= 12 and not self._stop_flag.is_set():
             wait = max(0.0, 60.0 - (now - self._call_times[0]) + 0.25)
             if wait > 0:
                 self._emit(AgentEvent("message",
@@ -2290,9 +2290,36 @@ class Agent:
             else:
                 reason = "timed out / no response"
             if self._is_limit_error(e, status):
-                api_resp = _try_api_key_fallback(reason)
-                if api_resp is not None:
-                    return api_resp
+                # Rate-limited: WAIT and retry the SAME model + chat first, so the in-progress
+                # turn (function-call context) is preserved. Switching models/chats here would
+                # lose context and force a reset — the thing the old code failed with. A
+                # per-minute free-tier limit clears within ~60s, so a short wait recovers it.
+                for backoff in (25, 45):
+                    if self._stop_flag.is_set():
+                        raise RuntimeError("stopped by user")
+                    self._emit(AgentEvent("message",
+                        f"[rate-limited — waiting {backoff}s, then retrying {self.active_model}; "
+                        "your progress is preserved]"))
+                    waited = 0.0
+                    while waited < backoff and not self._stop_flag.is_set():
+                        time.sleep(0.5)
+                        waited += 0.5
+                    try:
+                        return self._chat.send_message(parts)
+                    except Exception as re_err:
+                        rt, st = self._is_retryable(re_err)
+                        if not self._is_limit_error(re_err, st):
+                            e, retryable, status = re_err, rt, st  # different failure now
+                            reason = (f"server error ({st})" if st in (500, 502, 503, 504)
+                                      else "does not exist (404)" if st == 404
+                                      else "timed out / no response")
+                            break
+                        continue  # still limited -> wait longer and retry
+                else:
+                    # Exhausted same-model waits while still limited -> try another API key.
+                    api_resp = _try_api_key_fallback(reason)
+                    if api_resp is not None:
+                        return api_resp
             return _try_fallbacks(reason)
 
     # Words that suggest the model probably needs a fresh screenshot to start.
