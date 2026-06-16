@@ -1833,7 +1833,7 @@ class SettingsDialog(QDialog):
             vtxt = ("Connected ✓" if vs.get("connected") else "Not connected")
             vtxt += f"   ·   {len(locs)} location(s)"
             if not vl.get("wireguard_installed"):
-                vtxt += "   ·   WireGuard not installed (brew install wireguard-tools)"
+                vtxt += "   ·   Install the free WireGuard app (Mac App Store) to connect"
             self._vpn_status_lbl = QLabel(vtxt)
             self._vpn_status_lbl.setStyleSheet("color:#565f89; font-size:11px;")
             self._vpn_status_lbl.setWordWrap(True)

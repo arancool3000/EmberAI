@@ -72,7 +72,17 @@ def _save(d: dict) -> None:
 
 
 def _which(n: str) -> str | None:
-    return shutil.which(n)
+    p = shutil.which(n)
+    if p:
+        return p
+    # Also look in common locations not always on a GUI app's PATH (Homebrew, the
+    # WireGuard app's helpers, Nix, etc.) so we don't falsely report "not installed".
+    for d in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/run/current-system/sw/bin",
+              "/Applications/WireGuard.app/Contents/MacOS"):
+        c = Path(d) / n
+        if c.exists():
+            return str(c)
+    return None
 
 
 def wireguard_available() -> bool:
@@ -123,7 +133,8 @@ def list_locations() -> dict:
         "suggested": SUGGESTED_LOCATIONS,
         "wireguard_installed": wireguard_available(),
         "note": ("Add your provider's WireGuard .conf per location with add_vpn_location. "
-                 "Ember is not a VPN provider; it connects through configs you supply."),
+                 "Ember is not a VPN provider; it connects through configs you supply. "
+                 "No Homebrew needed — the free WireGuard app from the Mac App Store works too."),
     }
 
 
@@ -160,15 +171,17 @@ def status() -> dict:
 def connect(name: str) -> dict:
     """Bring up the WireGuard tunnel for a saved location (needs wg-quick + admin rights)."""
     name = (name or "").strip().lower()
-    if not wireguard_available():
-        return {"ok": False, "error": "WireGuard not installed — `brew install wireguard-tools`."}
+    wgq = _which("wg-quick")
+    if not wgq:
+        return {"ok": False, "error": "WireGuard isn't installed. Get the free WireGuard app from "
+                "the Mac App Store (no terminal/Homebrew needed), then add your provider's .conf."}
     idx = _load()
     entry = idx.get("locations", {}).get(name)
     if not entry:
         return {"ok": False, "error": f"no location named '{name}' — add it with add_vpn_location"}
     conf = entry["conf"]
     try:
-        r = subprocess.run(["wg-quick", "up", conf], capture_output=True, text=True, timeout=40)
+        r = subprocess.run([wgq, "up", conf], capture_output=True, text=True, timeout=40)
         if r.returncode == 0:
             return {"ok": True, "connected": name, "status": status()}
         err = (r.stderr or r.stdout or "").strip()
@@ -182,7 +195,8 @@ def connect(name: str) -> dict:
 
 def disconnect(name: str | None = None) -> dict:
     """Tear down a tunnel (or all active tunnels if no name given)."""
-    if not wireguard_available():
+    wgq = _which("wg-quick")
+    if not wgq:
         return {"ok": False, "error": "WireGuard not installed."}
     targets = []
     if name:
@@ -195,7 +209,7 @@ def disconnect(name: str | None = None) -> dict:
     done = []
     for t in targets:
         try:
-            r = subprocess.run(["wg-quick", "down", t], capture_output=True, text=True, timeout=40)
+            r = subprocess.run([wgq, "down", t], capture_output=True, text=True, timeout=40)
             if r.returncode == 0:
                 done.append(t)
         except Exception:

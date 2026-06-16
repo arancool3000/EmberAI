@@ -1594,6 +1594,9 @@ TOOL_DECLARATIONS = [
         "title": {"type": "STRING"}, "xlabel": {"type": "STRING"}, "ylabel": {"type": "STRING"},
         "output": {"type": "STRING"}},
         "required": ["kind", "values"]}},
+    {"name": "network_connections",
+     "description": "List active established network connections + owning process (security monitor).",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
 ]
 
 
@@ -1744,6 +1747,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "secure_delete": power_tools.secure_delete,
     "unit_convert": power_tools.unit_convert,
     "make_chart": chart_tools.make_chart,
+    "network_connections": nettools.network_connections,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

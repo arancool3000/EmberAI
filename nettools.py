@@ -61,6 +61,39 @@ def network_devices() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def network_connections() -> dict:
+    """List active (established) network connections + owning process — a quick security
+    monitor of what's talking to the network."""
+    conns = []
+    try:
+        if shutil.which("lsof"):
+            r = subprocess.run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED"],
+                               capture_output=True, text=True, timeout=12)
+            for line in (r.stdout or "").splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 9 and "->" in parts[8]:
+                    conns.append({"process": parts[0], "pid": parts[1],
+                                  "remote": parts[8].split("->")[-1]})
+        elif shutil.which("netstat"):
+            r = subprocess.run(["netstat", "-an"], capture_output=True, text=True, timeout=12)
+            for line in (r.stdout or "").splitlines():
+                if "ESTAB" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        conns.append({"remote": parts[4]})
+        else:
+            return {"ok": False, "error": "no lsof/netstat available"}
+        seen, uniq = set(), []
+        for c in conns:
+            key = (c.get("process"), c.get("remote"))
+            if key not in seen:
+                seen.add(key)
+                uniq.append(c)
+        return {"ok": True, "count": len(uniq), "connections": uniq[:100]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def wifi_info() -> dict:
     """Current Wi-Fi network name + signal (best-effort, platform-specific)."""
     try:

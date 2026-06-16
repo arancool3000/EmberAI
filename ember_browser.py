@@ -147,6 +147,18 @@ def _ddg(query: str):
         return []
 
 
+def _instant_answer(query: str):
+    """Compute a quick local answer for arithmetic queries (e.g. '12*8+3')."""
+    import re
+    s = (query or "").strip()
+    if re.fullmatch(r"[0-9eE.\s+\-*/()%]+", s) and any(op in s for op in "+-*/"):
+        try:
+            return f"= {eval(s, {'__builtins__': {}}, {})}"  # input is digits/operators only
+        except Exception:
+            return None
+    return None
+
+
 class EmberBrowser(QWidget):
     _ai_result = pyqtSignal(str)
     _search_result = pyqtSignal(str, str)
@@ -393,6 +405,9 @@ class EmberBrowser(QWidget):
         answer = self._model_text(
             "Answer this search query concisely and factually in 2-4 sentences. "
             "If it needs current data you may not have, say so briefly.\n\nQuery: " + query)
+        inst = _instant_answer(query)
+        if inst:
+            answer = f"{inst}\n\n{answer}"
         results = _ddg(query)
         self._search_result.emit(query, self._search_results_html(query, answer, results))
 
@@ -406,11 +421,19 @@ class EmberBrowser(QWidget):
             rows = ("<div class='hint'>No web results fetched. "
                     f"<a href='https://duckduckgo.com/?q={quote_plus(query)}'>Open DuckDuckGo</a></div>")
         ans = _html.escape(answer or "(no AI answer — add an API key in Ember Settings)").replace("\n", "<br>")
+        q = quote_plus(query)
+        engines = [("DuckDuckGo", f"https://duckduckgo.com/?q={q}"),
+                   ("Brave", f"https://search.brave.com/search?q={q}"),
+                   ("Google", f"https://www.google.com/search?q={q}"),
+                   ("Startpage", f"https://www.startpage.com/sp/search?query={q}"),
+                   ("Wikipedia", f"https://en.wikipedia.org/w/index.php?search={q}")]
+        more = ("<div class='hint'>Also search on: "
+                + " · ".join(f"<a href='{u}'>{n}</a>" for n, u in engines) + "</div>")
         return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
                 f"<body><div class='wrap'>"
                 f"<form action='https://{SEARCH_HOST}/' method='get' style='margin-bottom:8px'>"
                 f"<input name='q' value=\"{_html.escape(query)}\"><button type='submit'>Search</button></form>"
-                f"<div class='ans'><h3>✨ Ember AI answer</h3>{ans}</div>{rows}</div></body></html>")
+                f"<div class='ans'><h3>✨ Ember AI answer</h3>{ans}</div>{rows}{more}</div></body></html>")
 
     def _load_search_results(self, query, html):
         v = self._cur()

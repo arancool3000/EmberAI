@@ -110,6 +110,13 @@ def test_keychain_graceful():
     assert "ok" in r  # not found / unsupported -> graceful, never raises
 
 
+def test_network_connections_graceful():
+    r = nettools.network_connections()
+    assert "ok" in r
+    if r["ok"]:
+        assert "connections" in r
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())
