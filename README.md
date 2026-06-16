@@ -269,6 +269,8 @@ tunnel up — and it never claims to be connected when it isn't.
 | `nettools.py` | network toolkit: port scan, LAN devices, Wi-Fi info |
 | `mediatools.py` | file info + media conversion (ffmpeg) |
 | `privacy.py` | keychain secrets, file encryption, breached-password check |
-| `ember_browser.py` | Ember Browser: secure, AI-assisted web browser (Qt WebEngine) |
+| `ember_browser.py` | Ember Browser: secure, AI-first web browser + Ember Search (Qt WebEngine) |
+| `ai_detect.py` | AI-content detector for text + images (heuristics + provenance) |
+| `extension/` | Ember Chrome extension (summarize / ask / AI-check, uses your Gemini key) |
 | `voice.py` | speech input + text-to-speech for Voice Chat |
 | `make_logo.py` | regenerate the app icon |

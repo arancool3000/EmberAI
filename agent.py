@@ -27,6 +27,7 @@ import cleanup
 import nettools
 import mediatools
 import privacy
+import ai_detect
 import file_ops
 import more_tools
 import extra_tools
@@ -1540,6 +1541,14 @@ TOOL_DECLARATIONS = [
      "parameters": {"type": "OBJECT", "properties": {
         "path": {"type": "STRING"}, "passphrase": {"type": "STRING"}, "output": {"type": "STRING"}},
         "required": ["path", "passphrase"]}},
+    {"name": "ai_detect_text",
+     "description": "Estimate whether a block of TEXT is AI-generated (heuristic: sentence "
+                    "burstiness, AI 'tell' phrases, contractions). Returns a 0-100 likelihood.",
+     "parameters": {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}},
+    {"name": "ai_detect_image",
+     "description": "Estimate whether an IMAGE is AI-generated from its metadata / EXIF / "
+                    "content-credentials. Returns a 0-100 likelihood + signals.",
+     "parameters": {"type": "OBJECT", "properties": {"path": {"type": "STRING"}}, "required": ["path"]}},
 ]
 
 
@@ -1680,6 +1689,8 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "keychain_get": privacy.keychain_get,
     "encrypt_file": privacy.encrypt_file,
     "decrypt_file": privacy.decrypt_file,
+    "ai_detect_text": ai_detect.detect_text,
+    "ai_detect_image": ai_detect.detect_image,
     "public_ip": more_tools.public_ip,
     "dns_lookup": more_tools.dns_lookup,
     "network_ping": more_tools.network_ping,

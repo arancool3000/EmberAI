@@ -127,6 +127,7 @@ SAFE_READONLY = {
     "disk_usage", "list_open_ports", "password_strength", "system_health",
     "list_startup_items", "scan_host_ports", "network_devices", "wifi_info",
     "file_info", "password_pwned_check", "keychain_get",
+    "ai_detect_text", "ai_detect_image",
 }
 
 SAFE_INTERACTION = {

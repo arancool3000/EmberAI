@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Ember",
+  "version": "1.0.0",
+  "description": "Summarize pages, ask questions, and detect AI-generated text — powered by your own Gemini key.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*"],
+  "action": { "default_popup": "popup.html", "default_title": "Ember" },
+  "options_page": "options.html",
+  "icons": { "16": "icon.png", "48": "icon.png", "128": "icon.png" }
+}

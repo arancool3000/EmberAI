@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 340px; margin: 0; font: 14px -apple-system, Segoe UI, sans-serif;
+           background: #0e0f13; color: #e9eaf0; }
+    .hd { display:flex; align-items:center; gap:8px; padding:12px 14px; font-weight:800;
+          background:linear-gradient(90deg,#f0a13c,#e2562a); color:#1a1206; }
+    .body { padding: 12px 14px; }
+    .row { display:flex; gap:8px; margin-bottom:8px; }
+    button { flex:1; padding:9px; border:none; border-radius:9px; background:#222533; color:#fff;
+             font-weight:600; cursor:pointer; }
+    button:hover { background:#2c3142; }
+    #ask { width:100%; box-sizing:border-box; padding:9px; border-radius:9px; border:1px solid #2a2d39;
+           background:#181a22; color:#fff; margin-bottom:8px; }
+    #out { white-space:pre-wrap; background:#181a22; border:1px solid #2a2d39; border-radius:9px;
+           padding:10px; min-height:54px; max-height:280px; overflow:auto; font-size:13px; }
+    .lnk { display:block; text-align:right; color:#7aa2ff; font-size:12px; margin-top:8px;
+           cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="hd">✨ Ember</div>
+  <div class="body">
+    <div class="row">
+      <button id="sum">Summarize</button>
+      <button id="detect">AI-check</button>
+    </div>
+    <input id="ask" placeholder="Ask about this page… (Enter)">
+    <div id="out">Pick an action above.</div>
+    <span class="lnk" id="opts">Set Gemini API key ⚙</span>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
