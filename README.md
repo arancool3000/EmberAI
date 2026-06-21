@@ -8,6 +8,11 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 
 - **Autonomous agent** — 170+ tools: move the mouse/keyboard, read the screen with Vision OCR,
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
+  **Human-like mouse movement** (curved, eased paths — not robotic teleports).
+- **Run modes & agents** — pick how Ember works: **auto** (autonomous), **plan** (proposes a
+  plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
+  run mode + tool scope + optional schedule, à la Base44 Superagents) and run them on demand or
+  on a timer; Ember can also **spawn scoped sub-agents** for sub-tasks (like Claude's Task tool).
 - **Ember Browser** — a secure, AI-first browser: tracker/ad blocking, an AI-answer search page,
   summarize/ask about any page, AI-content check, reader mode, per-site dark mode, bookmarks,
   history, downloads. Works with Gemini or Claude.
@@ -303,6 +308,9 @@ tunnel up — and it never claims to be connected when it isn't.
 | `ui.py` | the desktop UI |
 | `agent.py` | the AI agent loop + tool declarations |
 | `tools.py`, `more_tools.py`, `extra_tools.py` | the tool set |
+| `human_mouse.py` | human-like (curved, eased) mouse movement |
+| `agents.py` | run modes + named agent profiles (scope, schedule) |
+| `tool_args.py` | coerces tool arguments to their declared types |
 | `screen_vision.py` | exact clicking + on-screen OCR |
 | `remote_server.py` | Ember Link phone control |
 | `antivirus.py` | malware scan (entropy + IOC signatures), quarantine vault & sandbox |

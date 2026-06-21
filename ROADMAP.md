@@ -30,6 +30,30 @@ A running memory of what's shipped and what's next, so ideas aren't lost between
   offline launch, auto-update on launch (git pull for source / auto-install for the app),
   Ember-site links fixed to EmberAI.
 
+## 🆕 Shipped this session — agent UX: run modes, agents, human mouse, tool polish
+- **Human-like mouse movement** (`human_mouse.py`) — replaces the old jerky
+  `moveTo(duration=0.08)` teleport with a curved (cubic-Bézier) path, ease-in/out
+  timing, distance-scaled speed, micro-jitter and overshoot-and-settle on long moves.
+  Routed through `tools.click/move_mouse/drag` + `screen_vision` drag-select (graceful
+  fallback if pyautogui is missing). Toggle in Settings → Security → Pointer.
+  Pure path math is unit-tested (`test_human_mouse.py`, 10).
+- **Run modes (like Claude)** + **named agents (like Base44 Superagents)** (`agents.py`) —
+  run modes `auto` / `plan` / `chat` / `read_only` map to capability + a live
+  system-prompt directive (framed into every turn). Named agent profiles: a goal,
+  default run mode, **tool scope** (permission control via categories/allow/deny),
+  optional model, and an optional **schedule** (`every_minutes` / `daily_at`) so they
+  can run on a timer. CRUD + scheduling + scope resolution + `build_run_request` are
+  pure and tested (`test_agents.py`, 16). Tools: `list_run_modes`, `set_run_mode`,
+  `agent_create/list/get/delete`, `agent_run`. UI: a Run-mode selector + Agents list
+  in Settings → Security.
+- **Sub-agents (like Claude's Task)** — `spawn_agent` and `agent_run` launch a fresh,
+  scoped sub-agent that runs its own bounded tool loop and reports a summary; it
+  forwards events to the parent UI (so progress + confirmations are visible/answerable),
+  carries an isolated tool whitelist + run mode, and is recursion-bounded.
+- **Tool-use polish** — `tool_args.py` coerces every tool argument to its declared type
+  before dispatch ("100"→100, "true"→True, 3.0→3), killing a big class of "bad args"
+  failures. Applied in the executor; unit-tested (`test_tool_args.py`, 7).
+
 ## 🆕 Shipped this session — always-on antivirus + fileless detection
 - **Fileless-malware detection** (`fileless_guard.py`) — an always-active background
   process monitor for in-memory / "living-off-the-land" attacks that file scanners

@@ -364,12 +364,19 @@ def select_screen_text(text: str, region: dict | None = None, occurrence: int = 
         ex_pt = s["x"] + s["w"] - 2
         ey_pt = s["center_y"]
     try:
-        pyautogui.moveTo(sx_pt, sy_pt, duration=0.12)
-        pyautogui.mouseDown(button="left")
-        # Move in two hops so apps register an actual selection drag.
-        pyautogui.moveTo((sx_pt + ex_pt) // 2, (sy_pt + ey_pt) // 2, duration=0.12)
-        pyautogui.moveTo(ex_pt, ey_pt, duration=0.18)
-        pyautogui.mouseUp(button="left")
+        used_human = False
+        try:
+            import human_mouse
+            used_human = human_mouse.drag(sx_pt, sy_pt, ex_pt, ey_pt, button="left")
+        except Exception:
+            used_human = False
+        if not used_human:
+            pyautogui.moveTo(sx_pt, sy_pt, duration=0.12)
+            pyautogui.mouseDown(button="left")
+            # Move in two hops so apps register an actual selection drag.
+            pyautogui.moveTo((sx_pt + ex_pt) // 2, (sy_pt + ey_pt) // 2, duration=0.12)
+            pyautogui.moveTo(ex_pt, ey_pt, duration=0.18)
+            pyautogui.mouseUp(button="left")
     except Exception as e:
         return {"ok": False, "error": f"drag-select failed: {e}"}
     result = {"ok": True, "selected_from": [sx_pt, sy_pt], "selected_to": [ex_pt, ey_pt],

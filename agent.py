@@ -48,6 +48,8 @@ import key_vault
 import download_guard
 import fileless_guard
 import security_center
+import agents as agent_profiles
+import tool_args
 import workflow_recorder
 import productivity_tools
 import plugin_system
@@ -1396,6 +1398,24 @@ TOOL_DECLARATIONS = [
             "required": ["situation", "gemini_summary", "specific_question"],
         },
     },
+    {
+        "name": "spawn_agent",
+        "description": (
+            "Delegate a self-contained sub-task to a fresh sub-agent (like Claude's Task tool). "
+            "It runs its own scoped tool loop and reports back a summary, so you stay focused on "
+            "the main task. Optionally restrict its tools and run mode."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "task": {"type": "STRING", "description": "the complete, self-contained instruction"},
+                "mode": {"type": "STRING", "description": "auto | read_only (default auto)"},
+                "tools": {"type": "ARRAY", "items": {"type": "STRING"},
+                          "description": "optional whitelist of tool names the sub-agent may use"},
+            },
+            "required": ["task"],
+        },
+    },
     # ---- Security / antivirus ----
     {"name": "scan_file",
      "description": "Scan a file for malware (local heuristics + platform AV + VirusTotal). "
@@ -2015,7 +2035,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 # sets used by safety.py). Merge them here so the central tables stay the single source
 # of truth the agent + lean-mode filter read from.
 for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security_center,
-              workflow_recorder, productivity_tools, plugin_system):
+              agent_profiles, workflow_recorder, productivity_tools, plugin_system):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
@@ -2067,7 +2087,17 @@ PARALLEL_SAFE_TOOLS = frozenset({
     # always-on Security Center (read-only)
     "security_center_status", "security_center_events",
     "scan_network", "scan_persistence",
+    # agent run modes / profiles (read-only)
+    "list_run_modes", "agent_list", "agent_get",
 })
+
+# Declared-type map for argument coercion (built AFTER all module tools merged in).
+_PARAM_TYPES = tool_args.build_param_types(TOOL_DECLARATIONS)
+
+# Tools a scoped sub-agent may ALWAYS call regardless of its tool whitelist
+# (control/coordination tools, never the actuators).
+_SCOPE_ALWAYS_ALLOW = {"pause_for_human", "ask_claude", "list_run_modes",
+                       "set_run_mode", "take_screenshot", "get_screen_size"}
 
 
 def _make_safety_settings():
@@ -2158,6 +2188,13 @@ class Agent:
         self._chat = None
         self._event_subs: list[Callable[[AgentEvent], None]] = []
         self._stop_flag = threading.Event()
+        # Run mode (auto/plan/chat/read_only) + optional live tool scope for sub-agents.
+        try:
+            self.run_mode = agent_profiles.get_run_mode()
+        except Exception:
+            self.run_mode = "auto"
+        self._active_tool_scope = None     # None = all tools; else a set of allowed names
+        self._spawn_depth = 0              # guards sub-agent recursion
         self._init_chat()
 
     def _make_client(self, api_key: str):
@@ -2539,6 +2576,13 @@ class Agent:
         self._stop_flag.clear()
         self._fail_counts: dict[str, int] = {}  # tool name -> consecutive failures this turn
         self._fail_lock = threading.Lock()
+        # Frame the turn with the current run-mode directive so plan/chat/read-only/auto
+        # behavior is live every turn (Gemini's system_instruction is set only at chat init).
+        try:
+            directive = agent_profiles.run_mode_directive(getattr(self, "run_mode", None))
+        except Exception:
+            directive = ""
+        user_text = (directive + "\n" + user_text) if directive else user_text
         try:
             parts = [user_text]
             if self._should_auto_screenshot(user_text):
@@ -2588,7 +2632,21 @@ class Agent:
         args = tools._to_plain(dict(fc.args)) if fc.args else {}
         if not isinstance(args, dict):
             args = {}
+        # Polish: coerce args to their declared types ("100"->100, "true"->True) so
+        # well-formed calls don't fail on a stringly-typed value.
+        try:
+            args = tool_args.coerce(_PARAM_TYPES.get(name, {}), args)
+        except Exception:
+            pass
         self._emit(AgentEvent("tool_call", {"name": name, "args": args}))
+
+        # Sub-agent tool scoping: a spawned agent may be restricted to a whitelist.
+        scope = getattr(self, "_active_tool_scope", None)
+        if scope is not None and name not in scope and name not in _SCOPE_ALWAYS_ALLOW:
+            result = {"ok": False, "error": f"tool '{name}' is outside this agent's allowed scope",
+                      "allowed_sample": sorted(scope)[:12]}
+            self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
+            return (name, result)
 
         risk, reason = safety.classify(name, args)
         allowed_by_mode, mode_reason = safety.mode_allows(name, risk)
@@ -2615,6 +2673,10 @@ class Agent:
             result = self._handle_ask_claude(args)
         elif name == "pause_for_human":
             result = self._handle_human_pause(args)
+        elif name == "spawn_agent":
+            result = self._handle_spawn_agent(args)
+        elif name == "agent_run":
+            result = self._handle_agent_run(args)
         else:
             fn = TOOL_DISPATCH.get(name)
             if not fn:
@@ -2746,6 +2808,91 @@ class Agent:
 
         if steps >= max_steps:
             self._emit(AgentEvent("message", "[step limit reached - say 'continue' to keep going]"))
+
+    def _spawn(self, instructions: str, mode: str = "auto", allowed_tools=None,
+               label: str = "subagent", max_steps: int = 10) -> dict:
+        """Run a fresh, scoped sub-agent on `instructions` and return its transcript.
+
+        The child forwards its events to THIS agent's subscribers, so its progress and
+        any confirmation prompts surface in the same UI; it carries an isolated tool
+        scope + run mode. Bounded recursion + fully defensive (never raises)."""
+        if getattr(self, "_spawn_depth", 0) >= 2:
+            return {"ok": False, "error": "sub-agent nesting limit reached"}
+        if not (instructions or "").strip():
+            return {"ok": False, "error": "spawn_agent needs a task"}
+        try:
+            child = Agent(
+                api_key=self.api_key, model_name=self.model_name,
+                secondary_api_key=self.secondary_api_key,
+                dual_api_failover=self.dual_api_failover,
+                anthropic_key=self.anthropic_key, anthropic_model=self.anthropic_model,
+                fallback_models=list(self.fallback_models),
+                auto_screenshot=self.auto_screenshot,
+                request_timeout_seconds=self.request_timeout_seconds, lean_tools=True,
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"could not create sub-agent: {e}"}
+        child._spawn_depth = getattr(self, "_spawn_depth", 0) + 1
+        child.run_mode = mode if mode in agent_profiles.RUN_MODES else "auto"
+        # Resolve the effective tool scope: explicit whitelist, else derive from mode.
+        if allowed_tools:
+            child._active_tool_scope = set(allowed_tools)
+        elif child.run_mode in ("read_only", "chat"):
+            child._active_tool_scope = set(safety.SAFE_READONLY)
+        else:
+            child._active_tool_scope = None
+        transcript: list[str] = []
+
+        def _relay(ev):
+            try:
+                if ev.type == "message" and isinstance(ev.payload, str):
+                    transcript.append(ev.payload)
+            except Exception:
+                pass
+            # Forward to the parent UI so progress + confirmations are visible/answerable.
+            self._emit(ev)
+
+        child.subscribe(_relay)
+        self._emit(AgentEvent("message", f"↳ spawned sub-agent ({label}, mode={child.run_mode})"))
+        try:
+            child._run_turn(instructions)
+        except Exception as e:
+            return {"ok": False, "error": f"sub-agent failed: {e}",
+                    "transcript": transcript[-5:]}
+        summary = transcript[-1] if transcript else "(sub-agent produced no text)"
+        return {"ok": True, "label": label, "mode": child.run_mode,
+                "summary": summary, "steps": len(transcript)}
+
+    def _handle_spawn_agent(self, args: dict) -> dict:
+        task = args.get("task", "") or ""
+        mode = (args.get("mode", "auto") or "auto").lower()
+        tools_wl = args.get("tools") or None
+        allowed = None
+        if tools_wl:
+            try:
+                allowed = agent_profiles.filter_tools(
+                    list(TOOL_DISPATCH), {"mode": "custom", "allow": list(tools_wl)})
+            except Exception:
+                allowed = list(tools_wl)
+        return self._spawn(task, mode=mode, allowed_tools=allowed, label="subagent")
+
+    def _handle_agent_run(self, args: dict) -> dict:
+        name = args.get("name", "") or ""
+        task = args.get("task", "") or ""
+        try:
+            req = agent_profiles.build_run_request(name, task=task,
+                                                   all_tool_names=list(TOOL_DISPATCH))
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        if not req.get("ok"):
+            return req
+        out = self._spawn(req["instructions"], mode=req["run_mode"],
+                          allowed_tools=req.get("allowed_tools"), label=req["name"])
+        try:
+            agent_profiles.mark_ran(name)
+        except Exception:
+            pass
+        return out
 
     def _handle_human_pause(self, args: dict) -> dict:
         reason = args.get("reason", "manual step required") or "manual step required"

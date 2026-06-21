@@ -2159,6 +2159,41 @@ class SettingsDialog(QDialog):
         mhint.setWordWrap(True)
         v.addWidget(mhint)
 
+        # --- Run mode (how autonomously Ember acts) ---
+        _section("Run mode")
+        rmrow = QHBoxLayout()
+        self._run_mode_combo = QComboBox()
+        self._run_mode_combo.addItems(["auto", "plan", "chat", "read_only"])
+        try:
+            import agents as _ag
+            self._run_mode_combo.setCurrentText(_ag.get_run_mode())
+        except Exception:
+            pass
+        self._run_mode_combo.currentTextChanged.connect(self._set_run_mode)
+        rmrow.addWidget(self._run_mode_combo)
+        agents_btn = QPushButton("Agents…")
+        agents_btn.clicked.connect(self._show_agents)
+        rmrow.addWidget(agents_btn)
+        rmrow.addStretch()
+        v.addLayout(rmrow)
+        rmhint = QLabel("auto = autonomous · plan = propose a plan and wait · "
+                        "chat = talk only · read_only = investigate only")
+        rmhint.setStyleSheet("color:#565f89; font-size:11px;")
+        rmhint.setWordWrap(True)
+        v.addWidget(rmhint)
+
+        # --- Humanized mouse ---
+        _section("Pointer")
+        try:
+            import human_mouse
+            self._human_mouse_chk = QCheckBox("Human-like mouse movement (curved, eased, natural)")
+            self._human_mouse_chk.setChecked(bool(human_mouse.get_options().get("enabled", True)))
+            self._human_mouse_chk.stateChanged.connect(
+                lambda s: human_mouse.set_options(enabled=bool(s)))
+            v.addWidget(self._human_mouse_chk)
+        except Exception:
+            pass
+
         # --- VPN ---
         _section("VPN (bring-your-own WireGuard)")
         try:
@@ -2491,6 +2526,52 @@ class SettingsDialog(QDialog):
         lines = [f"[{e.get('time','')}] {e.get('source','').upper()} "
                  f"{e.get('severity','')}: {e.get('detail','')}" for e in evs[-40:]]
         QMessageBox.information(self, "Security activity (recent)", "\n".join(lines))
+
+    def _set_run_mode(self, mode):
+        try:
+            import agents
+            r = agents.set_run_mode(mode)
+            if r.get("ok"):
+                # Keep the capability-mode combo in sync (run mode sets the capability).
+                try:
+                    self._sec_mode.setCurrentText(r.get("capability_applied") or self._sec_mode.currentText())
+                except Exception:
+                    pass
+                # Apply to the live agent if one exists.
+                ag = getattr(self, "_agent", None) or getattr(self, "agent", None)
+                if ag is not None:
+                    try:
+                        ag.run_mode = mode
+                    except Exception:
+                        pass
+            else:
+                QMessageBox.warning(self, "Run mode", r.get("error", "failed"))
+        except Exception as e:
+            QMessageBox.warning(self, "Run mode", str(e))
+
+    def _show_agents(self):
+        try:
+            import agents
+            lst = agents.list_agents().get("agents", [])
+        except Exception as e:
+            QMessageBox.warning(self, "Agents", str(e))
+            return
+        if not lst:
+            QMessageBox.information(
+                self, "Agents",
+                "No saved agents yet.\n\nAsk Ember in chat, e.g.:\n"
+                "  \"Create an agent called 'Morning Brief' that summarizes my unread mail "
+                "every day at 9am, read-only.\"\n\nOr use the agent_create / agent_run tools.")
+            return
+        lines = []
+        for a in lst:
+            sched = a.get("schedule")
+            when = (f" · every {sched['every_minutes']}m" if sched and "every_minutes" in sched
+                    else f" · daily {sched['daily_at']}" if sched and "daily_at" in sched else "")
+            state = "" if a.get("enabled", True) else " · disabled"
+            lines.append(f"• {a.get('display_name', a['name'])} [{a.get('run_mode')}]"
+                         f"{when}{state}\n    {a.get('description','') or '(no description)'}")
+        QMessageBox.information(self, "Saved agents", "\n\n".join(lines))
 
     def _verify_audit(self):
         import audit

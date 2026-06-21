@@ -229,6 +229,12 @@ def zoom_screenshot(x, y, radius=150):
 
 def click(x, y, button="left", double=False):
     try:
+        try:
+            import human_mouse
+            if human_mouse.click(int(x), int(y), button=button, double=double):
+                return {"ok": True, "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
+        except Exception:
+            pass
         pyautogui.moveTo(int(x), int(y), duration=0.08)
         (pyautogui.doubleClick if double else pyautogui.click)(button=button)
         return {"ok": True, "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
@@ -238,6 +244,12 @@ def click(x, y, button="left", double=False):
 
 def move_mouse(x, y, duration=0.2):
     try:
+        try:
+            import human_mouse
+            if human_mouse.move(int(x), int(y), duration=duration):
+                return {"ok": True, "x": x, "y": y}
+        except Exception:
+            pass
         pyautogui.moveTo(x, y, duration=duration)
         return {"ok": True, "x": x, "y": y}
     except Exception as e:
@@ -246,6 +258,13 @@ def move_mouse(x, y, duration=0.2):
 
 def drag(from_x, from_y, to_x, to_y, button="left", duration=0.4):
     try:
+        try:
+            import human_mouse
+            if human_mouse.drag(int(from_x), int(from_y), int(to_x), int(to_y),
+                                button=button, duration=duration):
+                return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y]}
+        except Exception:
+            pass
         pyautogui.moveTo(from_x, from_y, duration=0.15)
         pyautogui.dragTo(to_x, to_y, duration=duration, button=button)
         return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y]}
