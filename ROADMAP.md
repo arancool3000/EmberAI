@@ -30,6 +30,20 @@ A running memory of what's shipped and what's next, so ideas aren't lost between
   offline launch, auto-update on launch (git pull for source / auto-install for the app),
   Ember-site links fixed to EmberAI.
 
+## 🆕 Shipped this session — launch-at-login + message grow-in animation
+- **True always-on wake** (`autostart.py`) — optional login item so Ember starts at login
+  and relaunches on crash (macOS LaunchAgent / Windows Run key / Linux .desktop), so the
+  wake word works without manually opening the app. Pure plist/.desktop builders are
+  unit-tested (`test_autostart.py`). Toggle in Settings → Performance ("Launch Ember at
+  login"); default off (a login item shouldn't install without consent). A clean Quit stays
+  quit (KeepAlive only on abnormal exit).
+- **Message grow-in animation** — new chat bubbles animate height 0 → natural with an easing
+  curve, then release the cap. Deliberately layout-SAFE: no QGraphicsEffect (those regressed
+  bubble width/word-wrap before), the empty streaming bubble is skipped (so live text isn't
+  clipped), and the cap always ends unbounded so a bubble can never be left collapsed.
+  Toggle: `bubble_animation`.
+- Opened EmberAI PR for the whole post-#42 range so all of this reaches `main`/the app.
+
 ## 🆕 Shipped this session — background wake, quieter chat, animated UI
 - **"Hey Ember" works with the window closed** — `app.setQuitOnLastWindowClosed(False)`;
   closing the window now hides Ember to the tray (one-time "still listening" notice) and

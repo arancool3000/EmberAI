@@ -313,7 +313,9 @@ def load_settings() -> dict:
         "voice_chat_phrase_timeout": 8,
         "wake_word": True,            # always-on "hey ember" wake listening
         "glow_animation": True,       # Siri-style flowing glow while listening/thinking/speaking
+        "bubble_animation": True,     # grow-in animation for new chat bubbles
         "keep_running_in_background": True,  # closing the window hides to tray so wake word keeps working
+        "launch_at_login": False,     # install a login item so Ember is always running for the wake word
         "ai_chat_titles": True,
         "dual_api_failover": True,
         "automation_enabled": True,
@@ -1847,6 +1849,19 @@ class SettingsDialog(QDialog):
             "listening for the wake word. Quit fully from the tray icon’s Quit.")
         layout.addRow(self.keep_bg_check)
 
+        self.launch_login_check = QCheckBox(
+            "Launch Ember at login & keep it running (true always-on “Hey Ember”)")
+        try:
+            import autostart
+            self.launch_login_check.setChecked(autostart.is_installed())
+        except Exception:
+            self.launch_login_check.setChecked(bool(self.settings.get("launch_at_login", False)))
+        self.launch_login_check.setToolTip(
+            "Installs a login item (macOS LaunchAgent / Windows Run key / Linux autostart) so "
+            "Ember starts at login and is always ready to hear the wake word.")
+        self.launch_login_check.stateChanged.connect(self._toggle_launch_at_login)
+        layout.addRow(self.launch_login_check)
+
         self.auto_update_check = QCheckBox(
             "Automatically check for Ember updates on launch")
         self.auto_update_check.setChecked(bool(self.settings.get("auto_update", True)))
@@ -2523,6 +2538,17 @@ class SettingsDialog(QDialog):
         except Exception as e:
             return f"Security Center: {e}"
 
+    def _toggle_launch_at_login(self, state):
+        on = bool(state)
+        self.settings["launch_at_login"] = on
+        try:
+            import autostart
+            r = autostart.set_enabled(on)
+            if not r.get("ok"):
+                QMessageBox.warning(self, "Launch at login", r.get("error", "failed"))
+        except Exception as e:
+            QMessageBox.warning(self, "Launch at login", str(e))
+
     def _refresh_security_center_lbl(self):
         try:
             self._sec_center_lbl.setText(self._security_center_summary())
@@ -2737,6 +2763,8 @@ class SettingsDialog(QDialog):
         self.settings["remote_autostart"] = self.remote_autostart_check.isChecked()
         if hasattr(self, "keep_bg_check"):
             self.settings["keep_running_in_background"] = self.keep_bg_check.isChecked()
+        if hasattr(self, "launch_login_check"):
+            self.settings["launch_at_login"] = self.launch_login_check.isChecked()
         self.settings["auto_update"] = self.auto_update_check.isChecked()
         self.settings["lean_tools"] = self.lean_tools_check.isChecked()
         if hasattr(self, "download_protect_check"):
@@ -4097,7 +4125,39 @@ class EmberWindow(QWidget):
         # Re-clamp once layout settles so a bubble added before geometry is known
         # (e.g. during init) doesn't sit at the wrong width.
         QTimer.singleShot(0, self._clamp_bubble_widths)
+        # Satisfying grow-in for real messages. NOT for the empty streaming bubble (it would
+        # clip incoming text) and NOT the height-fragile tool bubbles. The animation ends with
+        # maximumHeight unbounded, so even if the target height is off it can never stay collapsed.
+        if (text and text.strip() and kind not in ("tool",)
+                and self.settings.get("animations_enabled", True)
+                and self.settings.get("bubble_animation", True)):
+            frame.setMaximumHeight(0)
+            QTimer.singleShot(0, lambda f=frame: self._animate_bubble_in(f))
         return frame
+
+    def _animate_bubble_in(self, frame):
+        """Grow a new bubble in (0 -> natural height) with an easing curve, then release the
+        height cap. Layout-safe: no QGraphicsEffect (those regressed bubble width/word-wrap),
+        and the cap always ends unbounded so a bubble can never be left collapsed."""
+        QWIDGET_MAX = 16777215
+        try:
+            h = max(1, frame.sizeHint().height())
+            anim = QPropertyAnimation(frame, b"maximumHeight", self)
+            anim.setDuration(240)
+            anim.setStartValue(0)
+            anim.setEndValue(h)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda f=frame: f.setMaximumHeight(QWIDGET_MAX))
+            anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+            if not hasattr(self, "_anims"):
+                self._anims = []
+            self._anims.append(anim)
+            self._anims = self._anims[-50:]
+        except Exception:
+            try:
+                frame.setMaximumHeight(QWIDGET_MAX)
+            except Exception:
+                pass
 
     def _clamp_bubble_widths(self):
         """Size every bubble to the chat width. Inner labels get a FIXED width so their
