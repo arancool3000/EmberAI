@@ -2216,6 +2216,11 @@ class Agent:
         self._turn_lock = threading.Lock()
         self._turn_queue: list[str] = []
         self._busy = False
+        # Thinking is on by default (better tool selection), but Gemini's thinking models
+        # attach a thought_signature to every function call that must round-trip back. If a
+        # turn ever 400s for a missing thought_signature (e.g. history rebuilt across a key/
+        # model switch dropped it), we auto-disable thinking for the session to stay reliable.
+        self._thinking_enabled = True
         self._init_chat()
 
     def _make_client(self, api_key: str):
@@ -2291,10 +2296,11 @@ class Agent:
         # Let the model THINK before answering, so it reads the screen right the first time
         # and retries less. Fewer round-trips = fewer API requests (the free tier counts
         # requests/day, not tokens). Dynamic budget; guarded for models/SDKs without it.
-        try:
-            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
-        except Exception:
-            pass
+        if getattr(self, "_thinking_enabled", True):
+            try:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+            except Exception:
+                pass
         try:
             config = types.GenerateContentConfig(**config_kwargs)
         except TypeError:
@@ -2467,6 +2473,10 @@ class Agent:
         # 400 about function_response ordering = chat history is corrupted. Reset + retry.
         if "function response" in s.lower() and "function call" in s.lower():
             return True, 400
+        # 400 about a missing thought_signature (thinking models + tools). Recoverable:
+        # disable thinking for the session, reset, and retry.
+        if "thought_signature" in s.lower() or "thought signature" in s.lower():
+            return True, 400
         m = re.search(r"\b(429|500|502|503|504)\b", s)
         if m:
             return True, int(m.group(1))
@@ -2576,6 +2586,21 @@ class Agent:
                 self._bad_models.add(self.active_model)
                 reason = "does not exist (404)"
             elif status == 400:
+                low = str(e).lower()
+                if "thought_signature" in low or "thought signature" in low:
+                    # Thinking model + tools: a function call lost its required thought_signature
+                    # (often when history was rebuilt across a key/model switch). Turn thinking
+                    # OFF for the rest of the session so it can't recur, reset, and ask to resend.
+                    self._thinking_enabled = False
+                    try:
+                        self._init_chat()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        "That turn hit a Gemini thinking/tool-signature error and was "
+                        "auto-recovered (thinking is now off for this session for stability) — "
+                        "just send your request again."
+                    )
                 # Chat history desync mid-turn: the function_call context can't be replayed on a
                 # fresh chat, so we can't finish THIS turn. But auto-reset the history now so the
                 # user's NEXT message just works - no manual reset button needed.
