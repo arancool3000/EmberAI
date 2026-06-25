@@ -9,6 +9,29 @@ import traceback
 faulthandler.enable()
 
 
+def _ensure_valid_cwd():
+    """Guard against a deleted/invalid working directory.
+
+    If the process's current working directory no longer exists (the launch folder was
+    moved, renamed, or cleaned up — common with the unsigned-app / updater flow), any
+    library that internally calls os.getcwd() — httpx/anyio inside the model SDK — raises a
+    bare 'FileNotFoundError: [Errno 2] No such file or directory' (note: no filename). That
+    surfaced as 'Agent init failed — check your API key'. Repair it by switching to a
+    directory that is guaranteed to exist."""
+    import os
+    try:
+        os.getcwd()
+        return
+    except Exception:
+        pass
+    for d in (os.path.expanduser("~"), "/"):
+        try:
+            os.chdir(d)
+            return
+        except Exception:
+            continue
+
+
 def _set_taskbar_app_id():
     """Tell Windows that this process is its own app (not just generic pythonw.exe).
     Required so the taskbar groups Ember separately, uses the Ember icon, and lets
@@ -53,6 +76,7 @@ def _reset_tcc_if_new_build():
 
 if __name__ == "__main__":
     try:
+        _ensure_valid_cwd()   # repair a deleted CWD before anything calls os.getcwd()
         _set_taskbar_app_id()
         # If this is a freshly-built .app, clear stale macOS permission grants so they re-prompt.
         _reset_tcc_if_new_build()

@@ -267,7 +267,8 @@ def _md_to_html(text: str) -> str:
     return s
 
 
-_VAULT_KEYS = ("gemini_api_key", "gemini_api_key_secondary", "anthropic_api_key")
+_VAULT_KEYS = ("gemini_api_key", "gemini_api_key_secondary", "gemini_api_key_3",
+               "gemini_api_key_4", "anthropic_api_key")
 
 
 def _hydrate_keys_from_vault(settings: dict) -> dict:
@@ -295,6 +296,8 @@ def load_settings() -> dict:
     return {
         "gemini_api_key": "",
         "gemini_api_key_secondary": "",
+        "gemini_api_key_3": "",
+        "gemini_api_key_4": "",
         "gemini_model": "gemini-3.1-flash-lite",
         "model_id": "gemini-3.1-flash-lite",
         "provider": "gemini",
@@ -1216,6 +1219,7 @@ class EventBridge(QObject):
     agent_ready = pyqtSignal()  # emitted from a worker thread once google.genai is imported
     update_available = pyqtSignal(object)  # emitted from the background update-check thread
     notice = pyqtSignal(str)  # post a one-line system bubble from a background thread
+    source_updated = pyqtSignal(str)  # a git source checkout fast-forwarded to a new version
 
 
 class MiniPill(QWidget):
@@ -1546,9 +1550,19 @@ class SettingsDialog(QDialog):
         self.gemini_key_secondary_input = QLineEdit(self.settings.get("gemini_api_key_secondary", ""))
         self.gemini_key_secondary_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.gemini_key_secondary_input.setPlaceholderText("Optional backup key for same-model failover")
-        layout.addRow("Backup Gemini key:", self.gemini_key_secondary_input)
+        layout.addRow("Backup Gemini key 1:", self.gemini_key_secondary_input)
 
-        self.dual_api_check = QCheckBox("If Gemini is rate-limited, retry the same model with the backup key")
+        self.gemini_key_3_input = QLineEdit(self.settings.get("gemini_api_key_3", ""))
+        self.gemini_key_3_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gemini_key_3_input.setPlaceholderText("Optional 2nd backup key")
+        layout.addRow("Backup Gemini key 2:", self.gemini_key_3_input)
+
+        self.gemini_key_4_input = QLineEdit(self.settings.get("gemini_api_key_4", ""))
+        self.gemini_key_4_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gemini_key_4_input.setPlaceholderText("Optional 3rd backup key")
+        layout.addRow("Backup Gemini key 3:", self.gemini_key_4_input)
+
+        self.dual_api_check = QCheckBox("If Gemini is rate-limited, rotate through the backup keys")
         self.dual_api_check.setChecked(bool(self.settings.get("dual_api_failover", True)))
         layout.addRow(self.dual_api_check)
 
@@ -2653,6 +2667,8 @@ class SettingsDialog(QDialog):
     def get_settings(self) -> dict:
         self.settings["gemini_api_key"] = self.gemini_key_input.text().strip()
         self.settings["gemini_api_key_secondary"] = self.gemini_key_secondary_input.text().strip()
+        self.settings["gemini_api_key_3"] = self.gemini_key_3_input.text().strip()
+        self.settings["gemini_api_key_4"] = self.gemini_key_4_input.text().strip()
         self.settings["dual_api_failover"] = self.dual_api_check.isChecked()
         self.settings["ai_chat_titles"] = self.ai_titles_check.isChecked()
         self.settings["anthropic_api_key"] = self.anthropic_key_input.text().strip()
@@ -2774,6 +2790,7 @@ class EmberWindow(QWidget):
         self._bridge.agent_ready.connect(self._build_agent)
         self._bridge.update_available.connect(self._on_update_available)
         self._bridge.notice.connect(lambda m: self._add_bubble("system", m))
+        self._bridge.source_updated.connect(self._on_source_updated)
         self._pending_update: dict | None = None
         # macOS never auto-prompts for Accessibility — explicitly request it shortly after launch.
         if not _SAFE_MODE:
@@ -3734,7 +3751,8 @@ class EmberWindow(QWidget):
             return
         if not bool(self.settings.get("ai_chat_titles", True)):
             return
-        key = (self.settings.get("gemini_api_key") or self.settings.get("gemini_api_key_secondary") or "").strip()
+        key = (self.settings.get("gemini_api_key") or self.settings.get("gemini_api_key_secondary")
+               or self.settings.get("gemini_api_key_3") or self.settings.get("gemini_api_key_4") or "").strip()
         if not key:
             return
         self._title_jobs.add(chat_id)
@@ -4087,9 +4105,25 @@ class EmberWindow(QWidget):
 
     def _submit_user_text(self, text: str, meta: str | None = None, status: str = "Thinking...") -> bool:
         if not self.agent:
-            QMessageBox.warning(self, "No API key", "Open settings (gear) and add your Gemini API key first.")
-            self._open_settings()
-            return False
+            # A key IS configured -> the agent likely failed to init earlier (e.g. the
+            # working-dir / FileNotFound issue). Try to rebuild it before nagging about a key.
+            has_key = bool(self.settings.get("gemini_api_key") or self.settings.get("anthropic_api_key")
+                           or (self.settings.get("provider") == "ollama"))
+            if has_key:
+                try:
+                    self._build_agent()
+                except Exception:
+                    pass
+            if not self.agent:
+                if has_key:
+                    QMessageBox.warning(self, "Ember isn't ready yet",
+                        "The agent didn't start. Give it a moment and try again, or restart "
+                        "Ember. (If you just added a key, reopen Settings and re-save.)")
+                else:
+                    QMessageBox.warning(self, "No API key",
+                        "Open settings (gear) and add your Gemini API key first.")
+                    self._open_settings()
+                return False
         text = (text or "").strip()
         if not text:
             return False
@@ -4163,53 +4197,41 @@ class EmberWindow(QWidget):
         return True
 
     def _run_slash(self, cmd: str):
-        if cmd == "__voice_chat__":
-            self._toggle_voice_chat()
+        # Map each Command-Center feature token to its opener. Anything not here is a
+        # "quick task" that gets typed into the box and sent to the agent.
+        features = {
+            "__voice_chat__": self._toggle_voice_chat,
+            "__manual__": self._open_manual_mode,
+            "__remote__": self._start_remote_control,
+            "__browser_app__": self._open_ember_browser,
+            "__scan_folder__": self._scan_folder,
+            "__sandbox__": self._run_in_sandbox_ui,
+            "__update__": self._start_update,
+            "__usage__": self._show_usage_dashboard,
+            "__plugins__": self._open_plugins_manager,
+            "__passwords__": self._open_passwords_manager,
+            "__vpn__": self._open_vpn_manager,
+            "__workflow__": self._open_workflow_recorder,
+            "__screen_record__": self._open_screen_recorder,
+            "__snippets__": self._open_snippets_manager,
+            "__macros__": self._open_macros_manager,
+            "__local_ai__": self._open_local_ai,
+        }
+        handler = features.get(cmd)
+        if handler is not None:
+            # Surface any failure instead of letting the button silently do nothing
+            # (a raised exception in a Qt slot is otherwise swallowed -> "dead button").
+            try:
+                handler()
+            except Exception as e:
+                traceback.print_exc()
+                QMessageBox.warning(self, "Couldn't open that",
+                                    f"{type(e).__name__}: {e}")
             return
-        if cmd == "__manual__":
-            self._open_manual_mode()
-            return
-        if cmd == "__remote__":
-            self._start_remote_control()
-            return
-        if cmd == "__browser_app__":
-            self._open_ember_browser()
-            return
-        if cmd == "__scan_folder__":
-            self._scan_folder()
-            return
-        if cmd == "__sandbox__":
-            self._run_in_sandbox_ui()
-            return
-        if cmd == "__update__":
-            self._start_update()
-            return
-        if cmd == "__usage__":
-            self._show_usage_dashboard()
-            return
-        if cmd == "__plugins__":
-            self._open_plugins_manager()
-            return
-        if cmd == "__passwords__":
-            self._open_passwords_manager()
-            return
-        if cmd == "__vpn__":
-            self._open_vpn_manager()
-            return
-        if cmd == "__workflow__":
-            self._open_workflow_recorder()
-            return
-        if cmd == "__screen_record__":
-            self._open_screen_recorder()
-            return
-        if cmd == "__snippets__":
-            self._open_snippets_manager()
-            return
-        if cmd == "__macros__":
-            self._open_macros_manager()
-            return
-        if cmd == "__local_ai__":
-            self._open_local_ai()
+        if cmd.startswith("__"):
+            # An unknown feature token would otherwise be typed to the agent as gibberish.
+            QMessageBox.information(self, "Not available",
+                                   f"That feature isn't available in this build ({cmd}).")
             return
         self.input_box.setPlainText(cmd)
         self._on_send()
@@ -4755,9 +4777,10 @@ class EmberWindow(QWidget):
         threading.Thread(target=_work, daemon=True).start()
 
     def _git_self_update(self):
-        """If Ember runs from a git checkout (source/dev), fast-forward to the latest commit
-        on launch so it stays current without a manual 'git pull'. Background + silent; only
-        fast-forwards (never clobbers local edits)."""
+        """If Ember runs from a git checkout (source/dev), fetch + fast-forward to the latest
+        commit on EVERY launch so it always has the newest features without a manual 'git pull'.
+        Background + silent; only fast-forwards (never clobbers local edits). When it actually
+        advances, it offers a one-click restart so the new code goes live."""
         if getattr(sys, "frozen", False):
             return
         import shutil
@@ -4765,18 +4788,98 @@ class EmberWindow(QWidget):
         if not (base / ".git").exists() or not shutil.which("git"):
             return
 
+        def _head():
+            try:
+                import subprocess
+                r = subprocess.run(["git", "-C", str(base), "rev-parse", "HEAD"],
+                                   capture_output=True, text=True, timeout=20)
+                return (r.stdout or "").strip()
+            except Exception:
+                return ""
+
         def _work():
             try:
                 import subprocess
-                r = subprocess.run(["git", "-C", str(base), "pull", "--ff-only"],
-                                   capture_output=True, text=True, timeout=90)
-                out = ((r.stdout or "") + (r.stderr or "")).strip()
-                if r.returncode == 0 and "up to date" not in out.lower():
-                    self._bridge.notice.emit(
-                        "⬆️ Updated Ember to the latest version — **restart Ember** to apply.")
+                before = _head()
+                # Fetch first so the fast-forward sees the very latest remote commits.
+                subprocess.run(["git", "-C", str(base), "fetch", "--quiet"],
+                               capture_output=True, text=True, timeout=90)
+                subprocess.run(["git", "-C", str(base), "pull", "--ff-only"],
+                               capture_output=True, text=True, timeout=120)
+                after = _head()
+                if before and after and before != after:
+                    self._bridge.source_updated.emit(after[:8])
             except Exception:
                 pass
         threading.Thread(target=_work, daemon=True).start()
+
+    def _on_source_updated(self, rev: str):
+        """A source checkout fast-forwarded to newer code on launch. Offer to restart now so
+        the new features take effect (Python source can't hot-reload). Asked at most once."""
+        if getattr(self, "_source_update_prompted", False):
+            return
+        self._source_update_prompted = True
+        box = QMessageBox(self)
+        box.setWindowTitle("Ember updated")
+        box.setText(f"Ember fetched the latest version ({rev}).")
+        box.setInformativeText("Restart now to use the new features?")
+        restart = box.addButton("Restart now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is restart:
+            if not self._relaunch_source():
+                QMessageBox.information(self, "Restart needed",
+                                       "Please quit and reopen Ember to load the update.")
+
+    def _relaunch_source(self) -> bool:
+        """Relaunch a source/dev checkout safely: a detached helper waits for THIS process to
+        exit (which frees the single-instance port) and then starts Ember again."""
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        base = _base_dir()
+        pid = os.getpid()
+        try:
+            if sys.platform.startswith("win"):
+                launcher = base / "run.bat"
+                target = (f'"{launcher}"' if launcher.exists()
+                          else f'"{sys.executable}" "{base / "main.py"}"')
+                bat = ("@echo off\r\n:w\r\n"
+                       f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL '
+                       f'&& (timeout /t 1 /nobreak >NUL & goto w)\r\n'
+                       "timeout /t 1 /nobreak >NUL\r\n"
+                       f'cd /d "{base}"\r\n'
+                       f'start "" {target}\r\n'
+                       'del "%~f0"\r\n')
+                hp = Path(tempfile.mkdtemp(prefix="ember_relaunch_")) / "relaunch.bat"
+                hp.write_text(bat, encoding="utf-8")
+                DETACHED = 0x00000008 | 0x00000200 | 0x08000000
+                subprocess.Popen(["cmd", "/c", str(hp)], creationflags=DETACHED, close_fds=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                import shlex
+                launcher = base / ("Ember.command" if sys.platform == "darwin" else "run.sh")
+                if launcher.exists():
+                    run = f"exec {shlex.quote(str(launcher))}"
+                else:
+                    run = f"exec {shlex.quote(sys.executable)} {shlex.quote(str(base / 'main.py'))}"
+                sh = ("#!/bin/bash\n"
+                      f"while /bin/kill -0 {pid} 2>/dev/null; do sleep 0.4; done\n"
+                      "sleep 0.5\n"
+                      f"cd {shlex.quote(str(base))}\n"
+                      f"{run}\n")
+                hp = Path(tempfile.mkdtemp(prefix="ember_relaunch_")) / "relaunch.sh"
+                hp.write_text(sh)
+                hp.chmod(0o755)
+                subprocess.Popen(["/bin/bash", str(hp)], start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            from PyQt6.QtWidgets import QApplication
+            QTimer.singleShot(200, QApplication.quit)
+            return True
+        except Exception:
+            traceback.print_exc()
+            return False
 
     def _on_update_available(self, manifest: dict):
         """A newer release is available. With auto-update on (default) install it now;
@@ -4912,6 +5015,7 @@ class EmberWindow(QWidget):
         # Snapshot the keys the agent / glass effect actually depend on, so we only rebuild
         # them when relevant — a font or appearance tweak shouldn't drop conversation state.
         agent_keys = ("model_id", "provider", "gemini_api_key", "gemini_api_key_secondary",
+                      "gemini_api_key_3", "gemini_api_key_4",
                       "anthropic_api_key", "anthropic_model", "gemini_model",
                       "auto_screenshot", "request_timeout_seconds", "dual_api_failover")
         glass_keys = ("liquid_glass", "glass_opacity", "accent_color")
@@ -5006,6 +5110,18 @@ class EmberWindow(QWidget):
         threading.Thread(target=_warm, daemon=True).start()
 
     def _build_agent(self):
+        import os
+        # A deleted/invalid working directory makes os.getcwd() (called internally by the
+        # model SDK's httpx/anyio) raise a bare FileNotFoundError — which used to show up here
+        # as "Agent init failed". Repair it before constructing the client.
+        try:
+            os.getcwd()
+        except Exception:
+            for _d in (os.path.expanduser("~"), "/"):
+                try:
+                    os.chdir(_d); break
+                except Exception:
+                    continue
         from agent import Agent  # already warm from the background thread -> fast here
         model_id = self.settings.get("model_id") or self.settings.get("gemini_model") or "gemini-3.1-flash-lite"
         provider = self.settings.get("provider") or model_catalog.provider_for(model_id)
@@ -5034,6 +5150,8 @@ class EmberWindow(QWidget):
                 self.agent = Agent(
                     api_key=self.settings["gemini_api_key"],
                     secondary_api_key=self.settings.get("gemini_api_key_secondary") or None,
+                    backup_api_keys=[self.settings.get("gemini_api_key_3") or "",
+                                     self.settings.get("gemini_api_key_4") or ""],
                     dual_api_failover=bool(self.settings.get("dual_api_failover", True)),
                     model_name=model_id,
                     anthropic_key=self.settings.get("anthropic_api_key") or None,
@@ -5045,7 +5163,18 @@ class EmberWindow(QWidget):
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
             self._set_status(f"Ready ({model_id})")
         except Exception as e:
-            QMessageBox.critical(self, "Agent init failed", f"{type(e).__name__}: {e}\n\nCheck your API key and model name.")
+            # Only blame the key/model for actual auth/model errors; other failures
+            # (e.g. a transient FileNotFoundError) get a generic hint instead of a wrong one.
+            es = str(e).lower()
+            if isinstance(e, FileNotFoundError) or "errno 2" in es:
+                hint = ("A file/path the app expected was missing (often a stale working "
+                        "directory). Restarting Ember usually fixes it.")
+            elif any(t in es for t in ("api key", "api_key", "unauthorized", "permission",
+                                       "401", "403", "not found", "404", "model")):
+                hint = "Check your API key and model name in Settings (gear)."
+            else:
+                hint = "Try again, or restart Ember. Open Settings (gear) to check your key/model."
+            QMessageBox.critical(self, "Agent init failed", f"{type(e).__name__}: {e}\n\n{hint}")
             self._set_status("Agent init failed")
 
     def _should_speak_reply(self) -> bool:

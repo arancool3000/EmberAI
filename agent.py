@@ -2158,6 +2158,7 @@ class Agent:
 
     def __init__(self, api_key: str, model_name: str = "gemini-3.1-flash-lite",
                  secondary_api_key: str | None = None,
+                 backup_api_keys: list[str] | None = None,
                  dual_api_failover: bool = True,
                  anthropic_key: str | None = None,
                  anthropic_model: str = "claude-opus-4-8",
@@ -2168,12 +2169,24 @@ class Agent:
         self.lean_tools = bool(lean_tools)
         # Strip ALL whitespace from keys (incl. accidental newlines from a bad paste) so a key
         # can never become an illegal HTTP header value (LocalProtocolError).
-        self.api_key = "".join((api_key or "").split())
-        self.secondary_api_key = "".join((secondary_api_key or "").split()) or None
+        def _clean(k):
+            return "".join((k or "").split())
+        self.api_key = _clean(api_key)
+        self.secondary_api_key = _clean(secondary_api_key) or None
         self.dual_api_failover = bool(dual_api_failover)
+        # Build the ordered failover chain: primary first, then each backup key, de-duplicated
+        # and stripped of blanks. Supports a primary + up to several Gemini backup keys, so when
+        # one key is rate-limited Ember rotates to the next instead of stalling.
         self.api_keys = [self.api_key]
-        if self.dual_api_failover and self.secondary_api_key and self.secondary_api_key != self.api_key:
-            self.api_keys.append(self.secondary_api_key)
+        if self.dual_api_failover:
+            candidates = []
+            if self.secondary_api_key:
+                candidates.append(self.secondary_api_key)
+            for k in (backup_api_keys or []):
+                candidates.append(_clean(k))
+            for k in candidates:
+                if k and k not in self.api_keys:
+                    self.api_keys.append(k)
         self._api_key_index = 0
         self.model_name = model_name
         self.active_model = model_name
@@ -2199,6 +2212,15 @@ class Agent:
             self.run_mode = "auto"
         self._active_tool_scope = None     # None = all tools; else a set of allowed names
         self._spawn_depth = 0              # guards sub-agent recursion
+        # Serialize turns: the chat object isn't thread-safe, so overlapping turns must queue.
+        self._turn_lock = threading.Lock()
+        self._turn_queue: list[str] = []
+        self._busy = False
+        # Thinking is on by default (better tool selection), but Gemini's thinking models
+        # attach a thought_signature to every function call that must round-trip back. If a
+        # turn ever 400s for a missing thought_signature (e.g. history rebuilt across a key/
+        # model switch dropped it), we auto-disable thinking for the session to stay reliable.
+        self._thinking_enabled = True
         self._init_chat()
 
     def _make_client(self, api_key: str):
@@ -2257,8 +2279,13 @@ class Agent:
         # Speed-tuned generation:
         #  - low temperature for faster, more deterministic tool selection
         #  - cap output tokens (most responses are short text + tool calls)
+        try:
+            _sys_prompt = build_system_prompt()
+        except Exception:
+            # Never let a transient error reading memory/system context abort agent init.
+            _sys_prompt = BASE_SYSTEM_PROMPT
         config_kwargs = dict(
-            system_instruction=build_system_prompt(),
+            system_instruction=_sys_prompt,
             tools=[tool_obj],
             safety_settings=_make_safety_settings(),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
@@ -2269,10 +2296,11 @@ class Agent:
         # Let the model THINK before answering, so it reads the screen right the first time
         # and retries less. Fewer round-trips = fewer API requests (the free tier counts
         # requests/day, not tokens). Dynamic budget; guarded for models/SDKs without it.
-        try:
-            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
-        except Exception:
-            pass
+        if getattr(self, "_thinking_enabled", True):
+            try:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+            except Exception:
+                pass
         try:
             config = types.GenerateContentConfig(**config_kwargs)
         except TypeError:
@@ -2301,6 +2329,12 @@ class Agent:
 
     def stop(self):
         self._stop_flag.set()
+        # Drop any queued (not-yet-started) turns so a stop really stops everything.
+        try:
+            with self._turn_lock:
+                self._turn_queue.clear()
+        except Exception:
+            pass
 
     def subscribe(self, fn: Callable[[AgentEvent], None]):
         self._event_subs.append(fn)
@@ -2313,8 +2347,34 @@ class Agent:
                 traceback.print_exc()
 
     def send_user_message(self, text: str):
-        t = threading.Thread(target=self._run_turn, args=(text,), daemon=True)
-        t.start()
+        """Queue a user turn. Turns run ONE AT A TIME — the Gemini chat object is not
+        thread-safe, so firing overlapping turns (e.g. hitting Enter again while a slow or
+        rate-limited turn is still running) corrupted history and made Ember hang / stop
+        replying. Extra messages now queue and run in order instead of racing."""
+        start_worker = False
+        with self._turn_lock:
+            self._turn_queue.append(text)
+            if not self._busy:
+                self._busy = True
+                start_worker = True
+        if start_worker:
+            threading.Thread(target=self._turn_worker, daemon=True).start()
+
+    def _turn_worker(self):
+        while True:
+            with self._turn_lock:
+                if not self._turn_queue:
+                    self._busy = False
+                    return
+                text = self._turn_queue.pop(0)
+            try:
+                self._run_turn(text)   # emits its own "done" in a finally
+            except Exception as e:
+                try:
+                    self._emit(AgentEvent("error", f"{type(e).__name__}: {str(e)[:400]}"))
+                    self._emit(AgentEvent("done"))
+                except Exception:
+                    pass
 
     def _image_part(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> types.Part:
         return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
@@ -2412,6 +2472,10 @@ class Agent:
             return True, 404
         # 400 about function_response ordering = chat history is corrupted. Reset + retry.
         if "function response" in s.lower() and "function call" in s.lower():
+            return True, 400
+        # 400 about a missing thought_signature (thinking models + tools). Recoverable:
+        # disable thinking for the session, reset, and retry.
+        if "thought_signature" in s.lower() or "thought signature" in s.lower():
             return True, 400
         m = re.search(r"\b(429|500|502|503|504)\b", s)
         if m:
@@ -2522,6 +2586,21 @@ class Agent:
                 self._bad_models.add(self.active_model)
                 reason = "does not exist (404)"
             elif status == 400:
+                low = str(e).lower()
+                if "thought_signature" in low or "thought signature" in low:
+                    # Thinking model + tools: a function call lost its required thought_signature
+                    # (often when history was rebuilt across a key/model switch). Turn thinking
+                    # OFF for the rest of the session so it can't recur, reset, and ask to resend.
+                    self._thinking_enabled = False
+                    try:
+                        self._init_chat()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        "That turn hit a Gemini thinking/tool-signature error and was "
+                        "auto-recovered (thinking is now off for this session for stability) — "
+                        "just send your request again."
+                    )
                 # Chat history desync mid-turn: the function_call context can't be replayed on a
                 # fresh chat, so we can't finish THIS turn. But auto-reset the history now so the
                 # user's NEXT message just works - no manual reset button needed.
@@ -2860,7 +2939,7 @@ class Agent:
 
         def _relay(ev):
             try:
-                if ev.type == "message" and isinstance(ev.payload, str):
+                if ev.kind == "message" and isinstance(ev.payload, str):
                     transcript.append(ev.payload)
             except Exception:
                 pass
