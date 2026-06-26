@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QSizePolicy, QSystemTrayIcon, QMenu,
     QComboBox, QCheckBox, QTabWidget, QListWidget, QListWidgetItem,
     QInputDialog, QFileDialog, QGraphicsOpacityEffect, QGraphicsDropShadowEffect,
-    QSlider, QLayout, QGroupBox,
+    QSlider, QLayout, QGroupBox, QProgressBar,
 )
 
 import models as model_catalog
@@ -606,6 +606,7 @@ class EventBridge(QObject):
     notice = pyqtSignal(str)  # post a one-line system bubble from a background thread
     source_updated = pyqtSignal(str)  # a git source checkout fast-forwarded to a new version
     wake_detected = pyqtSignal()  # the "hey ember" wake word was heard (from the wake thread)
+    download_alert = pyqtSignal(object)  # a downloaded file was a threat / cautionary executable
 
 
 class MiniPill(QWidget):
@@ -2418,15 +2419,18 @@ class AntivirusDialog(QDialog):
     protection toggles, process scan and sandbox — all in one window instead of buried in
     Settings. Scans run off the UI thread and report back via _scan_done."""
     _scan_done = pyqtSignal(dict)
+    _progress_sig = pyqtSignal(int, int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         import antivirus
         self._av = antivirus
         self._settings = getattr(parent, "settings", {}) or {}
+        self._last_flagged = []   # threats from the latest scan (for the actions panel)
         self.setWindowTitle("Ember Antivirus")
-        self.setMinimumSize(700, 640)
+        self.setMinimumSize(720, 720)
         self._scan_done.connect(self._on_scan_done)
+        self._progress_sig.connect(self._on_progress)
 
         v = QVBoxLayout(self)
         title = QLabel("🛡  Ember Antivirus")
@@ -2453,6 +2457,34 @@ class AntivirusDialog(QDialog):
         self._progress = QLabel("")
         self._progress.setStyleSheet("color:#e0af68; font-size:12px;")
         v.addWidget(self._progress)
+        self._bar = QProgressBar()
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(6)
+        self._bar.setVisible(False)
+        v.addWidget(self._bar)
+
+        # --- Threats found (Norton-style: per-item Quarantine / Delete / Ignore) ---
+        th = QLabel("Threats found")
+        th.setObjectName("sectionTitle")
+        th.setStyleSheet("color:#ff6b6b; font-weight:600; margin-top:8px;")
+        v.addWidget(th)
+        self._threats_list = QListWidget()
+        self._threats_list.setMaximumHeight(150)
+        v.addWidget(self._threats_list)
+        trow = QHBoxLayout()
+        qb = QPushButton("🔒 Quarantine")
+        qb.clicked.connect(self._quarantine_threat)
+        xb = QPushButton("🗑 Delete")
+        xb.clicked.connect(self._delete_threat)
+        ib = QPushButton("Ignore")
+        ib.clicked.connect(self._ignore_threat)
+        qa = QPushButton("Quarantine ALL")
+        qa.clicked.connect(self._quarantine_all)
+        for b in (qb, xb, ib):
+            trow.addWidget(b)
+        trow.addStretch()
+        trow.addWidget(qa)
+        v.addLayout(trow)
 
         rt = QLabel("Real-time protection")
         rt.setObjectName("sectionTitle")
@@ -2553,12 +2585,20 @@ class AntivirusDialog(QDialog):
             self._run_scan(roots)
 
     def _run_scan(self, paths):
-        self._progress.setText("🔄 Scanning… (this can take a moment)")
+        self._progress.setText("🔄 Starting scan…")
+        self._bar.setRange(0, 0)          # indeterminate until first progress tick
+        self._bar.setVisible(True)
+        self._threats_list.clear()
+        self._last_flagged = []
+
+        def _prog(scanned, flagged, cur):
+            self._progress_sig.emit(scanned, flagged, cur)
+
         def work():
             agg = {"scanned": 0, "flagged": [], "errors": []}
             for p in paths:
                 try:
-                    r = self._av.scan_directory(p, deep=True, max_files=5000)
+                    r = self._av.scan_directory(p, deep=True, max_files=5000, progress=_prog)
                     if r.get("ok"):
                         agg["scanned"] += r.get("scanned", 0)
                         agg["flagged"] += r.get("flagged", []) or []
@@ -2568,6 +2608,12 @@ class AntivirusDialog(QDialog):
                     agg["errors"].append(str(e))
             self._scan_done.emit(agg)
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_progress(self, scanned, flagged, cur):
+        # Live progress data instead of a beachball.
+        self._bar.setRange(0, 0)
+        name = Path(cur).name if cur else ""
+        self._progress.setText(f"🔄 Scanned {scanned} files · {flagged} flagged   {name[:48]}")
 
     def _on_scan_done(self, agg):
         self._progress.setText("")
@@ -2599,19 +2645,78 @@ class AntivirusDialog(QDialog):
                     f"Ran via {r.get('method', 'sandbox')} · verdict: {r.get('verdict_hint', '?')} · "
                     f"exit {r.get('exit_code')}")
             return
+        # Folder scan finished — populate the Threats panel (Norton-style) with actions.
+        self._bar.setVisible(False)
         flagged = agg.get("flagged", [])
+        self._last_flagged = list(flagged)
+        self._threats_list.clear()
         mal = [f for f in flagged if f.get("verdict") == "malicious"]
-        msg = f"Scanned {agg.get('scanned', 0)} files.\n"
         if flagged:
-            msg += f"⚠ {len(flagged)} flagged ({len(mal)} malicious — quarantined, rest suspicious)."
-            sample = "\n".join(f"• {Path(f['path']).name}: {f.get('verdict')}" for f in flagged[:12])
-            msg += "\n\n" + sample
+            self._progress.setText(
+                f"⚠ {len(flagged)} threat(s) found in {agg.get('scanned', 0)} files "
+                f"({len(mal)} malicious). Select one and choose an action below.")
+            for f in flagged:
+                reasons = "; ".join(f.get("reasons", []) or [])[:90]
+                icon = "🟥" if f.get("verdict") == "malicious" else "🟧"
+                item = QListWidgetItem(f"{icon} {Path(f['path']).name}  —  {f.get('verdict')}  ·  {reasons}")
+                item.setData(Qt.ItemDataRole.UserRole, f["path"])
+                item.setToolTip(f["path"])
+                self._threats_list.addItem(item)
         else:
-            msg += "✓ No threats found."
+            self._progress.setText(f"✓ Scanned {agg.get('scanned', 0)} files — no threats found.")
         if agg.get("errors"):
-            msg += "\n\n(errors: " + "; ".join(agg["errors"][:3]) + ")"
-        QMessageBox.information(self, "Scan complete", msg)
+            self._progress.setText(self._progress.text() + "  (some errors occurred)")
         self._refresh()
+
+    def _selected_threat_path(self):
+        it = self._threats_list.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it else None
+
+    def _quarantine_threat(self):
+        path = self._selected_threat_path()
+        if not path:
+            return
+        r = self._av.quarantine_file(path, reasons=["quarantined from Antivirus app"])
+        if r.get("ok"):
+            self._take_threat_row()
+            self._refresh()
+        else:
+            QMessageBox.warning(self, "Quarantine", r.get("error", "could not quarantine"))
+
+    def _quarantine_all(self):
+        if not self._last_flagged:
+            return
+        n = 0
+        for f in list(self._last_flagged):
+            if self._av.quarantine_file(f["path"], reasons=f.get("reasons")).get("ok"):
+                n += 1
+        self._threats_list.clear()
+        self._last_flagged = []
+        self._refresh()
+        QMessageBox.information(self, "Quarantine", f"Quarantined {n} item(s).")
+
+    def _delete_threat(self):
+        path = self._selected_threat_path()
+        if not path:
+            return
+        if QMessageBox.question(self, "Delete file",
+                f"Permanently delete this file?\n\n{path}") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            Path(path).unlink()
+            self._take_threat_row()
+        except Exception as e:
+            QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
+
+    def _ignore_threat(self):
+        self._take_threat_row()
+
+    def _take_threat_row(self):
+        row = self._threats_list.currentRow()
+        if row >= 0:
+            it = self._threats_list.takeItem(row)
+            p = it.data(Qt.ItemDataRole.UserRole) if it else None
+            self._last_flagged = [f for f in self._last_flagged if f.get("path") != p]
 
     def _scan_processes(self):
         self._progress.setText("🔄 Scanning running processes…")
@@ -2680,6 +2785,7 @@ class EmberWindow(QWidget):
         self._bridge.notice.connect(lambda m: self._add_bubble("system", m))
         self._bridge.source_updated.connect(self._on_source_updated)
         self._bridge.wake_detected.connect(self._on_wake_word)
+        self._bridge.download_alert.connect(self._on_download_alert)
         self._pending_update: dict | None = None
         # macOS never auto-prompts for Accessibility — explicitly request it shortly after launch.
         if not _SAFE_MODE:
@@ -4744,6 +4850,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         background. Best-effort and failure-silent so it never blocks the app."""
         try:
             import download_guard
+            # Surface threats/cautionary downloads (the watcher used to only log them silently).
+            download_guard.set_on_threat(lambda evt: self._bridge.download_alert.emit(evt))
             r = download_guard.start()
             if r.get("ok"):
                 print(f"[Download protection on: watching {r.get('folder')}]")
@@ -4751,6 +4859,44 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 print(f"[Download protection failed: {r.get('error')}]")
         except Exception as e:
             print(f"[Download protection autostart failed: {e}]")
+
+    def _on_download_alert(self, evt: dict):
+        """A downloaded file was flagged (or is a cautionary executable). Toast + offer to
+        quarantine/delete — runs on the UI thread (marshalled via the bridge)."""
+        try:
+            name = evt.get("name", "a file")
+            detail = evt.get("detail", "")
+            level = evt.get("level", "caution")
+            tray = getattr(self, "_tray", None)
+            if tray is not None:
+                try:
+                    tray.showMessage(
+                        ("⚠ Threat in your download" if level == "threat" else "Download warning"),
+                        f"{name}\n{detail}", QSystemTrayIcon.MessageIcon.Warning, 6000)
+                except Exception:
+                    pass
+            self._add_bubble("system" if level == "caution" else "error",
+                             f"🛡 Download protection: **{name}** — {detail}")
+            path = evt.get("path")
+            if path and Path(path).exists():
+                box = QMessageBox(self)
+                box.setWindowTitle("Download protection")
+                box.setText(f"{name}\n\n{detail}")
+                qb = box.addButton("Quarantine", QMessageBox.ButtonRole.AcceptRole)
+                db = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+                box.addButton("Keep", QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is qb:
+                    import antivirus
+                    antivirus.quarantine_file(path, reasons=[detail])
+                elif clicked is db:
+                    try:
+                        Path(path).unlink()
+                    except Exception as e:
+                        QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
+        except Exception:
+            traceback.print_exc()
 
     def _autostart_fileless_protection(self):
         """Start always-on fileless / behavioral malware protection (the background

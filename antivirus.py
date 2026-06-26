@@ -207,6 +207,55 @@ _BENIGN_LOOKING_EXTS = {
     ".mp3", ".mp4", ".mov", ".csv", ".html", ".htm", ".md", ".json", ".xml",
 }
 
+# Inherently high-entropy CONTAINERS / compressed media. Their entropy is ALWAYS ~8 bits/byte,
+# so "high entropy" means nothing here — scanning it just produced false positives on every
+# .dmg / .zip installer. Excluded from the entropy heuristic.
+_COMPRESSED_EXTS = {
+    ".dmg", ".pkg", ".zip", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".7z", ".rar",
+    ".jar", ".apk", ".iso", ".cab", ".lz", ".lzma", ".br", ".whl", ".egg",
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".mp3", ".m4a", ".aac", ".flac", ".ogg",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".pdf", ".woff", ".woff2", ".ttf",
+}
+
+# Only these file types are scanned for script/IOC malware indicators. Scanning prose/data
+# (.md/.txt/.pdf) or binaries for indicator STRINGS just flagged security docs and the
+# scanner's own signature database — a huge false-positive source.
+_SCRIPT_EXTS = {
+    ".ps1", ".psm1", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".hta", ".sh", ".bash", ".zsh", ".command", ".py", ".pyw", ".pl", ".rb", ".php",
+    ".scpt", ".reg", ".lnk",
+}
+
+
+def _ember_own_dirs() -> list:
+    """Directories that ARE Ember itself — never flag our own code/signature DB/tests
+    (that's why antivirus.py, test_*.py, README, etc. lit up as 'malware')."""
+    dirs = []
+    try:
+        dirs.append(Path(__file__).resolve().parent)
+    except Exception:
+        pass
+    try:
+        if getattr(sys, "frozen", False):
+            dirs.append(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+    return dirs
+
+
+def _is_ember_own(p: Path) -> bool:
+    try:
+        rp = p.resolve()
+        for d in _ember_own_dirs():
+            try:
+                rp.relative_to(d)
+                return True
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return False
+
 _MACRO_EXTS = {".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm"}
 
 
@@ -279,8 +328,11 @@ def _static_scan(path: Path, cfg: dict | None = None) -> tuple[int, list[str], d
     except Exception:
         pass
 
-    # Entropy: packed / encrypted executable payloads stand out sharply.
-    if cfg.get("entropy_scan", True) and (exec_kind or is_script or ext in _DANGEROUS_EXTS):
+    # Entropy: packed / encrypted executable payloads stand out sharply — but NOT for
+    # compressed containers/media (.dmg/.zip/.png…), which are always ~8 bits/byte and were
+    # the source of "Affinity.dmg is suspicious" false positives.
+    if (cfg.get("entropy_scan", True) and (exec_kind or is_script or ext in _DANGEROUS_EXTS)
+            and ext not in _COMPRESSED_EXTS):
         body = sample[512:] if len(sample) > 2048 else sample
         ent = shannon_entropy(body)
         info["entropy"] = round(ent, 2)
@@ -288,17 +340,25 @@ def _static_scan(path: Path, cfg: dict | None = None) -> tuple[int, list[str], d
             score += 25
             reasons.append(f"very high entropy ({ent:.2f} bits/byte) — likely packed/encrypted code")
 
-    # IOC / fileless content signatures (download-exec, reverse shells, LOLBins…).
-    if cfg.get("ioc_scan", True):
+    # IOC / fileless content signatures (download-exec, reverse shells, LOLBins…). Restricted
+    # to actual SCRIPT files — scanning prose/source for indicator strings flagged security
+    # docs and our own signature DB. And a single low/medium hit no longer flags a file: only
+    # a HIGH-severity technique or 2+ distinct categories raises it to 'suspicious'.
+    if cfg.get("ioc_scan", True) and (is_script or ext in _SCRIPT_EXTS):
         text = sample.decode("utf-8", "ignore")
         ioc_score, ioc_hits = scan_text_iocs(text)
         if ioc_hits:
-            info["ioc_categories"] = sorted({h["category"] for h in ioc_hits})
+            cats = {h["category"] for h in ioc_hits}
+            has_high = any(h["severity"] == "high" for h in ioc_hits)
+            info["ioc_categories"] = sorted(cats)
             info["ioc_max_severity"] = max((h["severity"] for h in ioc_hits),
                                            key=lambda s: _SEV_RANK.get(s, 0))
-            score += min(ioc_score, 75)
             for h in ioc_hits[:6]:
                 reasons.append(f"malware indicator: {h['label']} [{h['category']}]")
+            if has_high or len(cats) >= 2:
+                score += min(ioc_score, 75)      # strong / corroborated -> can flag
+            else:
+                score += min(ioc_score, 20)      # lone weak hint -> note it, rarely enough alone
 
     return min(score, 100), reasons, info
 
@@ -745,6 +805,12 @@ def scan_file(path: str, deep: bool = True) -> dict:
             return {"ok": False, "error": f"not a file: {path}"}
         cfg = get_config()
         size = p.stat().st_size
+        # Never flag Ember's own code / signature DB / tests (they legitimately CONTAIN the
+        # very indicator strings the scanner looks for).
+        if _is_ember_own(p):
+            return {"ok": True, "path": str(p), "sha256": "", "verdict": "clean", "score": 0,
+                    "reasons": ["Ember's own component (trusted, excluded from scanning)"],
+                    "engines": ["self-exclude"], "size": size}
         reasons: list[str] = []
         engines: list[str] = []
         verdict = "clean"
@@ -812,9 +878,10 @@ def scan_file(path: str, deep: bool = True) -> dict:
         return {"ok": False, "error": f"scan failed: {e}", "verdict": "unknown"}
 
 
-def scan_directory(path: str, deep: bool = False, max_files: int = 2000) -> dict:
+def scan_directory(path: str, deep: bool = False, max_files: int = 2000, progress=None) -> dict:
     """Recursively scan a folder (Pro 'deep scan'). Confirmed-malicious files are
-    quarantined; suspicious files are reported. deep=True also consults VirusTotal."""
+    quarantined; suspicious files are reported. deep=True also consults VirusTotal.
+    `progress(scanned, flagged, current_path)` is called periodically for a live UI bar."""
     try:
         import plan
         if deep and plan.require("deep_directory_scan"):
@@ -835,6 +902,8 @@ def scan_directory(path: str, deep: bool = False, max_files: int = 2000) -> dict
                     continue
             except OSError:
                 continue
+            if _is_ember_own(p):
+                continue   # don't scan / count Ember's own files
             scanned += 1
             r = scan_file(str(p), deep=deep)
             if r.get("verdict") in ("suspicious", "malicious"):
@@ -842,6 +911,11 @@ def scan_directory(path: str, deep: bool = False, max_files: int = 2000) -> dict
                 if r["verdict"] == "malicious":
                     item["handled"] = _handle_malicious(str(p), r)
                 flagged.append(item)
+            if progress is not None and scanned % 25 == 0:
+                try:
+                    progress(scanned, len(flagged), str(p))
+                except Exception:
+                    pass
         return {"ok": True, "root": str(root), "scanned": scanned,
                 "flagged_count": len(flagged), "flagged": flagged[:200],
                 "reached_limit": scanned >= max_files}

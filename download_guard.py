@@ -36,9 +36,28 @@ _POLL_SECONDS = 2.0           # how often the watcher scans the folder
 _EVENTS_MAXLEN = 200          # bounded history of scan events
 _IN_PROGRESS_EXTS = {".crdownload", ".part", ".download", ".tmp"}
 
+# Executable / script types that warrant a heads-up the moment they land in Downloads —
+# even if the content looks benign, a freshly-downloaded executable is worth flagging.
+_DANGEROUS_DL_EXTS = {
+    ".exe", ".msi", ".scr", ".com", ".pif", ".bat", ".cmd", ".vbs", ".vbe",
+    ".js", ".jse", ".wsf", ".wsh", ".hta", ".ps1", ".psm1", ".lnk", ".jar",
+    ".app", ".pkg", ".dmg", ".command", ".sh", ".bash", ".zsh", ".scpt", ".reg", ".apk",
+}
+
 # Injection point for tests: a callable(path: str) -> dict shaped like
 # antivirus.scan_file (i.e. with a "verdict" key). Default None -> use antivirus.
 _SCANNER = None
+
+# UI hook: callable(alert: dict) fired when a download is a threat or a cautionary
+# executable, so the app can toast/quarantine. dict = {level, path, name, detail}.
+_ON_THREAT = None
+
+
+def set_on_threat(cb) -> None:
+    """Register a callback the watcher fires (on its thread) for threat/caution downloads.
+    The UI marshals this to the main thread to show an alert + offer quarantine."""
+    global _ON_THREAT
+    _ON_THREAT = cb
 
 # ---------------------------------------------------------------------------
 # Module-level state (all guarded by _LOCK)
@@ -166,7 +185,31 @@ def _watch_loop(folder: Path, stop: threading.Event) -> None:
                         status, detail = _classify(result)
                     except Exception as e:  # never let a scan crash the thread
                         status, detail = "error", f"scan raised: {e}"
+                    ext = os.path.splitext(path)[1].lower()
+                    # A clean-but-EXECUTABLE download still deserves a heads-up (this is the
+                    # 'virus.vbs slipped through' case — benign content, dangerous type).
+                    if status == "clean" and ext in _DANGEROUS_DL_EXTS:
+                        status = "caution"
+                        detail = (f"Downloaded an executable file ({ext}). Don't open it unless "
+                                  "you trust the source.")
                     _record(path, status, detail)
+                    # ACT on it: auto-quarantine confirmed malware; alert on threat/caution.
+                    if status in ("threat", "caution"):
+                        if status == "threat" and "malicious" in detail.lower():
+                            try:
+                                import antivirus
+                                qr = antivirus.quarantine_file(path, reasons=[detail])
+                                if qr.get("ok"):
+                                    detail += " — auto-quarantined"
+                            except Exception:
+                                pass
+                        cb = _ON_THREAT
+                        if cb:
+                            try:
+                                cb({"level": status, "path": path,
+                                    "name": os.path.basename(path), "detail": detail})
+                            except Exception:
+                                pass
                 else:
                     # First sighting, or still growing: remember its size.
                     pending[path] = size
