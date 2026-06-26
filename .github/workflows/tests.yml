@@ -44,7 +44,8 @@ jobs:
             test_agent_scheduler.py \
             test_wake_word.py \
             test_human_mouse.py \
-            test_autostart.py; do
+            test_autostart.py \
+            test_custom_tools.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

@@ -151,6 +151,7 @@ SAFE_READONLY = {
     "email_breach_check", "pick_screen_color", "screenshot_monitor",
     "screen_record_status",
     "list_plugins",                                           # plugin system
+    "list_custom_tools", "get_custom_tool", "export_custom_tool",  # AI-authored custom tools
 }
 
 SAFE_INTERACTION = {
@@ -180,6 +181,9 @@ SAFE_INTERACTION = {
     "snippet_save", "snippet_delete",                        # snippet CRUD
     "screen_record_start", "screen_record_stop",             # local screen capture file
     "reload_plugins", "create_plugin_template",              # plugin management
+    # AI-authored custom tools. create/import only WRITE a recipe; run_custom_tool's recipe
+    # steps are each re-classified + gated individually, so the wrapper itself is low-risk.
+    "create_custom_tool", "delete_custom_tool", "import_custom_tool", "run_custom_tool",
 }
 
 QUICK_FIX_RISK = {

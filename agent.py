@@ -55,6 +55,7 @@ import tool_args
 import workflow_recorder
 import productivity_tools
 import plugin_system
+import custom_tools
 from claude_bridge import build_handoff_prompt, copy_to_clipboard, try_anthropic_api
 
 
@@ -164,6 +165,15 @@ escalate to ask_claude rather than guessing. Do not narrate this plan unless the
 smart_click -> read_screen_text to see exact labels -> find_ui_elements (try a partial match, scroll, or
 scope="desktop") -> keyboard navigation -> right_click_element_by_text then read the menu -> last, click(x,y)
 from a tool-sourced coordinate. Only after these: ask_claude (hard reasoning) or pause_for_human (truly blocked).
+
+# Building your own tools (you can extend yourself)
+When the user asks you to remember a repeatable multi-step procedure ("every morning, tidy Downloads and
+summarize my unread tabs"), or you notice you keep running the same sequence, BUILD A TOOL for it with
+create_custom_tool: give it a snake_case name, a description, optional parameters, and steps that each call a
+tool you already have (use {{placeholders}} in step args for inputs). It persists across restarts. Run it later
+with run_custom_tool(name=..., args={...}); see what you've built with list_custom_tools; share one with
+export_custom_tool / import_custom_tool. Each recipe step is still gated by the normal safety rules, so a custom
+tool can't do anything you couldn't already do. Prefer a custom tool over re-deriving the same steps each time.
 
 # Who you are (answer this directly if asked "what is Ember / what can you do")
 You are Ember, a local AI agent that lives on the user's {_OS} computer. Unlike a chatbot, you can ACT on
@@ -2064,11 +2074,17 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 # of truth the agent + lean-mode filter read from.
 for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security_center,
               agent_profiles, agent_scheduler, integrations,
-              workflow_recorder, productivity_tools, plugin_system):
+              workflow_recorder, productivity_tools, plugin_system, custom_tools):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
     TOOL_DISPATCH.update(_feat.TOOL_DISPATCH)
+
+# Tell custom_tools the full live tool registry so create_custom_tool can reject a recipe
+# step that names a tool Ember doesn't actually have. (run_custom_tool is host-executed, so
+# it isn't in TOOL_DISPATCH — add it explicitly.)
+custom_tools.KNOWN_TOOLS = set(TOOL_DISPATCH) | {
+    "run_custom_tool", "ask_claude", "pause_for_human", "spawn_agent", "agent_run"}
 
 # Dynamically loaded user plugins (drop a .py into the plugins/ folder -> auto-registers).
 # A broken plugin is skipped by load_plugins(); we never let it break startup.
@@ -2119,6 +2135,8 @@ PARALLEL_SAFE_TOOLS = frozenset({
     # agent run modes / profiles (read-only)
     "list_run_modes", "agent_list", "agent_get",
     "scheduler_status", "scheduler_events", "integration_list",
+    # AI-authored custom tools (read-only management)
+    "list_custom_tools", "get_custom_tool", "export_custom_tool",
 })
 
 # Declared-type map for argument coercion (built AFTER all module tools merged in).
@@ -2171,6 +2189,16 @@ class PendingHumanPause:
     reason: str
     what_you_need: str
     response: queue.Queue = field(default_factory=queue.Queue)
+
+
+class _CustomFC:
+    """Minimal function-call shim (.name / .args) so a custom tool's recipe steps can be
+    run through the same _execute_fc path as a model-issued tool call."""
+    __slots__ = ("name", "args")
+
+    def __init__(self, name: str, args: dict):
+        self.name = name
+        self.args = args or {}
 
 
 class Agent:
@@ -2721,6 +2749,38 @@ class Agent:
                 out[k] = v
         return out
 
+    def _handle_run_custom_tool(self, args: dict) -> dict:
+        """Run an AI-authored custom tool: resolve its saved recipe (with the call's args
+        substituted in) and execute each step through THIS agent's own _execute_fc, so every
+        step keeps its normal events + safety/confirmation + audit. Stops on the first failure."""
+        name = (args.get("name") or "").strip()
+        call_args = args.get("args") if isinstance(args.get("args"), dict) else {}
+        # Bounded recursion: a custom tool may call run_custom_tool, but not endlessly.
+        depth = getattr(self, "_custom_depth", 0)
+        if depth >= 3:
+            return {"ok": False, "error": "custom-tool nesting limit reached (3)"}
+        resolved = custom_tools.resolve_steps(name, call_args)
+        if not resolved.get("ok"):
+            return resolved
+        steps = resolved.get("steps", [])
+        if not steps:
+            return {"ok": False, "error": f"custom tool '{name}' has no steps"}
+        self._custom_depth = depth + 1
+        results = []
+        try:
+            for i, step in enumerate(steps):
+                if self._stop_flag.is_set():
+                    return {"ok": False, "error": "stopped", "ran": i, "results": results}
+                _n, res = self._execute_fc(_CustomFC(step["tool"], step.get("args") or {}))
+                compact = self._compact_result(res) if isinstance(res, dict) else res
+                results.append({"step": i, "tool": _n, "result": compact})
+                if isinstance(res, dict) and not res.get("ok", True):
+                    return {"ok": False, "tool": name, "ran": i + 1, "failed_step": i,
+                            "failed_tool": _n, "error": res.get("error"), "results": results}
+        finally:
+            self._custom_depth = depth
+        return {"ok": True, "tool": name, "steps_run": len(results), "results": results}
+
     def _execute_fc(self, fc) -> tuple[str, dict]:
         """Execute a single tool call: emit events, handle confirmation, run, fail-track.
         Returns (name, result). Safe to call from worker threads (events marshal via Qt)."""
@@ -2773,6 +2833,8 @@ class Agent:
             result = self._handle_spawn_agent(args)
         elif name == "agent_run":
             result = self._handle_agent_run(args)
+        elif name == "run_custom_tool":
+            result = self._handle_run_custom_tool(args)
         else:
             fn = TOOL_DISPATCH.get(name)
             if not fn:
