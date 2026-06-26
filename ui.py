@@ -414,6 +414,7 @@ def load_settings() -> dict:
         "auto_update": True,
         "lean_tools": True,
         "hotkey": "ctrl+shift+space",
+        "hotkey_daemon": False,       # always-on login helper so the hotkey works even when quit
         "request_timeout_seconds": 15,
         "animations_enabled": True,
         "glow_enabled": True,
@@ -1331,6 +1332,20 @@ class SettingsDialog(QDialog):
         self.hotkey_input.setPlaceholderText("e.g. ctrl+alt+a, ctrl+shift+space")
         layout.addRow("Global summon hotkey:", self.hotkey_input)
 
+        self.hotkey_daemon_check = QCheckBox(
+            "Make the hotkey work even when Ember is fully quit")
+        try:
+            import hotkey_daemon
+            self.hotkey_daemon_check.setChecked(hotkey_daemon.is_installed())
+        except Exception:
+            self.hotkey_daemon_check.setChecked(bool(self.settings.get("hotkey_daemon", False)))
+        self.hotkey_daemon_check.setToolTip(
+            "Installs a tiny always-on login helper that listens for the shortcut and brings "
+            "Ember forward (launching it if needed) — so the hotkey works after you Quit, not "
+            "just while Ember is open. macOS needs Input Monitoring permission for the helper.")
+        self.hotkey_daemon_check.stateChanged.connect(self._toggle_hotkey_daemon)
+        layout.addRow(self.hotkey_daemon_check)
+
         self.timeout_input = QLineEdit(str(self.settings.get("request_timeout_seconds", 15)))
         self.timeout_input.setPlaceholderText("seconds, 10-60 (lower = faster failover)")
         layout.addRow("API request timeout (s):", self.timeout_input)
@@ -2005,6 +2020,21 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Launch at login", str(e))
 
+    def _toggle_hotkey_daemon(self, state):
+        on = bool(state)
+        self.settings["hotkey_daemon"] = on
+        combo = (self.hotkey_input.text().strip() if hasattr(self, "hotkey_input") else "") or \
+            self.settings.get("hotkey", "ctrl+shift+space")
+        try:
+            import hotkey_daemon
+            r = hotkey_daemon.set_enabled(on, combo)
+            if not r.get("ok"):
+                QMessageBox.warning(self, "Global hotkey helper", r.get("error", "failed"))
+            elif on:
+                self._set_status("Global hotkey helper installed — works even when Ember is quit.")
+        except Exception as e:
+            QMessageBox.warning(self, "Global hotkey helper", str(e))
+
     def _refresh_security_center_lbl(self):
         try:
             self._sec_center_lbl.setText(self._security_center_summary())
@@ -2246,6 +2276,13 @@ class SettingsDialog(QDialog):
         except ValueError:
             self.settings["voice_chat_phrase_timeout"] = 8
         self.settings["hotkey"] = self.hotkey_input.text().strip() or "ctrl+shift+space"
+        # If the quit-proof hotkey helper is installed, refresh it with the (possibly new) combo.
+        try:
+            import hotkey_daemon
+            if hotkey_daemon.is_installed():
+                hotkey_daemon.install(self.settings["hotkey"])
+        except Exception:
+            pass
         try:
             self.settings["request_timeout_seconds"] = max(10, min(60, int(self.timeout_input.text().strip() or 15)))
         except ValueError:

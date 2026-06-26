@@ -96,6 +96,17 @@ def _reset_tcc_if_new_build():
 
 
 if __name__ == "__main__":
+    # Quit-proof global hotkey: a frozen build re-runs ITSELF in listener-only mode
+    # (installed by hotkey_daemon). Handle that before any heavy GUI imports.
+    if "--hotkey-listener" in sys.argv:
+        import ember_hotkey_listener
+        _combo = "ctrl+shift+space"
+        if "--combo" in sys.argv:
+            try:
+                _combo = sys.argv[sys.argv.index("--combo") + 1]
+            except Exception:
+                pass
+        sys.exit(ember_hotkey_listener.run(_combo))
     try:
         _ensure_valid_cwd()   # repair a deleted CWD before anything calls os.getcwd()
         _fix_gui_path()       # put Homebrew on PATH so flac/brew resolve when launched from Finder
