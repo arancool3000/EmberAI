@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -1174,7 +1175,7 @@ class SettingsDialog(QDialog):
         layout.addRow(self.keep_bg_check)
 
         self.launch_login_check = QCheckBox(
-            "Launch Ember at login & keep it running (true always-on “Hey Ember”)")
+            "Launch Ember at login && keep it running (true always-on “Hey Ember”)")
         try:
             import autostart
             self.launch_login_check.setChecked(autostart.is_installed())
@@ -2176,6 +2177,62 @@ class ClaudeHandoffDialog(QDialog):
         self.reject()
 
 
+class ChatInput(QTextEdit):
+    """Chat input that accepts pasted (and dropped) FILES and IMAGES, not just text.
+
+    Cmd/Ctrl+V of file(s) copied in Finder/Explorer attaches their paths; a copied image
+    (e.g. a screenshot) is saved to a temp PNG and attached; plain text pastes as plain
+    text. `on_attach(list_of_paths)` is the window callback that adds them to the message."""
+
+    def __init__(self, on_attach, parent=None):
+        super().__init__(parent)
+        self._on_attach = on_attach
+
+    def canInsertFromMimeData(self, source) -> bool:
+        if source.hasImage() or source.hasUrls():
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source) -> None:
+        paths: list[str] = []
+        try:
+            if source.hasUrls():
+                paths = [u.toLocalFile() for u in source.urls() if u.toLocalFile()]
+            if not paths and source.hasImage():
+                p = _save_clipboard_image(source.imageData())
+                if p:
+                    paths = [p]
+        except Exception:
+            paths = []
+        if paths:
+            try:
+                self._on_attach(paths)
+                return
+            except Exception:
+                pass
+        # Fall back to PLAIN text (avoids pasting rich HTML/fonts into the prompt box).
+        if source.hasText():
+            self.insertPlainText(source.text())
+        else:
+            super().insertFromMimeData(source)
+
+
+def _save_clipboard_image(image) -> str | None:
+    """Save a raw clipboard image (a copied screenshot/photo with no file path) to a temp
+    PNG so Ember can read it like any other attached file. Returns the path or None."""
+    try:
+        from PyQt6.QtGui import QImage
+        qimg = image if isinstance(image, QImage) else QImage(image)
+        if qimg is None or qimg.isNull():
+            return None
+        d = Path(tempfile.gettempdir()) / "ember_pasted"
+        d.mkdir(parents=True, exist_ok=True)
+        dst = d / f"pasted_{int(time.time() * 1000)}.png"
+        return str(dst) if qimg.save(str(dst), "PNG") else None
+    except Exception:
+        return None
+
+
 class EmberWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -2449,28 +2506,32 @@ class EmberWindow(QWidget):
             except Exception:
                 pass
 
+    def _attach_paths(self, paths, intro: str = "I'm attaching these files for you to read / discuss:"):
+        """Add file/photo paths to the next message. Shared by the upload dialog, drag-drop
+        AND Cmd/Ctrl+V paste so all three behave identically."""
+        paths = [p for p in (paths or []) if p]
+        if not paths:
+            return
+        listing = "\n".join(f"- {p}" for p in paths[:20])
+        existing = self.input_box.toPlainText().strip()
+        prefix = (existing + "\n\n") if existing else ""
+        self.input_box.setPlainText(f"{prefix}{intro}\n{listing}\n\n")
+        cursor = self.input_box.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.input_box.setTextCursor(cursor)
+        self.input_box.setFocus()
+        self._set_status(f"{len(paths)} file(s) attached")
+
     def _open_upload_dialog(self):
         """File picker - the chosen paths get attached to the user's next message
-        the same way drag-and-drop does."""
+        the same way drag-and-drop and paste do."""
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Upload files for Ember",
             str(Path.home()),
             "All files (*);;Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;"
             "Documents (*.pdf *.docx *.txt *.md *.csv *.json);;Spreadsheets (*.xlsx *.csv)",
         )
-        if not paths:
-            return
-        listing = "\n".join(f"- {p}" for p in paths[:20])
-        existing = self.input_box.toPlainText().strip()
-        prefix = (existing + "\n\n") if existing else ""
-        self.input_box.setPlainText(
-            f"{prefix}I'm uploading these files for you to read / discuss:\n{listing}\n\n"
-        )
-        cursor = self.input_box.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self.input_box.setTextCursor(cursor)
-        self.input_box.setFocus()
-        self._set_status(f"{len(paths)} file(s) attached")
+        self._attach_paths(paths, "I'm uploading these files for you to read / discuss:")
 
     def _toggle_mic(self):
         if self._voice_chat_enabled:
@@ -3057,9 +3118,10 @@ class EmberWindow(QWidget):
 
         # Input row
         input_row = QHBoxLayout()
-        self.input_box = QTextEdit()
+        # ChatInput accepts pasted/dropped files + images (Cmd/Ctrl+V), not just text.
+        self.input_box = ChatInput(on_attach=self._attach_paths)
         self.input_box.setMaximumHeight(70)
-        self.input_box.setPlaceholderText("What should I do?")
+        self.input_box.setPlaceholderText("What should I do?  (paste or drop files / photos too)")
         self.input_box.installEventFilter(self)
         input_row.addWidget(self.input_box)
 
@@ -3382,16 +3444,7 @@ class EmberWindow(QWidget):
         paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
         if not paths:
             return
-        listing = "\n".join(f"- {p}" for p in paths[:20])
-        existing = self.input_box.toPlainText().strip()
-        prefix = (existing + "\n\n") if existing else ""
-        self.input_box.setPlainText(
-            f"{prefix}Here are some files/folders I'm asking about:\n{listing}\n\n"
-        )
-        cursor = self.input_box.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self.input_box.setTextCursor(cursor)
-        self.input_box.setFocus()
+        self._attach_paths(paths, "Here are some files/folders I'm asking about:")
         e.acceptProposedAction()
 
     def eventFilter(self, obj, ev):
@@ -3419,11 +3472,11 @@ class EmberWindow(QWidget):
             frame.setObjectName("bubble")
         # Bubble fills horizontal width and expands vertically for long responses.
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        # Hard cap so it never exceeds the visible chat area, even mid-resize.
+        # Hard cap so it never exceeds the visible chat area (scrollbar reserved), even mid-resize.
         try:
-            view_w = self.chat_scroll.viewport().width() - 24  # leave margin
-            if view_w > 100:
-                frame.setMaximumWidth(view_w)
+            frame_w, _ = self._chat_widths()
+            if frame_w > 0:
+                frame.setMaximumWidth(frame_w)
         except Exception:
             pass
 
@@ -3475,12 +3528,12 @@ class EmberWindow(QWidget):
             # Lock THIS bubble's width (and its labels' wrap width) and force the layout to
             # compute the real wrapped height NOW, so we animate to the final height.
             try:
-                view_w = self.chat_scroll.viewport().width() - 24
-                if view_w > 100:
-                    frame.setMaximumWidth(view_w)
+                frame_w, lbl_w = self._chat_widths()
+                if frame_w > 0:
+                    frame.setMaximumWidth(frame_w)
                     from PyQt6.QtWidgets import QLabel
                     for lbl in frame.findChildren(QLabel):
-                        lbl.setFixedWidth(max(60, view_w - 24))
+                        lbl.setFixedWidth(lbl_w)
             except Exception:
                 pass
             lay = frame.layout()
@@ -3505,22 +3558,37 @@ class EmberWindow(QWidget):
             except Exception:
                 pass
 
+    def _chat_widths(self) -> tuple[int, int]:
+        """(frame_width, label_width) for chat bubbles. Reserves the vertical scrollbar's
+        width ALWAYS — even while it's hidden — so a bubble sized before the bar appears (as
+        the chat grows) doesn't end up clipped under it. That right-edge clipping was the bug."""
+        try:
+            W = self.chat_scroll.width()
+            if W < 120:
+                return 0, 0
+            sb = self.chat_scroll.verticalScrollBar()
+            sb_w = sb.sizeHint().width() or 14
+            frame_w = max(80, W - sb_w - 16)   # 16 = chat_container 8+8 margins
+            lbl_w = max(60, frame_w - 28)      # frame 12+12 margins + 4 safety
+            return frame_w, lbl_w
+        except Exception:
+            return 0, 0
+
     def _clamp_bubble_widths(self):
         """Size every bubble to the chat width. Inner labels get a FIXED width so their
         word-wrapped height is computed correctly — otherwise the layout allocates a one-line
         height and bubbles overlap ('playing cards') or clip their text."""
         try:
-            view_w = self.chat_scroll.viewport().width() - 24
-            if view_w <= 100 or not hasattr(self, "chat_layout"):
+            frame_w, lbl_w = self._chat_widths()
+            if frame_w <= 0 or not hasattr(self, "chat_layout"):
                 return
             from PyQt6.QtWidgets import QLabel
-            lbl_w = max(60, view_w - 24)
             for i in range(self.chat_layout.count()):
                 item = self.chat_layout.itemAt(i)
                 w = item.widget() if item else None
                 if w is None:
                     continue
-                w.setMaximumWidth(view_w)
+                w.setMaximumWidth(frame_w)
                 for lbl in w.findChildren(QLabel):
                     lbl.setFixedWidth(lbl_w)
                 w.updateGeometry()

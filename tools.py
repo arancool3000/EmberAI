@@ -79,12 +79,31 @@ def _osa(script: str, timeout: int = 8) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _augmented_env() -> dict:
+    """A copy of the environment with the common Homebrew / standard tool dirs ensured on
+    PATH. macOS apps launched from Finder (not a terminal) inherit only a minimal PATH, so
+    `brew` (/opt/homebrew/bin on Apple Silicon, /usr/local/bin on Intel) is invisible to
+    run_shell — which made Ember report 'brew is not available' on machines that have it."""
+    env = dict(os.environ)
+    if not sys.platform.startswith("win"):
+        extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin",
+                 "/usr/local/bin", "/usr/local/sbin",
+                 "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        merged: list[str] = []
+        for d in extra + env.get("PATH", "").split(os.pathsep):
+            if d and d not in merged:
+                merged.append(d)
+        env["PATH"] = os.pathsep.join(merged)
+    return env
+
+
 def _sh(cmd, timeout: int = 30) -> dict:
     try:
+        env = _augmented_env()
         if isinstance(cmd, str):
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=env)
         else:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         return {"ok": r.returncode == 0, "returncode": r.returncode,
                 "stdout": (r.stdout or "")[:8000], "stderr": (r.stderr or "")[:4000]}
     except subprocess.TimeoutExpired:

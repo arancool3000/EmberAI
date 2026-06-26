@@ -465,7 +465,24 @@ def say_text(text: str) -> dict:
 def record_audio(seconds: float = 5.0, path: str | None = None) -> dict:
     """Record mic input to a WAV file."""
     try:
-        import pyaudio
+        try:
+            import pyaudio
+        except ModuleNotFoundError:
+            # The #1 failure: pyaudio got installed into a DIFFERENT Python than the one
+            # Ember runs. Tell the agent the EXACT interpreter + (on macOS) the portaudio
+            # system lib it needs, so the fix actually lands in the right environment.
+            py = sys.executable
+            if sys.platform == "darwin":
+                fix = (f"brew install portaudio && \"{py}\" -m pip install pyaudio  "
+                       "(pyaudio needs the portaudio system library; install it with Homebrew first)")
+            elif sys.platform.startswith("win"):
+                fix = f"\"{py}\" -m pip install pyaudio"
+            else:
+                fix = f"sudo apt-get install -y portaudio19-dev && \"{py}\" -m pip install pyaudio"
+            return {"ok": False, "error": "pyaudio is not installed in Ember's Python",
+                    "interpreter": py,
+                    "fix": fix,
+                    "note": "Install into THIS interpreter (sys.executable), not a different python."}
         import wave
         CHUNK = 1024
         FORMAT = pyaudio.paInt16
