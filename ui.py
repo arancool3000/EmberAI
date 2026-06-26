@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QSizePolicy, QSystemTrayIcon, QMenu,
     QComboBox, QCheckBox, QTabWidget, QListWidget, QListWidgetItem,
     QInputDialog, QFileDialog, QGraphicsOpacityEffect, QGraphicsDropShadowEffect,
-    QSlider, QLayout,
+    QSlider, QLayout, QGroupBox,
 )
 
 import models as model_catalog
@@ -848,9 +848,55 @@ class SettingsDialog(QDialog):
 
         self.setStyleSheet(STYLE)
 
+    # --- layout helpers (keep every tab tidy + prevent clipped/elided text) ---
+    def _new_form(self):
+        """Return a fresh QFormLayout whose fields EXPAND to fill the width.
+
+        macOS's QFormLayout default (FieldsStayAtSizeHint) keeps inputs at their
+        size hint, which elides long placeholders like 'Optional 2nd backup key'.
+        Growing the fields fixes that and uses the dialog's full width."""
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(8)
+        return form
+
+    def _group(self, title: str) -> tuple:
+        """A titled QGroupBox containing an expanding QFormLayout. Returns (box, form)."""
+        box = QGroupBox(title)
+        form = self._new_form()
+        box.setLayout(form)
+        return box, form
+
+    def _hint(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: #565f89; font-size: 11px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _add_tab(self, page, title: str, scroll: bool = True):
+        """Add a tab, optionally wrapped in a scroll area so tall content never clips
+        off the bottom of the dialog."""
+        if scroll:
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setFrameShape(QFrame.Shape.NoFrame)
+            area.setWidget(page)
+            self.tabs.addTab(area, title)
+        else:
+            self.tabs.addTab(page, title)
+
     def _build_models_tab(self):
         page = QWidget()
-        layout = QFormLayout(page)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(4, 8, 4, 8)
+        outer.setSpacing(12)
+
+        # --- API keys ---------------------------------------------------------
+        keys_box, layout = self._group("API keys")
+        outer.addWidget(keys_box)
 
         self.gemini_key_input = QLineEdit(self.settings.get("gemini_api_key", ""))
         self.gemini_key_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -872,18 +918,14 @@ class SettingsDialog(QDialog):
         self.gemini_key_4_input.setPlaceholderText("Optional 3rd backup key")
         layout.addRow("Backup Gemini key 3:", self.gemini_key_4_input)
 
-        self.dual_api_check = QCheckBox("If Gemini is rate-limited, rotate through the backup keys")
-        self.dual_api_check.setChecked(bool(self.settings.get("dual_api_failover", True)))
-        layout.addRow(self.dual_api_check)
-
-        self.ai_titles_check = QCheckBox("Generate chat titles with Gemma 3 27B")
-        self.ai_titles_check.setChecked(bool(self.settings.get("ai_chat_titles", True)))
-        layout.addRow(self.ai_titles_check)
-
         self.anthropic_key_input = QLineEdit(self.settings.get("anthropic_api_key", ""))
         self.anthropic_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.anthropic_key_input.setPlaceholderText("Required if Claude is the primary model")
-        layout.addRow("Anthropic API key:", self.anthropic_key_input)
+        layout.addRow("Anthropic key:", self.anthropic_key_input)
+
+        self.dual_api_check = QCheckBox("If Gemini is rate-limited, rotate through the backup keys")
+        self.dual_api_check.setChecked(bool(self.settings.get("dual_api_failover", True)))
+        layout.addRow(self.dual_api_check)
 
         self.vault_check = QCheckBox("🔒 Store API keys in the encrypted vault (not plaintext settings.json)")
         self.vault_check.setChecked(bool(self.settings.get("use_key_vault", False)))
@@ -893,12 +935,13 @@ class SettingsDialog(QDialog):
             _vbk = key_vault.backend()
         except Exception:
             _vbk = "encrypted-file"
-        vault_hint = QLabel(
-            f"Keys are encrypted using the {'OS keychain' if _vbk == 'keychain' else 'an encrypted file (Fernet)'}. "
-            "When on, settings.json keeps blank keys and the real values live in the vault.")
-        vault_hint.setStyleSheet("color: #565f89; font-size: 11px;")
-        vault_hint.setWordWrap(True)
-        layout.addRow(vault_hint)
+        layout.addRow(self._hint(
+            f"Keys are encrypted using {'the OS keychain' if _vbk == 'keychain' else 'an encrypted file (Fernet)'}. "
+            "When on, settings.json keeps blank keys and the real values live in the vault."))
+
+        # --- Model selection --------------------------------------------------
+        model_box, mlayout = self._group("Model")
+        outer.addWidget(model_box)
 
         self.model_combo = QComboBox()
         self._model_options = model_catalog.all_choices()
@@ -909,32 +952,33 @@ class SettingsDialog(QDialog):
             if mid == current:
                 current_idx = i
         self.model_combo.setCurrentIndex(current_idx)
-        layout.addRow("Primary model:", self.model_combo)
+        mlayout.addRow("Primary model:", self.model_combo)
 
         rate_btn = QPushButton("Show free-tier rate limits")
         rate_btn.clicked.connect(self._show_rates)
-        layout.addRow("", rate_btn)
+        mlayout.addRow("", rate_btn)
+
+        self.ai_titles_check = QCheckBox("Generate chat titles with Gemma 3 27B")
+        self.ai_titles_check.setChecked(bool(self.settings.get("ai_chat_titles", True)))
+        mlayout.addRow(self.ai_titles_check)
 
         # Local AI (Ollama): pick "Local (Ollama)" as the model above; optionally name a model.
         self.ollama_model_input = QLineEdit(self.settings.get("ollama_model", ""))
         self.ollama_model_input.setPlaceholderText("e.g. llama3.2 (blank = first installed)")
-        layout.addRow("Ollama model (local):", self.ollama_model_input)
+        mlayout.addRow("Ollama model:", self.ollama_model_input)
         ollama_btn = QPushButton("Check local Ollama")
         ollama_btn.clicked.connect(self._check_ollama)
-        layout.addRow("", ollama_btn)
+        mlayout.addRow("", ollama_btn)
 
-        info = QLabel(
-            "Gemini 3.1 Flash Lite has the highest free-tier RPD (500/day).\n"
-            "Gemma 4 models go to 1500 RPD but don't support tool-use - text only.\n"
-            "Gemma 3 27B is used for short chat titles. Pick a Claude model to switch to Anthropic.\n"
+        mlayout.addRow(self._hint(
+            "Gemini 3.1 Flash Lite has the highest free-tier RPD (500/day). "
+            "Gemma 4 models go to 1500 RPD but don't support tool-use — text only. "
+            "Gemma 3 27B is used for short chat titles. Pick a Claude model to switch to Anthropic. "
             "Local (Ollama) runs fully offline with no key or limits (chat only — no computer "
-            "control). Install from ollama.com and `ollama pull llama3.2`."
-        )
-        info.setStyleSheet("color: #565f89; font-size: 11px;")
-        info.setWordWrap(True)
-        layout.addRow(info)
+            "control). Install from ollama.com and `ollama pull llama3.2`."))
 
-        self.tabs.addTab(page, "Models")
+        outer.addStretch()
+        self._add_tab(page, "Models")
 
     def _check_ollama(self):
         try:
@@ -955,7 +999,8 @@ class SettingsDialog(QDialog):
 
     def _build_appearance_tab(self):
         page = QWidget()
-        layout = QFormLayout(page)
+        layout = self._new_form()
+        page.setLayout(layout)
 
         self.animations_check = QCheckBox("Enable bubble fade-in + typing animations")
         self.animations_check.setChecked(bool(self.settings.get("animations_enabled", True)))
@@ -1042,7 +1087,7 @@ class SettingsDialog(QDialog):
         note.setWordWrap(True)
         layout.addRow(note)
 
-        self.tabs.addTab(page, "Appearance")
+        self._add_tab(page, "Appearance")
 
     def _apply_theme_preset(self, key):
         """Apply a named theme preset to the Appearance widgets (does not save until the user
@@ -1062,7 +1107,8 @@ class SettingsDialog(QDialog):
 
     def _build_voice_tab(self):
         page = QWidget()
-        layout = QFormLayout(page)
+        layout = self._new_form()
+        page.setLayout(layout)
 
         self.wake_word_check = QCheckBox('Always listen for "Hey Ember" (hands-free wake word)')
         self.wake_word_check.setChecked(bool(self.settings.get("wake_word", True)))
@@ -1099,11 +1145,12 @@ class SettingsDialog(QDialog):
         note.setWordWrap(True)
         layout.addRow(note)
 
-        self.tabs.addTab(page, "Voice")
+        self._add_tab(page, "Voice")
 
     def _build_performance_tab(self):
         page = QWidget()
-        layout = QFormLayout(page)
+        layout = self._new_form()
+        page.setLayout(layout)
 
         self.auto_shot_check = QCheckBox("Let Ember view the screen when it decides it needs to")
         self.auto_shot_check.setChecked(bool(self.settings.get("auto_screenshot", True)))
@@ -1156,11 +1203,7 @@ class SettingsDialog(QDialog):
                                           "(loads only core tools, hides niche utilities)")
         self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", True)))
         layout.addRow(self.lean_tools_check)
-
-        self.download_protect_check = QCheckBox(
-            "🛡 Real-time download protection — auto-scan new files in Downloads for malware")
-        self.download_protect_check.setChecked(bool(self.settings.get("download_protection", False)))
-        layout.addRow(self.download_protect_check)
+        # (Real-time download protection lives on the Security tab — it's on by default there.)
 
         usage_btn = QPushButton("📊 Show usage dashboard (calls / tokens vs free-tier limits)")
         usage_btn.clicked.connect(self._show_usage_dashboard)
@@ -1182,7 +1225,7 @@ class SettingsDialog(QDialog):
         note.setStyleSheet("color: #565f89; font-size: 11px;")
         note.setWordWrap(True)
         layout.addRow(note)
-        self.tabs.addTab(page, "Performance")
+        self._add_tab(page, "Performance")
 
     def _build_automations_tab(self):
         page = QWidget()
@@ -1439,8 +1482,8 @@ class SettingsDialog(QDialog):
         v.addWidget(self._sec_ioc)
 
         self._sec_autokill = QCheckBox(
-            "Auto-terminate confirmed-malicious processes (default: alert only)")
-        self._sec_autokill.setChecked(bool(cfg.get("fileless_auto_terminate", False)))
+            "Auto-terminate confirmed-malicious processes (uncheck for alert-only)")
+        self._sec_autokill.setChecked(bool(cfg.get("fileless_auto_terminate", True)))
         self._sec_autokill.stateChanged.connect(
             lambda s: antivirus.set_config(fileless_auto_terminate=bool(s)))
         v.addWidget(self._sec_autokill)
@@ -2044,8 +2087,7 @@ class SettingsDialog(QDialog):
             self.settings["launch_at_login"] = self.launch_login_check.isChecked()
         self.settings["auto_update"] = self.auto_update_check.isChecked()
         self.settings["lean_tools"] = self.lean_tools_check.isChecked()
-        if hasattr(self, "download_protect_check"):
-            self.settings["download_protection"] = self.download_protect_check.isChecked()
+        # download_protection is owned by the Security tab toggle (persisted live there).
         if hasattr(self, "vault_check"):
             self.settings["use_key_vault"] = self.vault_check.isChecked()
         if hasattr(self, "wake_word_check"):

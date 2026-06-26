@@ -27,6 +27,10 @@ def _reset():
         fg._processes_scanned = 0
     fg._ENUMERATOR = None
     fg._SCANNER = None
+    # auto-terminate is ON by default now; record (don't kill) the synthetic PIDs so a
+    # test process can never SIGKILL a real OS process that shares a fake PID (100/300…).
+    fg._killed = []
+    fg._TERMINATOR = lambda pid: (fg._killed.append(pid) or True)
 
 
 # --- the shared behavioral engine (antivirus.scan_command_line) ----------------

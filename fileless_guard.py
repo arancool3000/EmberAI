@@ -237,8 +237,18 @@ def _evaluate(proc: dict, name_by_pid: dict) -> dict:
 _VRANK = {"clean": 0, "suspicious": 1, "malicious": 2}
 
 
+# Injectable kill hook (tests set this to a no-op so on-by-default auto-terminate
+# can never kill a REAL process that happens to share a synthetic test PID).
+_TERMINATOR = None
+
+
 def _terminate(pid) -> bool:
     """Best-effort kill of a process (used only when auto-terminate is enabled)."""
+    if _TERMINATOR is not None:
+        try:
+            return bool(_TERMINATOR(pid))
+        except Exception:
+            return False
     try:
         try:
             import psutil

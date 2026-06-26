@@ -101,7 +101,7 @@ DEFAULT_CONFIG: dict = {
     # --- always-on fileless/behavioral protection (see fileless_guard.py) ---
     "fileless_protection": True,   # real-time monitoring of running processes / command lines
     "fileless_poll_seconds": 4,    # how often the behavioral monitor samples processes
-    "fileless_auto_terminate": False,  # kill confirmed-malicious processes (default: alert only)
+    "fileless_auto_terminate": True,   # kill confirmed-malicious processes (maximum protection)
     # --- unified always-on active scanning (see security_center.py) ---
     "realtime_security_center": True,  # master switch for continuous multi-surface scanning
     "sc_network_scan": True,       # continuously inspect network connections / listening ports
