@@ -632,13 +632,14 @@ def list_desktop_items() -> dict:
     Checks both the user's Desktop AND the public/all-users Desktop (where many app installers
     drop their shortcuts), plus the OneDrive\\Desktop if the user uses OneDrive's desktop sync."""
     items = []
-    candidate_dirs = [
-        Path(os.path.expandvars("%USERPROFILE%\\Desktop")),
-        Path(os.path.expandvars("%PUBLIC%\\Desktop")),
-    ]
-    onedrive = os.environ.get("ONEDRIVE") or os.environ.get("OneDrive")
-    if onedrive:
-        candidate_dirs.append(Path(onedrive) / "Desktop")
+    # Always include the real home Desktop (this is what made it return EMPTY on macOS —
+    # it only looked at Windows %USERPROFILE%/%PUBLIC% env vars). Windows extras are gated.
+    candidate_dirs = [Path.home() / "Desktop"]
+    if sys.platform.startswith("win"):
+        candidate_dirs.append(Path(os.path.expandvars("%PUBLIC%\\Desktop")))
+        onedrive = os.environ.get("ONEDRIVE") or os.environ.get("OneDrive")
+        if onedrive:
+            candidate_dirs.append(Path(onedrive) / "Desktop")
     seen = set()
     for d in candidate_dirs:
         try:

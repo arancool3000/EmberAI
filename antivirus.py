@@ -75,6 +75,9 @@ def _quarantine_dir() -> Path:
 
 
 _CONFIG_LOCK = threading.RLock()
+# Serializes every quarantine-index read-modify-write so concurrent quarantines can't
+# clobber each other (which orphaned malware on disk with no index entry).
+_INDEX_LOCK = threading.RLock()
 
 DEFAULT_CONFIG: dict = {
     "enabled": True,
@@ -402,10 +405,15 @@ def _scan_archive(path: Path, cfg: dict) -> dict | None:
             for info in zf.infolist():
                 if scanned >= max_members:
                     break
-                if info.is_dir() or info.file_size > member_cap:
+                if info.is_dir():
                     continue
+                # Read a BOUNDED prefix via streaming rather than skipping large members:
+                # skipping on declared size let an attacker pad a member past the cap to evade
+                # the in-archive EICAR/signature/IOC checks (false negative). zf.open + a capped
+                # read still bounds decompression so a zip bomb can't blow up memory.
                 try:
-                    data = zf.read(info.filename)[:member_cap]
+                    with zf.open(info.filename) as fh:
+                        data = fh.read(member_cap + 1)[:member_cap]
                 except Exception:
                     continue
                 scanned += 1
@@ -833,8 +841,10 @@ def scan_file(path: str, deep: bool = True) -> dict:
         elif score >= _SUSPICIOUS_SCORE:
             _raise("suspicious")
 
-        # 2) Hash + known-bad list (built-in + extensible signature DB).
-        sha = sha256_file(p, max_bytes=None) if size <= cfg["max_scan_bytes"] else sha256_file(p, cfg["max_scan_bytes"])
+        # 2) Hash + known-bad list (built-in + extensible signature DB). Always the FULL-file
+        # digest — a truncated hash of a >max_scan_bytes file can never match a known-bad/VT
+        # hash, silently defeating hash detection on large payloads.
+        sha = sha256_file(p)
         if sha in KNOWN_BAD_SHA256 or sha in _signature_db().get("hashes", set()):
             _raise("malicious")
             reasons.append("matches a known-malicious file hash")
@@ -932,20 +942,34 @@ def _index_path() -> Path:
 
 
 def _load_index() -> list[dict]:
+    """Always return a list of dict entries; a corrupt/old-format file degrades to [] rather
+    than crashing callers (list_quarantine/purge/restore/delete)."""
     try:
         p = _index_path()
         if p.exists():
-            return json.loads(p.read_text("utf-8"))
+            data = json.loads(p.read_text("utf-8"))
+            if isinstance(data, list):
+                return [e for e in data if isinstance(e, dict)]
     except Exception:
         pass
     return []
 
 
-def _save_index(entries: list[dict]) -> None:
+def _save_index(entries: list[dict]) -> bool:
+    """Atomically persist the index (temp file + os.replace) so an interrupted write can't
+    corrupt or truncate the quarantine vault. Returns True on success."""
     try:
-        _index_path().write_text(json.dumps(entries, indent=2), "utf-8")
+        p = _index_path()
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(entries, indent=2), "utf-8")
+        os.replace(tmp, p)   # atomic on POSIX & Windows (same directory)
+        return True
     except Exception:
-        pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
 
 
 def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "") -> dict:
@@ -956,14 +980,9 @@ def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "
         if not p.exists():
             return {"ok": False, "error": f"file not found: {path}"}
         cfg = get_config()
-        sha = sha256 or sha256_file(p, cfg["max_scan_bytes"])
+        sha = sha256 or sha256_file(p)   # full-file digest (identity / known-bad / VT)
         qid = f"{int(time.time())}_{sha[:8]}"
         stored = _quarantine_dir() / f"{qid}_{p.name}.quarantine"
-        shutil.move(str(p), str(stored))
-        try:
-            os.chmod(stored, stat.S_IRUSR)  # owner read-only; strip all execute bits
-        except Exception:
-            pass
         now = time.time()
         entry = {
             "id": qid,
@@ -975,9 +994,26 @@ def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "
             "delete_after": (now + cfg["autodelete_days"] * 86400
                              if cfg["on_malware"] == "quarantine_autodelete" else None),
         }
-        entries = _load_index()
-        entries.append(entry)
-        _save_index(entries)
+        with _INDEX_LOCK:
+            shutil.move(str(p), str(stored))
+            try:
+                os.chmod(stored, stat.S_IRUSR)  # owner read-only; strip all execute bits
+            except Exception:
+                pass
+            entries = _load_index()
+            entries.append(entry)
+            if not _save_index(entries):
+                # Index write failed — don't leave the file orphaned in the vault with no
+                # record. Roll it back to where it came from.
+                try:
+                    os.chmod(stored, stat.S_IRUSR | stat.S_IWUSR)
+                except Exception:
+                    pass
+                try:
+                    shutil.move(str(stored), str(p))
+                except Exception:
+                    pass
+                return {"ok": False, "error": "could not write the quarantine index (file left in place)"}
         return {"ok": True, "quarantined": True, "id": qid, "stored_path": str(stored),
                 "original_path": str(p), "delete_after": entry["delete_after"]}
     except Exception as e:
@@ -985,18 +1021,26 @@ def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "
 
 
 def list_quarantine() -> dict:
-    """List everything currently in quarantine (purges anything past its grace period first)."""
+    """List everything currently in quarantine (purges anything past its grace period first).
+    A single malformed/old-format entry can never crash the whole listing."""
     purge_expired()
-    entries = _load_index()
-    items = [{
-        "id": e["id"],
-        "original_path": e["original_path"],
-        "sha256": e.get("sha256", ""),
-        "reasons": e.get("reasons", []),
-        "quarantined_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["quarantined_at"])),
-        "deletes_on": (time.strftime("%Y-%m-%d %H:%M", time.localtime(e["delete_after"]))
-                       if e.get("delete_after") else "never"),
-    } for e in entries]
+    items = []
+    for e in _load_index():
+        try:
+            if not e.get("id"):
+                continue
+            qa = e.get("quarantined_at")
+            items.append({
+                "id": e["id"],
+                "original_path": e.get("original_path", "?"),
+                "sha256": e.get("sha256", ""),
+                "reasons": e.get("reasons", []),
+                "quarantined_at": (time.strftime("%Y-%m-%d %H:%M", time.localtime(qa)) if qa else "?"),
+                "deletes_on": (time.strftime("%Y-%m-%d %H:%M", time.localtime(e["delete_after"]))
+                               if e.get("delete_after") else "never"),
+            })
+        except Exception:
+            continue
     return {"ok": True, "count": len(items), "items": items}
 
 
@@ -1004,21 +1048,22 @@ def restore_quarantined(id: str, destination: str = "") -> dict:
     """Move a quarantined file back to its original location (or `destination`).
     This re-arms a file you previously deemed dangerous, so callers should confirm."""
     try:
-        entries = _load_index()
-        entry = next((e for e in entries if e["id"] == id), None)
-        if not entry:
-            return {"ok": False, "error": f"no quarantine entry with id {id}"}
-        stored = Path(entry["stored_path"])
-        if not stored.exists():
-            return {"ok": False, "error": "quarantined payload is missing"}
-        target = Path(destination).expanduser() if destination else Path(entry["original_path"])
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(stored, stat.S_IRUSR | stat.S_IWUSR)
-        except Exception:
-            pass
-        shutil.move(str(stored), str(target))
-        _save_index([e for e in entries if e["id"] != id])
+        with _INDEX_LOCK:
+            entries = _load_index()
+            entry = next((e for e in entries if e.get("id") == id), None)
+            if not entry:
+                return {"ok": False, "error": f"no quarantine entry with id {id}"}
+            stored = Path(entry["stored_path"])
+            if not stored.exists():
+                return {"ok": False, "error": "quarantined payload is missing"}
+            target = Path(destination).expanduser() if destination else Path(entry["original_path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(stored, stat.S_IRUSR | stat.S_IWUSR)
+            except Exception:
+                pass
+            shutil.move(str(stored), str(target))
+            _save_index([e for e in entries if e.get("id") != id])
         return {"ok": True, "restored_to": str(target), "id": id}
     except Exception as e:
         return {"ok": False, "error": f"restore failed: {e}"}
@@ -1027,37 +1072,49 @@ def restore_quarantined(id: str, destination: str = "") -> dict:
 def delete_quarantined(id: str) -> dict:
     """Permanently delete a single quarantined file."""
     try:
-        entries = _load_index()
-        entry = next((e for e in entries if e["id"] == id), None)
-        if not entry:
-            return {"ok": False, "error": f"no quarantine entry with id {id}"}
-        try:
-            Path(entry["stored_path"]).unlink(missing_ok=True)
-        except Exception:
-            pass
-        _save_index([e for e in entries if e["id"] != id])
+        with _INDEX_LOCK:
+            entries = _load_index()
+            entry = next((e for e in entries if e.get("id") == id), None)
+            if not entry:
+                return {"ok": False, "error": f"no quarantine entry with id {id}"}
+            try:
+                Path(entry["stored_path"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+            _save_index([e for e in entries if e.get("id") != id])
         return {"ok": True, "deleted": id}
     except Exception as e:
         return {"ok": False, "error": f"delete failed: {e}"}
 
 
 def purge_expired() -> dict:
-    """Delete quarantined files whose grace period has elapsed (the 7-day auto-delete)."""
+    """Delete quarantined files whose grace period has elapsed (the 7-day auto-delete).
+    An entry is dropped ONLY once its file is confirmed gone — otherwise it's kept so a
+    later run retries (never leave orphaned malware on disk with no index record)."""
     now = time.time()
-    entries = _load_index()
-    kept, removed = [], []
-    for e in entries:
-        if e.get("delete_after") and now >= e["delete_after"]:
-            try:
-                Path(e["stored_path"]).unlink(missing_ok=True)
-            except Exception:
-                pass
-            removed.append(e["id"])
-        else:
-            kept.append(e)
-    if removed:
-        _save_index(kept)
-    return {"ok": True, "purged": removed, "remaining": len(kept)}
+    with _INDEX_LOCK:
+        entries = _load_index()
+        kept, removed, failed = [], [], []
+        for e in entries:
+            if e.get("delete_after") and now >= e["delete_after"]:
+                stored = Path(e.get("stored_path", ""))
+                try:
+                    try:
+                        os.chmod(stored, stat.S_IWUSR | stat.S_IRUSR)
+                    except Exception:
+                        pass
+                    stored.unlink()
+                    removed.append(e.get("id"))
+                except FileNotFoundError:
+                    removed.append(e.get("id"))     # already gone == success
+                except Exception as ex:
+                    kept.append(e)                  # keep so the next purge retries
+                    failed.append({"id": e.get("id"), "error": str(ex)})
+            else:
+                kept.append(e)
+        if removed:
+            _save_index(kept)
+    return {"ok": True, "purged": removed, "remaining": len(kept), "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -1219,8 +1276,12 @@ def _run_native_sandbox(p: Path, args: list[str], timeout: int) -> dict:
                 full = [runas, "/trustlevel:0x20000", subprocess.list2cmdline(cmd)]
                 iso = "limited (Windows basic-user restricted token)"
             else:
-                full = cmd
-                iso = "minimal (timeout-confined only)"
+                # NEVER run an untrusted file unconfined — that defeats the entire purpose of
+                # a sandbox. Refuse (mirrors the Linux 'no sandbox' branch) instead of executing
+                # it with the user's full privileges/filesystem/network.
+                return {"ok": False, "sandbox": "none",
+                        "error": "no sandbox available on this Windows host (install Docker "
+                                 "Desktop to run untrusted files safely)"}
         else:
             fj = _which("firejail") or _which("bwrap")
             if fj and fj.endswith("firejail"):

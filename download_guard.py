@@ -158,11 +158,23 @@ def _list_files(folder: Path) -> dict[str, int]:
     return out
 
 
+def _identity(path: str) -> str:
+    """A content-identity key (path + size + mtime). Keying _seen on this — rather than the
+    path alone — means a RE-downloaded or overwritten file at the same path is treated as
+    new and re-scanned (the old code skipped it forever)."""
+    try:
+        st = os.stat(path)
+        return f"{path}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        return path
+
+
 def _watch_loop(folder: Path, stop: threading.Event) -> None:
     """Poll the folder; scan files that are NEW and have stopped growing.
 
     A file is scanned only once both:
-      * it is not already in `_seen` (so only new arrivals after start), and
+      * its (path,size,mtime) identity isn't already in `_seen` (so new arrivals AND
+        re-downloads/overwrites are caught), and
       * its size is identical across two consecutive polls (settled / complete).
     """
     pending: dict[str, int] = {}  # path -> size observed last poll, not yet scanned
@@ -170,8 +182,9 @@ def _watch_loop(folder: Path, stop: threading.Event) -> None:
         try:
             current = _list_files(folder)
             for path, size in current.items():
+                key = _identity(path)
                 with _LOCK:
-                    already = path in _seen
+                    already = key in _seen
                 if already:
                     continue
                 prev = pending.get(path)
@@ -179,7 +192,7 @@ def _watch_loop(folder: Path, stop: threading.Event) -> None:
                     # Size stable across two polls -> finished writing -> scan.
                     pending.pop(path, None)
                     with _LOCK:
-                        _seen.add(path)
+                        _seen.add(key)
                     try:
                         result = _do_scan(path)
                         status, detail = _classify(result)
@@ -246,7 +259,7 @@ def download_guard_start(folder: str = "") -> dict:
             # Prime the seen-set so existing files are NOT treated as new arrivals.
             _seen.clear()
             existing = _list_files(target)
-            _seen.update(existing.keys())
+            _seen.update(_identity(pth) for pth in existing.keys())
             _watched_folder = target
             _stop_event = threading.Event()
             stop = _stop_event

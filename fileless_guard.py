@@ -309,11 +309,57 @@ def _record(ev: dict, action: str = "") -> None:
             _threats_found += 1
 
 
-def _handle(ev: dict) -> None:
-    """Apply the configured response to a flagged process and record it."""
+_DESTRUCTIVE_CATS = {"ransomware", "reverse-shell", "download-exec", "credential-theft",
+                     "encoded-powershell"}
+
+
+def _is_protected_pid(pid) -> bool:
+    """Never auto-terminate Ember's OWN process tree — killing ourselves (or our launcher)
+    would be catastrophic. Unknown pids are treated as protected (don't kill)."""
+    try:
+        pid = int(pid)
+    except Exception:
+        return True
+    me = os.getpid()
+    protected = {me}
+    try:
+        protected.add(os.getppid())
+    except Exception:
+        pass
+    try:
+        import psutil
+        cur = psutil.Process(me)
+        try:
+            protected.update(a.pid for a in cur.parents())
+        except Exception:
+            pass
+        try:
+            protected.update(c.pid for c in cur.children(recursive=True))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return pid in protected
+
+
+def _handle(ev: dict, allow_terminate: bool = True) -> None:
+    """Apply the configured response to a flagged process and record it.
+
+    Auto-terminate is guarded so a single heuristic can't SIGKILL a legitimate app:
+    only a malicious verdict that is CORROBORATED (2+ categories or a destructive technique),
+    is NOT part of Ember's own process tree, and (for pre-existing processes) is not from the
+    initial sweep, is actually killed. Everything else is alert-only."""
     action = "alerted"
-    if ev.get("verdict") == "malicious" and _auto_terminate_enabled():
-        action = "terminated" if _terminate(ev.get("pid")) else "terminate_failed"
+    if allow_terminate and ev.get("verdict") == "malicious" and _auto_terminate_enabled():
+        pid = ev.get("pid")
+        cats = set(ev.get("categories", []) or [])
+        corroborated = len(cats) >= 2 or bool(cats & _DESTRUCTIVE_CATS)
+        if _is_protected_pid(pid):
+            action = "alerted (Ember's own process — not terminated)"
+        elif not corroborated:
+            action = "alerted (single indicator — not auto-terminated)"
+        else:
+            action = "terminated" if _terminate(pid) else "terminate_failed"
     _record(ev, action)
 
 
@@ -417,7 +463,9 @@ def _initial_sweep() -> int:
         except Exception:
             continue
         if ev["verdict"] in ("suspicious", "malicious"):
-            _handle(ev)
+            # Pre-existing processes are ALERT-ONLY — never SIGKILL a legit app that was
+            # already running when protection started.
+            _handle(ev, allow_terminate=False)
             threats += 1
     with _LOCK:
         global _processes_scanned

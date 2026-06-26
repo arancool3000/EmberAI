@@ -305,7 +305,8 @@ def paste_text(text):
         try: prev = pyperclip.paste()
         except Exception: pass
         pyperclip.copy(text); time.sleep(0.05)
-        pyautogui.hotkey("command", "v"); time.sleep(0.1)
+        _paste_mod = "command" if sys.platform == "darwin" else "ctrl"
+        pyautogui.hotkey(_paste_mod, "v"); time.sleep(0.1)
         if prev is not None:
             try: pyperclip.copy(prev)
             except Exception: pass
@@ -793,6 +794,20 @@ def search_files(query, root="~", max_results=30, include_overlooked=True):
     }
 
 
+def _open_with_os(target, app=False):
+    """Open a URL/file (or launch an app) using the right mechanism per OS. The old code used
+    the macOS-only `open` binary everywhere, so this was fully broken on Windows/Linux."""
+    if sys.platform.startswith("win"):
+        if app:
+            subprocess.Popen(["cmd", "/c", "start", "", target])
+        else:
+            os.startfile(target)   # type: ignore[attr-defined]  # Windows-only, guarded
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open"] + (["-a", target] if app else [target]))
+    else:
+        subprocess.Popen([target] if app else ["xdg-open", target])
+
+
 def open_url(url):
     try:
         import web_policy
@@ -802,12 +817,12 @@ def open_url(url):
                     "error": g.get("reason"), "url": url}
     except Exception:
         pass
-    try: subprocess.Popen(["open", url]); return {"ok": True, "url": url}
+    try: _open_with_os(url); return {"ok": True, "url": url}
     except Exception as e: return {"ok": False, "error": str(e)}
 
 
 def open_app(name):
-    try: subprocess.Popen(["open", "-a", name]); return {"ok": True, "launched": name}
+    try: _open_with_os(name, app=True); return {"ok": True, "launched": name}
     except Exception as e: return {"ok": False, "error": str(e)}
 
 
@@ -823,7 +838,7 @@ def open_path(path):
     except Exception:
         pass
     try:
-        subprocess.Popen(["open", target])
+        _open_with_os(target)
         return {"ok": True, "opened": path}
     except Exception as e:
         return {"ok": False, "error": str(e)}
