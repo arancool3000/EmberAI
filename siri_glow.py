@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import Qt, QRectF, QTimer
-from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QConicalGradient, QPainterPath
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import Qt, QRectF, QTimer, QPointF
+from PyQt6.QtGui import (QColor, QPainter, QPen, QBrush, QConicalGradient, QPainterPath,
+                         QRadialGradient, QLinearGradient)
+from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
 
 
 # Vibrant spectral flow in the spirit of Apple's 2019 "wonderful things" / "By
@@ -210,5 +211,184 @@ class ThinkingDots(QWidget):
                     rr = r * ring
                     p.drawEllipse(QRectF(x - rr, cy - rr, 2 * rr, 2 * rr))
             p.end()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Floating Siri-style orb (a small, FOCUS-PRESERVING listener that appears on
+# "Hey Ember" instead of yanking the whole window forward over your current app).
+# ---------------------------------------------------------------------------
+
+class _Orb(QWidget):
+    """The animated sphere itself: a dark glossy ball with a flowing iridescent light
+    streak (the macOS-15 'Siri' look), breathing with the active state."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFixedSize(150, 150)
+        self._t = 0.0
+        self._palette = [QColor(h) for h in ("#ffd23f", "#ff5e3a", "#ff2d55",
+                                             "#bf5af2", "#5e5ce6", "#0a84ff", "#36d2c3")]
+        self._speed, self._breath = 0.020, 3.2     # tuned per state
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
+
+    def set_state(self, state):
+        self._speed, self._breath = {
+            "listening": (0.024, 3.6), "thinking": (0.012, 1.8), "speaking": (0.020, 5.2),
+        }.get(state, (0.020, 3.2))
+
+    def start(self):
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop(self):
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def _tick(self):
+        self._t += 0.016
+        try:
+            self.update()
+        except Exception:
+            pass
+
+    def paintEvent(self, _ev):
+        try:
+            w, h = self.width(), self.height()
+            cx, cy, r = w / 2.0, h / 2.0, min(w, h) / 2.0 - 4
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            breathe = 0.5 + 0.5 * math.sin(self._t * self._breath)
+
+            # 1. Dark glossy sphere base.
+            sphere = QRadialGradient(QPointF(cx - r * 0.25, cy - r * 0.3), r * 1.5)
+            sphere.setColorAt(0.0, QColor(58, 60, 74))
+            sphere.setColorAt(0.55, QColor(24, 25, 34))
+            sphere.setColorAt(1.0, QColor(10, 10, 16))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(sphere))
+            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+
+            # 2. Flowing iridescent light streak across the middle (the 'Siri energy').
+            p.setClipPath(self._circle_path(cx, cy, r))
+            ang = (self._t * self._speed * 360.0) % 360.0
+            grad = QConicalGradient(cx, cy, ang)
+            n = len(self._palette)
+            for i, base in enumerate(self._palette + [self._palette[0]]):
+                c = QColor(base)
+                c.setAlpha(int(150 + 90 * breathe))
+                grad.setColorAt(min(1.0, i / n), c)
+            streak_h = r * (0.62 + 0.20 * breathe)
+            p.setBrush(QBrush(grad))
+            p.drawEllipse(QRectF(cx - r * 1.05, cy - streak_h / 2, 2 * r * 1.05, streak_h))
+            # soften: a dark veil top & bottom so it reads as a horizontal beam
+            veil = QLinearGradient(0, cy - r, 0, cy + r)
+            veil.setColorAt(0.0, QColor(12, 12, 18, 210))
+            veil.setColorAt(0.5, QColor(12, 12, 18, 0))
+            veil.setColorAt(1.0, QColor(12, 12, 18, 210))
+            p.setBrush(QBrush(veil))
+            p.drawRect(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            p.setClipping(False)
+
+            # 3. Specular highlight + bright rim.
+            hi = QRadialGradient(QPointF(cx - r * 0.35, cy - r * 0.45), r * 0.7)
+            hi.setColorAt(0.0, QColor(255, 255, 255, 120))
+            hi.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setBrush(QBrush(hi))
+            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            pen = QPen(QColor(255, 255, 255, int(70 + 60 * breathe)), 2.0)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            p.end()
+        except Exception:
+            pass
+
+    def _circle_path(self, cx, cy, r):
+        path = QPainterPath()
+        path.addEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+        return path
+
+
+class SiriOrb(QWidget):
+    """A floating, FOCUS-PRESERVING Siri orb window. It appears over whatever app you're
+    using (it never steals focus or switches apps), shows the orb + a caption, and is
+    click-through. Driven by the host: popup(state) / set_caption(text) / dismiss()."""
+
+    def __init__(self):
+        super().__init__(None)
+        # NB: deliberately NOT Qt.Tool — on macOS a Tool window auto-hides whenever the app
+        # isn't frontmost, which is exactly when the orb needs to be visible (you're in
+        # another app). Frameless + stays-on-top + does-not-accept-focus keeps it floating
+        # over other apps without stealing focus.
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)  # keep current app focused
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 14)
+        lay.setSpacing(8)
+        self._orb = _Orb(self)
+        lay.addWidget(self._orb, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._caption = QLabel("")
+        self._caption.setWordWrap(True)
+        self._caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._caption.setFixedWidth(300)
+        self._caption.setStyleSheet(
+            "color:#f2f3f8; font:14px -apple-system,'Segoe UI',sans-serif;"
+            "background:rgba(18,19,26,205); border:1px solid rgba(255,255,255,28);"
+            "border-radius:14px; padding:9px 13px;")
+        self._caption.setVisible(False)
+        lay.addWidget(self._caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.setFixedWidth(332)
+        self._dismiss_timer = QTimer(self)
+        self._dismiss_timer.setSingleShot(True)
+        self._dismiss_timer.timeout.connect(self.dismiss)
+
+    def popup(self, state: str = "listening"):
+        self._dismiss_timer.stop()
+        self._orb.set_state(state)
+        self._orb.start()
+        self._reposition()
+        self.show()
+        self.raise_()          # on top, but WA_ShowWithoutActivating means focus stays put
+
+    def set_state(self, state: str):
+        self._orb.set_state(state)
+
+    def set_caption(self, text: str):
+        text = (text or "").strip()
+        if not text:
+            self._caption.setVisible(False)
+        else:
+            self._caption.setText(text[:400])
+            self._caption.setVisible(True)
+        self._reposition()
+
+    def dismiss_after(self, ms: int):
+        self._dismiss_timer.start(max(500, int(ms)))
+
+    def dismiss(self):
+        self._orb.stop()
+        self.hide()
+        self._caption.setVisible(False)
+
+    def _reposition(self):
+        """Sit near the bottom-centre of the primary screen (like the macOS Siri orb)."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            self.adjustSize()
+            scr = QApplication.primaryScreen().availableGeometry()
+            x = scr.x() + (scr.width() - self.width()) // 2
+            y = scr.y() + scr.height() - self.height() - 70
+            self.move(x, y)
         except Exception:
             pass

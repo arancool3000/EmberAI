@@ -1125,12 +1125,21 @@ class SettingsDialog(QDialog):
             lambda v: self.glass_opacity_value.setText(_blur_word(v))
         )
         row_g = QHBoxLayout()
-        row_g.addWidget(QLabel("See-through:"))
+        self._glass_seethru_label = QLabel("See-through:")
+        row_g.addWidget(self._glass_seethru_label)
         row_g.addWidget(self.glass_opacity_slider, 1)
         row_g.addWidget(self.glass_opacity_value)
         wrap_g = QWidget()
         wrap_g.setLayout(row_g)
         layout.addRow("  Glass opacity:", wrap_g)
+
+        # The glass slider only does anything when Liquid Glass is ON — grey it out otherwise
+        # (so it's clearly inert instead of "pointlessly" moving with no effect).
+        def _sync_glass_enabled(on):
+            for w in (self.glass_opacity_slider, self.glass_opacity_value, self._glass_seethru_label):
+                w.setEnabled(bool(on))
+        self.liquid_glass_check.toggled.connect(_sync_glass_enabled)
+        _sync_glass_enabled(self.liquid_glass_check.isChecked())
 
         self.accent_combo = QComboBox()
         accents = [
@@ -3085,6 +3094,9 @@ class EmberWindow(QWidget):
         if mode == "voice_chat":
             self._handle_voice_chat_transcript(text, err)
             return
+        if mode == "orb":
+            self._handle_orb_transcript(text, err)
+            return
         # Dictation is one-shot: hand the mic back to the wake word and dim the glow.
         try:
             import wake_word
@@ -3179,6 +3191,31 @@ class EmberWindow(QWidget):
         else:
             root.setGraphicsEffect(None)
 
+    def _theme_overrides(self) -> str:
+        """Extra QSS appended to the base theme so the user's accent colour AND chat text
+        size actually take effect (the base STYLE was static, which is why both 'did nothing').
+        QSS later-rules win, so these override the base."""
+        accent = self.settings.get("accent_color", "#7aa2f7") or "#7aa2f7"
+        try:
+            fs = max(10, min(22, int(self.settings.get("font_size", 12))))
+        except Exception:
+            fs = 12
+        return f"""
+QPushButton#send {{ background-color: {accent}; border-color: {accent}; color: #ffffff; }}
+QLineEdit:focus, QTextEdit:focus {{ border-color: {accent}; }}
+QPushButton#chip:hover {{ border-color: {accent}; }}
+QListWidget::item:selected {{ background-color: {accent}; }}
+QLabel#bubbleBody {{ font-size: {fs}px; }}
+"""
+
+    def _apply_window_theme(self):
+        """Set the main window stylesheet = base theme (glass or flat) + accent/font overrides.
+        Central place so accent + chat text size always apply, glass on or off."""
+        try:
+            self.setStyleSheet(STYLE + self._theme_overrides())
+        except Exception:
+            self.setStyleSheet(STYLE)
+
     def _apply_glass_effect(self):
         """Liquid Glass toggle. The clean approach:
         - When ON: enable DWM acrylic on the window. The root QFrame's QSS uses rgba bg
@@ -3229,10 +3266,11 @@ class EmberWindow(QWidget):
         # through and make it unreadable — that was the see-through bug), and thins the veil
         # when a blur IS mounted (Windows acrylic / opt-in EMBER_NATIVE_BLUR).
         if enabled:
-            self.setStyleSheet(_glass_style(200, self.settings.get("accent_color", "#58a6ff"),
-                                            see_through=blur_level, blurred=blurred))
+            base = _glass_style(200, self.settings.get("accent_color", "#58a6ff"),
+                                see_through=blur_level, blurred=blurred)
         else:
-            self.setStyleSheet(STYLE)
+            base = STYLE
+        self.setStyleSheet(base + self._theme_overrides())
         self.update()
 
     def _toggle_max(self):
@@ -3574,7 +3612,7 @@ class EmberWindow(QWidget):
         input_row.addLayout(send_col)
         layout.addLayout(input_row)
 
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(STYLE + self._theme_overrides())
         # Mark root widget so the stylesheet applies
         root.setProperty("class", "root")
 
@@ -3908,6 +3946,7 @@ class EmberWindow(QWidget):
             m.setWordWrap(True)
             v.addWidget(m)
         body = QLabel()
+        body.setObjectName("bubbleBody")   # so the chat-text-size override can target it
         body.setWordWrap(True)
         body.setTextFormat(Qt.TextFormat.RichText)
         body.setText(_md_to_html(text))
@@ -4804,28 +4843,111 @@ class EmberWindow(QWidget):
         except Exception as e:
             print(f"[Wake word autostart failed: {e}]")
 
+    def _ensure_orb(self):
+        """The floating Siri orb (a top-level, focus-preserving overlay)."""
+        if getattr(self, "_orb", None) is None:
+            try:
+                from siri_glow import SiriOrb
+                self._orb = SiriOrb()
+            except Exception:
+                self._orb = None
+        return getattr(self, "_orb", None)
+
+    def _orb_speak(self, text: str):
+        """Always speak (orb turns are voice interactions), regardless of the TTS setting."""
+        try:
+            import voice
+            spoken = re.sub(r"\[[^\]]+\]", "", (text or "").replace("*", "").replace("`", "")).strip()
+            if spoken:
+                voice.speak(spoken[:700])
+        except Exception:
+            pass
+
     def _on_wake_word(self):
-        """'Hey Ember' was heard (marshalled to the UI thread). Bring Ember forward (it may be
-        hidden in the tray), light up, and start a turn."""
+        """'Hey Ember' was heard. Show a small FLOATING ORB over whatever app you're using —
+        DON'T switch apps or bring the whole Ember window forward — then listen, and caption +
+        speak the reply on the orb (like the macOS Siri orb)."""
+        orb = self._ensure_orb()
+        if not self.agent:
+            if orb:
+                orb.popup("speaking")
+                orb.set_caption("Add your API key to start.")
+                orb.dismiss_after(3500)
+            self._orb_speak("Add your API key to start.")
+            return
+        if self._listening:
+            return   # already mid-turn
+        if orb:
+            orb.popup("listening")
+            orb.set_caption("Listening…")
+        self._orb_active = True
+        self._start_orb_turn()
+
+    def _start_orb_turn(self):
+        """Listen once for a wake-word turn and send it to the agent. The reply is captioned +
+        spoken on the orb (handled in the agent-event handler), never opening the window."""
         try:
-            if self.isHidden() or self.isMinimized():
-                self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            import voice
+            ok, detail = voice.mic_available()
+        except Exception:
+            ok, detail = True, ""
+        if not ok:
+            orb = self._ensure_orb()
+            if orb:
+                orb.set_caption(detail or "Microphone unavailable")
+                orb.dismiss_after(4000)
+            self._orb_active = False
+            return
+        self._listening = True
+        self._listening_mode = "orb"
+        try:
+            import wake_word
+            wake_word.pause()
         except Exception:
             pass
+
+        def _cb(text, err):
+            self._bridge.transcript.emit(text or "", err or "")
         try:
-            self._set_siri("listening")
-            if not self.agent:
-                # Nothing to talk to yet — just acknowledge with the glow + a chime of TTS.
-                self._speak_reply("Add your API key to start.")
-                return
-            if not self._voice_chat_enabled:
-                self._toggle_voice_chat()      # enables voice chat + starts listening
-            elif not self._listening:
-                self._start_voice_listen(mode="voice_chat")
+            import voice
+            voice.listen_once(_cb, phrase_timeout=8.0, listen_timeout=10.0)
+        except Exception:
+            self._listening = False
+            self._orb_active = False
+
+    def _handle_orb_transcript(self, text: str, err: str):
+        """The wake-word turn's speech came back: send it to the agent (reply is captioned +
+        spoken on the orb via the event handler). Resume the wake word listener afterward."""
+        orb = self._ensure_orb()
+        try:
+            import wake_word
+            wake_word.resume()
         except Exception:
             pass
+        text = (text or "").strip()
+        if err or not text:
+            if orb:
+                orb.set_caption("Didn't catch that — say “Hey Ember” again.")
+                orb.dismiss_after(3000)
+            self._orb_active = False
+            return
+        if not self.agent:
+            self._orb_active = False
+            if orb:
+                orb.dismiss()
+            return
+        if orb:
+            orb.set_state("thinking")
+            orb.set_caption("Thinking…")
+        # Record the turn + send. The window stays where it is; reply comes back via events.
+        self._append_history("user", text)
+        try:
+            self.agent.send_user_message(self._agent_contextual_text(text))
+        except Exception as e:
+            if orb:
+                orb.set_caption(f"Error: {e}")
+                orb.dismiss_after(4000)
+            self._orb_active = False
 
     # --- Siri-style glow ------------------------------------------------------
     def _ensure_siri(self):
@@ -5250,10 +5372,10 @@ class EmberWindow(QWidget):
             if hasattr(self, "_automation"):
                 self._automation.enabled = bool(self.settings.get("automation_enabled", True))
                 self._automation.auto_confirm_popups = bool(self.settings.get("auto_confirm_popups", False))
-            # Re-apply appearance live (no restart needed)
+            # Re-apply appearance live (no restart needed). Always re-theme so the accent
+            # colour AND chat text size take effect immediately (both used to "do nothing").
             self._apply_glow()
-            if any(self.settings.get(k) != old_glass[k] for k in glass_keys):
-                self._apply_glass_effect()
+            self._apply_glass_effect()
             new_hotkey = (self.settings.get("hotkey") or "ctrl+shift+space").lower()
             if new_hotkey != old_hotkey:
                 self._install_hotkey()
@@ -5475,7 +5597,16 @@ class EmberWindow(QWidget):
                 self._append_history("assistant", text)
                 if _remote:
                     _remote.push_chat("assistant", text)
-                self._speak_reply(text)
+                # Floating-orb turn ("Hey Ember"): caption the reply on the orb and ALWAYS
+                # speak it (it's a voice interaction), without bringing the window forward.
+                if getattr(self, "_orb_active", False):
+                    orb = self._ensure_orb()
+                    if orb:
+                        orb.set_state("speaking")
+                        orb.set_caption(text)
+                    self._orb_speak(text)
+                else:
+                    self._speak_reply(text)
             elif ev.kind == "tool_call":
                 name = ev.payload["name"]
                 args_short = self._shorten_args(ev.payload["args"])
@@ -5527,7 +5658,18 @@ class EmberWindow(QWidget):
                 self.send_btn.setEnabled(True)
                 self._hide_typing_indicator()
                 self._set_status(f"Ready ({self.settings.get('model_id') or self.settings.get('gemini_model')})")
-                if self._voice_chat_enabled:
+                if getattr(self, "_orb_active", False):
+                    # Wake-word orb turn finished — leave the reply up briefly, then fade.
+                    self._orb_active = False
+                    orb = self._ensure_orb()
+                    if orb:
+                        orb.dismiss_after(7000)
+                    try:
+                        import wake_word
+                        wake_word.resume()
+                    except Exception:
+                        pass
+                elif self._voice_chat_enabled:
                     self._voice_waiting_for_reply = False
                     self._update_voice_chat_ui("Listening again")
                     QTimer.singleShot(650, lambda: self._start_voice_listen(mode="voice_chat"))
