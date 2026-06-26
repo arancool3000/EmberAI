@@ -26,11 +26,12 @@ import threading
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse, parse_qs, unquote
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
                              QTabWidget, QLabel, QTextBrowser, QSplitter, QSizePolicy, QMenu,
-                             QInputDialog, QMessageBox, QLineEdit as _QLE)
+                             QInputDialog, QMessageBox, QProgressBar, QGraphicsOpacityEffect,
+                             QLineEdit as _QLE)
 
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -247,6 +248,17 @@ class EmberBrowser(QWidget):
         bar.addWidget(_btn("✨", "AI panel", self._toggle_ai))
         outer.addLayout(bar)
 
+        # Slim page-load progress line (animates as pages load, fades out when done).
+        self._loadbar = QProgressBar()
+        self._loadbar.setTextVisible(False)
+        self._loadbar.setRange(0, 100)
+        self._loadbar.setFixedHeight(3)
+        self._loadbar.setStyleSheet(
+            "QProgressBar{background:transparent;border:none;}"
+            "QProgressBar::chunk{background:#e2562a;}")
+        self._loadbar.setVisible(False)
+        outer.addWidget(self._loadbar)
+
         # find bar (hidden until Ctrl+F)
         self._find_bar = QWidget()
         fb = QHBoxLayout(self._find_bar)
@@ -313,6 +325,8 @@ class EmberBrowser(QWidget):
         view.urlChanged.connect(lambda u, v=view: self._on_url_changed(v, u))
         view.titleChanged.connect(lambda t, v=view: self._on_title(v, t))
         view.loadFinished.connect(lambda ok, v=view: self._on_load_finished(v, ok))
+        view.loadStarted.connect(lambda v=view: self._on_load_progress(v, 0))
+        view.loadProgress.connect(lambda pct, v=view: self._on_load_progress(v, pct))
         idx = self.tabs.addTab(view, "New tab")
         self.tabs.setCurrentIndex(idx)
         if url:
@@ -359,7 +373,7 @@ class EmberBrowser(QWidget):
         low = text.lower()
         if low.startswith("ai ") or text.endswith("?"):
             q = text[3:].strip() if low.startswith("ai ") else text
-            self._ai_panel.setVisible(True)
+            self._set_ai_panel_visible(True)
             self._ask_web(q)
             return
         url = self._to_url(text)
@@ -406,7 +420,24 @@ class EmberBrowser(QWidget):
         self._status.setText(f"🛡 {self._guard.blocked} trackers blocked this session"
                              f"   ·   {len(self._bookmarks)} bookmarks")
 
+    def _on_load_progress(self, view, pct: int):
+        """Drive the slim top progress line as the CURRENT tab loads (ignore background tabs)."""
+        bar = getattr(self, "_loadbar", None)
+        if bar is None or view is not self._cur():
+            return
+        try:
+            if pct < 100:
+                if not bar.isVisible():
+                    bar.setVisible(True)
+                bar.setValue(pct)
+            else:
+                bar.setValue(100)
+                QTimer.singleShot(280, lambda: bar.setVisible(False) if bar.value() >= 100 else None)
+        except Exception:
+            pass
+
     def _on_load_finished(self, view, ok):
+        self._on_load_progress(view, 100)
         self._refresh_status()
         if not ok:
             return
@@ -777,14 +808,42 @@ class EmberBrowser(QWidget):
         return panel
 
     def _toggle_ai(self):
-        self._ai_panel.setVisible(not self._ai_panel.isVisible())
+        self._set_ai_panel_visible(not self._ai_panel.isVisible())
+
+    def _set_ai_panel_visible(self, show: bool):
+        """Show/hide the AI side panel with a quick opacity fade (it's a plain QWidget, so
+        an opacity effect is safe here — unlike the native web view)."""
+        panel = self._ai_panel
+        if show == panel.isVisible() and show:
+            return
+        try:
+            eff = panel.graphicsEffect()
+            if not isinstance(eff, QGraphicsOpacityEffect):
+                eff = QGraphicsOpacityEffect(panel)
+                panel.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(160)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            if show:
+                panel.setVisible(True)
+                eff.setOpacity(0.0)
+                anim.setStartValue(0.0)
+                anim.setEndValue(1.0)
+            else:
+                anim.setStartValue(1.0)
+                anim.setEndValue(0.0)
+                anim.finished.connect(lambda: panel.setVisible(False))
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._panel_anim = anim   # keep a ref so it isn't GC'd mid-flight
+        except Exception:
+            panel.setVisible(show)
 
     def _ask_web(self, question: str):
         """Answer a general question by SEARCHING THE WEB (live results), not just the model's
         memory. Used for address-bar 'ai …' / '?' queries and the AI panel's 🌐 Web button."""
         if not question:
             return
-        self._ai_panel.setVisible(True)
+        self._set_ai_panel_visible(True)
         self._ai_in.clear()
         self._ai_out.append(f"<b>You:</b> {_html.escape(question)}")
         self._ai_out.append("<i>🌐 Searching the web…</i>")
@@ -802,7 +861,7 @@ class EmberBrowser(QWidget):
     def _ask_ai(self, question: str):
         if not question:
             return
-        self._ai_panel.setVisible(True)
+        self._set_ai_panel_visible(True)
         self._ai_in.clear()
         self._ai_out.append(f"<b>You:</b> {_html.escape(question)}")
         v = self._cur()
@@ -814,7 +873,7 @@ class EmberBrowser(QWidget):
             daemon=True).start())
 
     def _ai_check_page(self):
-        self._ai_panel.setVisible(True)
+        self._set_ai_panel_visible(True)
         v = self._cur()
         if v is None:
             return
