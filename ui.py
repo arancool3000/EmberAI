@@ -4063,6 +4063,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.chat_layout.addStretch(1)
         self.chat_scroll.setWidget(self.chat_container)
         layout.addWidget(self.chat_scroll, 1)
+        # "Stick to bottom": auto-follow new content (incl. streaming growth) UNLESS the user
+        # has scrolled up. rangeChanged fires whenever the content height changes, so we always
+        # catch the FINAL height (fixes "have to scroll to see the latest message" caused by
+        # scrolling on a stale, pre-layout maximum). valueChanged tells us if the user left the
+        # bottom (programmatic scroll-to-max keeps us stuck; dragging up un-sticks).
+        self._chat_stick_bottom = True
+        _csb = self.chat_scroll.verticalScrollBar()
+        _csb.rangeChanged.connect(lambda _mn, _mx: self._chat_follow_bottom())
+        _csb.valueChanged.connect(self._on_chat_scrolled)
 
         # Input row
         input_row = QHBoxLayout()
@@ -4144,6 +4153,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._history_loading = False
 
     def _clear_chat_view(self):
+        # A fresh/loaded chat should land at the bottom (latest message visible).
+        self._chat_stick_bottom = True
         while self.chat_layout.count() > 1:
             item = self.chat_layout.takeAt(0)
             w = item.widget()
@@ -4417,6 +4428,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         frame = QFrame()
         if kind == "user":
             frame.setObjectName("bubbleUser")
+            # The user just spoke — they want to see it + the reply, so re-follow the bottom
+            # even if they'd scrolled up earlier.
+            self._chat_stick_bottom = True
         elif kind == "tool":
             frame.setObjectName("bubbleTool")
         elif kind == "error":
@@ -4590,9 +4604,32 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         (showEvent, window-level opacity) is unaffected."""
         return
 
+    def _on_chat_scrolled(self, value: int):
+        """Track whether the user is parked at the bottom. Programmatic scroll-to-max keeps
+        us stuck; dragging up by more than a small tolerance un-sticks (so we stop yanking
+        them back down while they read history); returning to the bottom re-sticks."""
+        try:
+            bar = self.chat_scroll.verticalScrollBar()
+            self._chat_stick_bottom = (bar.maximum() - value) <= 48
+        except Exception:
+            pass
+
+    def _chat_follow_bottom(self):
+        """Snap to the bottom when content grows, but only if we're sticking (user at bottom)."""
+        if not getattr(self, "_chat_stick_bottom", True):
+            return
+        try:
+            bar = self.chat_scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        except Exception:
+            pass
+
     def _scroll_to_bottom_smooth(self, duration: int = 190):
         try:
             bar = self.chat_scroll.verticalScrollBar()
+            # Respect the user reading history — don't yank them down if they scrolled up.
+            if not getattr(self, "_chat_stick_bottom", True):
+                return
             end = bar.maximum()
             if not bool(self.settings.get("animations_enabled", True)):
                 bar.setValue(end)
@@ -6190,9 +6227,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 if getattr(self, "_streaming_bubble_label", None):
                     self._streaming_buffer += ev.payload or ""
                     self._streaming_bubble_label.setText(_md_to_html(self._streaming_buffer))
-                    QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(
-                        self.chat_scroll.verticalScrollBar().maximum()
-                    ))
+                    # Follow the stream only if the user is parked at the bottom (don't yank
+                    # them down mid-read). rangeChanged also fires on growth as a backstop.
+                    QTimer.singleShot(0, self._chat_follow_bottom)
                 return
             if ev.kind == "stream_end":
                 # Lock in the final text and clear streaming state.
@@ -6398,9 +6435,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         v.addLayout(btn_row)
 
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame)
-        QTimer.singleShot(50, lambda: self.chat_scroll.verticalScrollBar().setValue(
-            self.chat_scroll.verticalScrollBar().maximum()
-        ))
+        self._chat_stick_bottom = True   # an action prompt the user must see
+        QTimer.singleShot(50, self._chat_follow_bottom)
 
     def _show_confirm_inline(self, pending: PendingConfirmation):
         frame = QFrame()
@@ -6442,9 +6478,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         v.addLayout(btn_row)
 
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame)
-        QTimer.singleShot(50, lambda: self.chat_scroll.verticalScrollBar().setValue(
-            self.chat_scroll.verticalScrollBar().maximum()
-        ))
+        self._chat_stick_bottom = True   # an action prompt the user must see
+        QTimer.singleShot(50, self._chat_follow_bottom)
 
 
 def main(instance_listener=None):
