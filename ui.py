@@ -396,7 +396,8 @@ def load_settings() -> dict:
         "voice_chat_auto_send": True,
         "voice_chat_continue_after_silence": True,
         "voice_chat_phrase_timeout": 8,
-        "tts_engine": "system",       # read-aloud engine: system | gemini | soundtools
+        "tts_engine": "system",       # read-aloud engine: system | edge | gemini | soundtools
+        "edge_tts_voice": "en-US-AriaNeural",  # Microsoft Edge neural voice (free, no key)
         "gemini_tts_voice": "Kore",
         "soundtools_api_key": "",
         "live_voice_enabled": False,  # use the Gemini Live API for real-time natural voice chat
@@ -1229,8 +1230,9 @@ class SettingsDialog(QDialog):
         # --- Text-to-speech voice/engine ---
         self.tts_engine_combo = QComboBox()
         for label, val in (("System voice (free, built-in)", "system"),
+                           ("Edge Neural TTS — natural & free, NO key needed (recommended)", "edge"),
                            ("Gemini TTS — most natural (uses your Gemini key; rate-limited)", "gemini"),
-                           ("Soundtools.io (configure key below)", "soundtools")):
+                           ("Custom HTTP endpoint (advanced)", "soundtools")):
             self.tts_engine_combo.addItem(label, userData=val)
         cur_tts = self.settings.get("tts_engine", "system")
         for i in range(self.tts_engine_combo.count()):
@@ -1238,14 +1240,24 @@ class SettingsDialog(QDialog):
                 self.tts_engine_combo.setCurrentIndex(i)
         layout.addRow("Read-aloud voice:", self.tts_engine_combo)
 
+        self.edge_voice_input = QLineEdit(self.settings.get("edge_tts_voice", "en-US-AriaNeural"))
+        self.edge_voice_input.setPlaceholderText(
+            "Edge voice, e.g. en-US-AriaNeural, en-GB-SoniaNeural, en-US-GuyNeural")
+        self.edge_voice_input.setToolTip(
+            "Microsoft Edge neural voices — free, no API key, not rate-limited. Needs the "
+            "'edge-tts' package (pip install edge-tts). Falls back to the system voice if missing.")
+        layout.addRow("Edge voice:", self.edge_voice_input)
+
         self.gemini_voice_input = QLineEdit(self.settings.get("gemini_tts_voice", "Kore"))
         self.gemini_voice_input.setPlaceholderText("Gemini voice name, e.g. Kore, Puck, Charon, Aoede")
         layout.addRow("Gemini voice:", self.gemini_voice_input)
 
-        self.soundtools_key_input = QLineEdit(self.settings.get("soundtools_api_key", ""))
-        self.soundtools_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.soundtools_key_input.setPlaceholderText("Soundtools.io API key (optional)")
-        layout.addRow("Soundtools key:", self.soundtools_key_input)
+        # soundtools.io has no public API key, so the old key field is gone. This is now an
+        # optional CUSTOM endpoint URL for power users running their own/any HTTP TTS service.
+        self.soundtools_url_input = QLineEdit(self.settings.get("soundtools_url", ""))
+        self.soundtools_url_input.setPlaceholderText(
+            "Custom TTS endpoint URL (optional, for 'Custom HTTP endpoint') — leave blank")
+        layout.addRow("Custom TTS URL:", self.soundtools_url_input)
 
         # --- Natural voice (Gemini Live API, real-time full-duplex) ---
         self.live_voice_check = QCheckBox(
@@ -2323,8 +2335,9 @@ class SettingsDialog(QDialog):
         self.settings["voice_output"] = self.voice_check.isChecked()
         if hasattr(self, "tts_engine_combo"):
             self.settings["tts_engine"] = self.tts_engine_combo.currentData() or "system"
+            self.settings["edge_tts_voice"] = self.edge_voice_input.text().strip() or "en-US-AriaNeural"
             self.settings["gemini_tts_voice"] = self.gemini_voice_input.text().strip() or "Kore"
-            self.settings["soundtools_api_key"] = self.soundtools_key_input.text().strip()
+            self.settings["soundtools_url"] = self.soundtools_url_input.text().strip()
         if hasattr(self, "live_voice_check"):
             self.settings["live_voice_enabled"] = self.live_voice_check.isChecked()
             self.settings["live_voice_voice"] = self.live_voice_voice_input.text().strip() or "Zephyr"
@@ -5506,6 +5519,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             import voice
             voice.set_tts_config({
                 "tts_engine": self.settings.get("tts_engine", "system"),
+                "edge_tts_voice": self.settings.get("edge_tts_voice", "en-US-AriaNeural"),
                 "gemini_api_key": self.settings.get("gemini_api_key", ""),
                 "gemini_tts_voice": self.settings.get("gemini_tts_voice", "Kore"),
                 "soundtools_api_key": self.settings.get("soundtools_api_key", ""),

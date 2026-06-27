@@ -16,3 +16,8 @@ pyaudio>=0.2.14
 # Web Speech for wake detection, which works but makes a network call per listen.
 pocketsphinx>=5.0.0
 
+# Optional: natural neural text-to-speech with NO API key and no rate limits
+# (Microsoft Edge voices). Select "Edge Neural TTS" in Settings ▸ Voice. Without it,
+# Ember falls back to the system voice. Pure-Python; no system libs needed.
+edge-tts>=6.1.0
+

@@ -99,18 +99,25 @@ def _ensure_tts():
 
 def speak(text: str):
     """Speak `text` aloud using the configured engine. Engines (tts_engine setting):
+      • 'edge'       — Microsoft Edge neural TTS: very natural, FREE, NO API key, not
+                       rate-limited (needs the `edge-tts` package)
       • 'gemini'     — Gemini TTS (very natural; needs a Gemini key; rate-limited)
-      • 'soundtools' — a configurable HTTP TTS endpoint (soundtools.io etc.)
+      • 'soundtools' — a custom HTTP TTS endpoint URL (advanced; key optional)
       • 'system'/auto — native macOS `say` (premium voice) / pyttsx3 elsewhere (free, default)
     Any engine falls back to the system voice on error so speech never silently dies."""
     if not text or not text.strip():
         return
     engine = (_TTS_CONFIG.get("tts_engine") or "system").lower()
     try:
-        if engine == "gemini" and (_TTS_CONFIG.get("gemini_api_key") or "").strip():
+        if engine == "edge":
+            if _edge_tts(text):
+                return
+        elif engine == "gemini" and (_TTS_CONFIG.get("gemini_api_key") or "").strip():
             if _gemini_tts(text):
                 return
-        elif engine == "soundtools" and (_TTS_CONFIG.get("soundtools_api_key") or "").strip():
+        elif engine == "soundtools" and (_TTS_CONFIG.get("soundtools_url") or "").strip():
+            # soundtools.io has no public API key — this path is for ANY custom HTTP TTS
+            # endpoint you point it at (auth header sent only if you provide a key).
             if _soundtools_tts(text):
                 return
     except Exception:
@@ -189,20 +196,46 @@ def _gemini_tts(text: str) -> bool:
         return False
 
 
+def _edge_tts(text: str) -> bool:
+    """Microsoft Edge neural TTS — very natural, FREE, no API key, not rate-limited. Uses the
+    `edge-tts` package (lazy import) to synthesize an MP3, then plays it. Returns True if spoken."""
+    try:
+        import asyncio
+        import tempfile
+        import edge_tts
+        voice = (_TTS_CONFIG.get("edge_tts_voice") or "en-US-AriaNeural").strip() or "en-US-AriaNeural"
+        out = str(Path(tempfile.gettempdir()) / f"ember_tts_{int(time.time() * 1000)}.mp3")
+
+        async def _synth():
+            await edge_tts.Communicate(text[:2500], voice).save(out)
+
+        asyncio.run(_synth())
+        if not Path(out).exists() or Path(out).stat().st_size == 0:
+            return False
+        _play_audio_file(out)
+        return True
+    except Exception:
+        return False
+
+
 def _soundtools_tts(text: str) -> bool:
-    """A configurable HTTP TTS endpoint (e.g. soundtools.io). POSTs {text, voice} with a Bearer
-    key; accepts either raw audio bytes or JSON {audio_url|url}. Best-effort + fully optional."""
+    """A configurable HTTP TTS endpoint (point soundtools_url at any service). POSTs
+    {text, voice}; sends a Bearer header ONLY if you've set a key (soundtools.io itself has
+    no public key). Accepts raw audio bytes or JSON {audio_url|url}. Best-effort + optional."""
     try:
         import requests
-        url = (_TTS_CONFIG.get("soundtools_url") or "https://soundtools.io/api/text-to-speech").strip()
+        url = (_TTS_CONFIG.get("soundtools_url") or "").strip()
+        if not url:
+            return False
         key = (_TTS_CONFIG.get("soundtools_api_key") or "").strip()
         voice = (_TTS_CONFIG.get("soundtools_voice") or "").strip()
         payload = {"text": text[:2000]}
         if voice:
             payload["voice"] = voice
-        r = requests.post(url, json=payload,
-                          headers={"Authorization": f"Bearer {key}", "Accept": "audio/mpeg"},
-                          timeout=30)
+        headers = {"Accept": "audio/mpeg"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        r = requests.post(url, json=payload, headers=headers, timeout=30)
         if r.status_code != 200:
             return False
         ctype = r.headers.get("Content-Type", "")
