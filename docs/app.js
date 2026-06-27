@@ -1,6 +1,6 @@
 /* Ember site — OS detection, release manifest, nav. Owner/repo synced from version.py
    by the release script (sed on the next line). */
-const EMBER = { owner: "arancool3000", repo: "atlas" };
+const EMBER = { owner: "arancool3000", repo: "EmberAI" };
 EMBER.repoUrl = `https://github.com/${EMBER.owner}/${EMBER.repo}`;
 EMBER.releasesUrl = `${EMBER.repoUrl}/releases/latest`;
 

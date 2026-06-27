@@ -1,17 +1,17 @@
 {
-  "version": "1.0.0",
-  "pub_date": "2026-06-14",
+  "version": "1.1.0",
+  "pub_date": "2026-06-27",
   "min_macos": "12.0",
   "min_windows": "10",
   "downloads": {
     "macos": {
-      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Ember-macOS.zip",
+      "url": "https://github.com/arancool3000/EmberAI/releases/latest/download/Ember-macOS.zip",
       "sha256": ""
     },
     "windows": {
-      "url": "https://github.com/arancool3000/atlas/releases/latest/download/Ember-Windows.zip",
+      "url": "https://github.com/arancool3000/EmberAI/releases/latest/download/Ember-Windows.zip",
       "sha256": ""
     }
   },
-  "notes": "First public release of Ember — the AI agent for your Mac and PC.\n\n• Sees the screen with on-device OCR (Apple Vision / Windows OCR) and clicks exact on-screen text\n• Gemini (free) + Claude Opus 4.8 with adaptive thinking and streaming\n• Real browser control, file management, shell, and system diagnostics\n• Ember Link: drive your computer from your phone over Wi-Fi\n• Hands-free voice chat\n• Confirms before destructive commands, data sending, and risky key-combos\n• Background auto-update on both macOS and Windows"
+  "notes": "Ember 1.1.0 — a big update.\n\n• Natural voice (Gemini Live API) and free, key-less Edge neural read-aloud\n• Conversational \"Hey Ember\": keep chatting hands-free, with the glow around Ember\n• Audio-reactive glow + a redesigned floating orb\n• Ember Browser: AI extension maker, load-progress + panel animations\n• Norton-style Antivirus and a standalone Ad Blocker app\n• Quit-proof global shortcut, adjustable mouse speed, original icon set\n• Ember learns about you (smarter long-term memory)\n• Lots of fixes: readable Quick-tasks menu, sticky chat auto-scroll, and more"
 }

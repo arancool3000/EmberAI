@@ -6158,11 +6158,19 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return
         if frozen:
             try:
-                import updater
+                import updater, version
                 if not updater.can_self_update():
+                    site = version.site_url()
+                    dl = version.latest_download_url()
                     self._add_bubble("system",
-                        "This build can't self-update (it isn't writable or the release feed "
-                        "isn't published yet). Download the newest build from the Ember website.")
+                        "This installed build can't update itself — usually because macOS is "
+                        "running it from a read-only/quarantined location (Gatekeeper), or no "
+                        "release is published yet.\n\n"
+                        f"• **Newest build:** {dl}\n"
+                        f"• **Website:** {site}\n\n"
+                        "Tip: for updates that ‘just work’, run Ember from source — double-click "
+                        "**RUN_FROM_SOURCE.command** in the repo. It pulls the latest on every "
+                        "launch, so you never have to download again.")
                     return
             except Exception as e:
                 self._add_bubble("error", f"Updater unavailable: {e}")
@@ -6192,7 +6200,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             site = "the Ember website"
         self._add_bubble("system",
             "This copy of Ember isn't a git checkout or an installed app, so it can't update "
-            f"itself. Get the latest build from {site}.")
+            f"itself. Get the latest build from {site} — or, for updates that ‘just work’, run "
+            "from source: double-click **RUN_FROM_SOURCE.command** (it pulls the latest on every "
+            "launch).")
 
     def _git_update_verbose(self, base: str):
         """Fetch + fast-forward a source checkout and report the exact outcome (up to date /
