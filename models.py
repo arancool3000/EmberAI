@@ -8,7 +8,6 @@ GEMINI_MODELS = [
     # id, display name, rpm, rpd, tpm, tier, notes
     ("gemini-3.1-flash-lite",  "Gemini 3.1 Flash Lite",  15,  500,   7_070, "free", "BEST free for agents - 500 RPD"),
     ("gemini-3.5-flash",       "Gemini 3.5 Flash",        5,   20, 250_000, "free", "newest free flash, high TPM"),
-    ("gemini-3.1-flash",       "Gemini 3.1 Flash",        5,   20, 250_000, "free", "balanced free flash"),
     ("gemini-2.5-flash-lite",  "Gemini 2.5 Flash Lite",  10,   20, 250_000, "free", "high TPM, low RPD"),
     ("gemini-2.5-flash",       "Gemini 2.5 Flash",        5,   20,  10_120, "free", "older but stable"),
     ("gemma-3-27b-it",         "Gemma 3 27B",            15, 1500,       0, "free", "text-only - used for chat titles"),
@@ -30,11 +29,15 @@ CLAUDE_MODELS = [
 RECOMMENDED_FREE = "gemini-3.1-flash-lite"
 
 
+# Model ids that have been retired / 404 — remap saved settings to a working equivalent.
+_DEAD_MODELS = {"gemini-3.1-flash": "gemini-3.1-flash-lite"}
+
+
 def resolve(model_id: str | None) -> str:
-    """Map the 'auto' sentinel to a concrete model; pass everything else through."""
+    """Map the 'auto' sentinel to a concrete model, retired ids to a live one; else pass through."""
     if not model_id or model_id == "auto":
         return RECOMMENDED_FREE
-    return model_id
+    return _DEAD_MODELS.get(model_id, model_id)
 
 
 def all_choices() -> list[tuple[str, str, str, str]]:

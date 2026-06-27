@@ -74,6 +74,7 @@ SLASH_COMMANDS = {
     "/manual": "__manual__",
     "/antivirus": "__antivirus__",
     "/adblock": "__adblock__",
+    "/setup": "__setup_tour__",
     "/features": "__features__",
     "/help": "__help__",
     "/clear": "__clear__",
@@ -222,6 +223,9 @@ COMMAND_CENTER_GROUPS = [
 #   ("info", "")         -> no button, purely informational
 # Keeping it data-driven means the directory, search, and launch buttons all stay in sync.
 FEATURE_CATALOG = [
+    ("Getting started", [
+        ("🧭", "Setup tour", "New here? A 1-minute guided setup that picks your AI in plain language and installs the free offline AI.", ("open", "__setup_tour__")),
+    ]),
     ("Automate your computer", [
         ("🤖", "Autopilot", "Hand Ember a whole task and it drives the mouse, keyboard and apps to finish it.", ("open", "/autopilot")),
         ("🪟", "Operate an app", "Tell Ember to do something in the app that's open right now.", ("open", "/apps")),
@@ -1061,9 +1065,20 @@ class SettingsDialog(QDialog):
         self.model_combo = QComboBox()
         self._model_options = model_catalog.all_choices()
         current = self.settings.get("model_id") or self.settings.get("gemini_model") or "gemini-3.1-flash-lite"
+        # Show plain-language model names for non-experts (e.g. "Free offline AI") so the picker
+        # isn't a wall of jargon; experts see the technical id + rate limits.
+        _lvl = (self.settings.get("experience_level") or "expert")
+        try:
+            import setup_tour as _stour
+        except Exception:
+            _stour = None
         current_idx = 0
         for i, (_provider, mid, name, hint) in enumerate(self._model_options):
-            self.model_combo.addItem(f"{name}  -  {hint}", userData=mid)
+            if _stour is not None and _lvl in ("beginner", "some"):
+                label = _stour.friendly_model_label(mid, name, _lvl)
+            else:
+                label = f"{name}  -  {hint}"
+            self.model_combo.addItem(label, userData=mid)
             if mid == current:
                 current_idx = i
         self.model_combo.setCurrentIndex(current_idx)
@@ -3279,6 +3294,188 @@ class AdBlockerDialog(QDialog):
                     return
 
 
+class SetupTourDialog(QDialog):
+    """A friendly first-run wizard for people new to AI. Asks how comfortable they are, then
+    sets up an AI brain in plain language — including a one-click install of the free offline
+    AI — and applies good defaults. Calls on_finish(updates) with the settings to save."""
+
+    def __init__(self, settings: dict, on_finish, parent=None):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QStackedWidget, QRadioButton, QButtonGroup
+        import setup_tour
+        self._st = setup_tour
+        self._settings = settings
+        self._on_finish = on_finish
+        self._level = (settings.get("experience_level") or "beginner")
+        self.setWindowTitle("Welcome to Ember")
+        self.setMinimumSize(560, 480)
+        self.setStyleSheet(STYLE)
+
+        root = QVBoxLayout(self)
+        self._stack = QStackedWidget()
+        root.addWidget(self._stack, 1)
+
+        # ---- Page 0: experience level ----
+        p0 = QWidget(); l0 = QVBoxLayout(p0)
+        t = QLabel("👋  Welcome to Ember"); t.setObjectName("title")
+        l0.addWidget(t)
+        l0.addWidget(self._wrap("Ember is your computer's AI assistant. Let's get you set up in "
+                                "under a minute — first, how comfortable are you with this stuff?"))
+        self._level_group = QButtonGroup(self)
+        for lvl in setup_tour.LEVELS:
+            rb = QRadioButton(setup_tour.LEVEL_LABELS[lvl])
+            rb.setProperty("level", lvl)
+            rb.setChecked(lvl == self._level)
+            self._level_group.addButton(rb)
+            l0.addWidget(rb)
+        l0.addStretch(1)
+        self._stack.addWidget(p0)
+
+        # ---- Page 1: choose the AI brain ----
+        p1 = QWidget(); l1 = QVBoxLayout(p1)
+        t1 = QLabel("Choose your AI"); t1.setObjectName("title")
+        l1.addWidget(t1)
+        l1.addWidget(self._wrap("Pick how Ember thinks. You can change this any time in Settings."))
+        self._brain_group = QButtonGroup(self)
+        self._rb_offline = QRadioButton("🟢  Free offline AI — runs on your computer (no internet, "
+                                        "no account, completely private)")
+        self._rb_offline.setChecked(True)
+        self._brain_group.addButton(self._rb_offline)
+        l1.addWidget(self._rb_offline)
+        self._offline_status = QLabel("")
+        self._offline_status.setStyleSheet("color:#9aa0b5; font-size:11px; margin-left:24px;")
+        self._offline_status.setWordWrap(True)
+        l1.addWidget(self._offline_status)
+        self._install_btn = QPushButton("⬇  Install the free offline AI")
+        self._install_btn.clicked.connect(self._install_offline_ai)
+        l1.addWidget(self._install_btn)
+
+        self._rb_gemini = QRadioButton("☁️  Free online AI (Google Gemini) — needs a free key")
+        self._brain_group.addButton(self._rb_gemini)
+        l1.addWidget(self._rb_gemini)
+        self._gemini_key = QLineEdit(self._settings.get("gemini_api_key", ""))
+        self._gemini_key.setPlaceholderText("Paste your free Google AI key here")
+        l1.addWidget(self._gemini_key)
+        getkey = QLabel('<a href="https://aistudio.google.com/apikey" '
+                        'style="color:#7aa2f7;">Get a free key →</a>')
+        getkey.setOpenExternalLinks(True)
+        getkey.setStyleSheet("font-size:11px; margin-left:2px;")
+        l1.addWidget(getkey)
+        l1.addStretch(1)
+        self._stack.addWidget(p1)
+
+        # ---- Page 2: finish ----
+        p2 = QWidget(); l2 = QVBoxLayout(p2)
+        t2 = QLabel("You're all set"); t2.setObjectName("title")
+        l2.addWidget(t2)
+        self._finish_note = QLabel("")
+        self._finish_note.setWordWrap(True)
+        l2.addWidget(self._finish_note)
+        l2.addStretch(1)
+        self._stack.addWidget(p2)
+
+        # ---- nav bar ----
+        nav = QHBoxLayout()
+        self._back_btn = QPushButton("Back")
+        self._back_btn.clicked.connect(lambda: self._goto(self._stack.currentIndex() - 1))
+        skip = QPushButton("Skip")
+        skip.clicked.connect(self.reject)
+        self._next_btn = QPushButton("Next")
+        self._next_btn.setObjectName("send")
+        self._next_btn.clicked.connect(self._next)
+        nav.addWidget(self._back_btn)
+        nav.addWidget(skip)
+        nav.addStretch(1)
+        nav.addWidget(self._next_btn)
+        root.addLayout(nav)
+        self._refresh_offline_status()
+        self._goto(0)
+
+    def _wrap(self, text):
+        lb = QLabel(text); lb.setWordWrap(True)
+        lb.setStyleSheet("color:#c3c9db; font-size:13px;")
+        return lb
+
+    def _goto(self, idx):
+        idx = max(0, min(self._stack.count() - 1, idx))
+        self._stack.setCurrentIndex(idx)
+        self._back_btn.setEnabled(idx > 0)
+        last = idx == self._stack.count() - 1
+        self._next_btn.setText("Finish" if last else "Next")
+        if last:
+            self._finish_note.setText(self._summary())
+
+    def _next(self):
+        idx = self._stack.currentIndex()
+        if idx == 0:
+            btn = self._level_group.checkedButton()
+            self._level = btn.property("level") if btn else "beginner"
+        if idx >= self._stack.count() - 1:
+            self._finish()
+            return
+        self._goto(idx + 1)
+
+    def _refresh_offline_status(self):
+        if self._st.ollama_installed():
+            self._offline_status.setText("✓ Installed and ready on this computer.")
+            self._install_btn.setVisible(False)
+        else:
+            plan = self._st.ollama_install_plan()
+            self._offline_status.setText("Not installed yet — one click sets it up.")
+            self._install_btn.setText("⬇  " + plan["label"])
+
+    def _install_offline_ai(self):
+        import webbrowser
+        import subprocess
+        plan = self._st.ollama_install_plan()
+        try:
+            if plan["method"] == "download":
+                webbrowser.open(plan["url"])
+                self._offline_status.setText("Opened the download page — install it, then come back.")
+            elif sys.platform == "darwin" and plan.get("command"):
+                cmd = " ".join(plan["command"])
+                subprocess.Popen(["osascript", "-e",
+                                  f'tell application "Terminal" to do script "{cmd}"'])
+                self._offline_status.setText("Installing in Terminal… follow any prompts there, "
+                                             "then reopen this tour.")
+            elif plan.get("command"):
+                subprocess.Popen(plan["command"])
+                self._offline_status.setText("Installing… this can take a few minutes.")
+        except Exception as e:
+            webbrowser.open("https://ollama.com/download")
+            self._offline_status.setText(f"Couldn't auto-install ({e}) — opened the download page.")
+
+    def _summary(self):
+        if self._rb_offline.isChecked():
+            pull = self._st.recommended_model_pull(self._level)
+            return ("Ember will use the **free offline AI**. If you haven't yet, install it above, "
+                    f"then it'll fetch a model (`ollama pull {pull}`) the first time. "
+                    "Finish to start.")
+        if self._rb_gemini.isChecked():
+            return ("Ember will use **free online AI (Google)**. Make sure your key is pasted above. "
+                    "Finish to start.")
+        return "Finish to start."
+
+    def _finish(self):
+        updates = self._st.recommended_settings(self._level)
+        if self._rb_offline.isChecked():
+            updates["model_id"] = "ollama"
+            updates["gemini_model"] = "ollama"
+            updates["provider"] = "ollama"
+        elif self._rb_gemini.isChecked():
+            key = self._gemini_key.text().strip()
+            if key:
+                updates["gemini_api_key"] = key
+            updates["model_id"] = "auto"
+            updates["gemini_model"] = "auto"
+            updates["provider"] = "gemini"
+        try:
+            self._on_finish(updates)
+        except Exception:
+            pass
+        self.accept()
+
+
 class EmberWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -3371,7 +3568,15 @@ class EmberWindow(QWidget):
             self._set_status("Starting…")
             QTimer.singleShot(0, self._init_agent)
         else:
-            QTimer.singleShot(200, self._first_run_settings)
+            # Brand-new user with nothing set up: show the friendly Setup Tour, not the raw
+            # Settings dialog. Falls back to Settings if the tour can't load.
+            _show_tour = False
+            try:
+                import setup_tour
+                _show_tour = setup_tour.should_show(self.settings)
+            except Exception:
+                _show_tour = False
+            QTimer.singleShot(400, self._open_setup_tour if _show_tour else self._first_run_settings)
 
     def _on_automation_fire(self, rule_name: str, trigger: dict, action: dict):
         # Marshal to UI thread via a queued call.
@@ -5115,6 +5320,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             "__snippets__": "_open_snippets_manager",
             "__macros__": "_open_macros_manager",
             "__local_ai__": "_open_local_ai",
+            "__setup_tour__": "_open_setup_tour",
         }
         handler = None
         if cmd in feature_methods:
@@ -5157,6 +5363,37 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         except Exception as e:
             traceback.print_exc()
             QMessageBox.warning(self, "Ad blocker", f"{type(e).__name__}: {e}")
+
+    def _open_setup_tour(self):
+        """Open the friendly first-run Setup Tour (also reachable any time via /setup)."""
+        try:
+            SetupTourDialog(self.settings, self._apply_tour_result, self).exec()
+        except Exception as e:
+            traceback.print_exc()
+            QMessageBox.warning(self, "Setup", f"{type(e).__name__}: {e}")
+        # Mark the tour as seen (finish OR skip) so it doesn't auto-reopen every launch.
+        if not self.settings.get("setup_complete"):
+            self.settings["setup_complete"] = True
+            try:
+                save_settings(self.settings)
+            except Exception:
+                pass
+
+    def _apply_tour_result(self, updates: dict):
+        """Save the tour's choices, apply them live, and (re)build the agent with the chosen brain."""
+        try:
+            self.settings.update(updates or {})
+            save_settings(self.settings)
+        except Exception:
+            pass
+        for fn in (self._apply_offline_mode, self._apply_tts_config):
+            try:
+                fn()
+            except Exception:
+                pass
+        self._init_agent()
+        self._add_bubble("system", "✓ Setup complete — you can change anything in Settings (gear). "
+                                   "Tip: type /setup to run this tour again.")
 
     def _open_features(self):
         """Show the browsable, searchable Features directory."""

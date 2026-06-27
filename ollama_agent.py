@@ -121,6 +121,7 @@ class OllamaAgent:
         # doesn't support function calling.
         self.tools_enabled = bool(_kwargs.get("tools_enabled", True))
         self._messages: list[dict] = []
+        self._pending_images: list[str] = []   # base64 imgs (e.g. a screenshot) for the vision model
         self._event_subs: list[Callable[[AgentEvent], None]] = []
         self._stop_flag = threading.Event()
 
@@ -141,13 +142,14 @@ class OllamaAgent:
             except Exception:
                 traceback.print_exc()
 
-    def send_user_message(self, text: str):
-        threading.Thread(target=self._run_turn, args=(text,), daemon=True).start()
+    def send_user_message(self, text: str, images: list | None = None):
+        # `images` (base64 PNG/JPEG) lets the local VISION model analyse pasted/dropped pictures.
+        threading.Thread(target=self._run_turn, args=(text, images), daemon=True).start()
 
     def _system_prompt(self) -> str:
         return CHAT_SYSTEM_PROMPT + _memory_extras()
 
-    def _run_turn(self, user_text: str):
+    def _run_turn(self, user_text: str, images: list | None = None):
         self._stop_flag.clear()
         try:
             res = resolve_model(self.requested_model, self.base_url)
@@ -155,7 +157,10 @@ class OllamaAgent:
                 self._emit(AgentEvent("error", res.get("error", "Ollama unavailable")))
                 return
             self.active_model = res["model"]
-            self._messages.append({"role": "user", "content": user_text})
+            user_msg = {"role": "user", "content": user_text}
+            if images:   # a pasted/dropped image for the vision model to analyse
+                user_msg["images"] = list(images)
+            self._messages.append(user_msg)
             # Try the tool-using loop first. If the model/endpoint doesn't support tools, fall
             # back to a plain streaming chat so it still answers.
             if self.tools_enabled and self._run_tool_loop():
@@ -252,6 +257,14 @@ class OllamaAgent:
                     "role": "tool", "name": fnobj.get("name") or "",
                     "content": json.dumps(result)[:6000],
                 })
+            # Surface any captured screenshots to the vision model for the next step.
+            if self._pending_images:
+                self._messages.append({
+                    "role": "user",
+                    "content": "[Screenshot captured — look at the image and continue.]",
+                    "images": self._pending_images,
+                })
+                self._pending_images = []
         self._emit(AgentEvent("message",
                    "[stopped after several tool steps — ask me to continue if needed]"))
         return True
@@ -280,6 +293,10 @@ class OllamaAgent:
         except Exception:
             pass
         result = ollama_tools.call(name, args)
+        # If the tool produced an image (e.g. take_screenshot), hand it to the VISION model on
+        # the next turn instead of dumping a huge base64 blob into the text tool-result.
+        if isinstance(result, dict) and result.get("image_b64"):
+            self._pending_images.append(result.pop("image_b64"))
         self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
         try:
             import memory
