@@ -277,8 +277,10 @@ class _Orb(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFixedSize(150, 150)
         self._t = 0.0
-        self._palette = [QColor(h) for h in ("#ffd23f", "#ff5e3a", "#ff2d55",
-                                             "#bf5af2", "#5e5ce6", "#0a84ff", "#36d2c3")]
+        # Tasteful iridescent palette (Apple-Intelligence-like: blue→indigo→purple→pink→
+        # rose→teal). No fiery yellow/orange — keeps it premium, not a clown rainbow.
+        self._palette = [QColor(h) for h in ("#0a84ff", "#5e5ce6", "#bf5af2", "#ff2d55",
+                                             "#ff6ac1", "#36d2c3")]
         self._speed, self._breath = 0.020, 3.2     # tuned per state
         self._state = "listening"
         self._level = 0.0          # smoothed audio-reactive amplitude (0..1)
@@ -342,64 +344,81 @@ class _Orb(QWidget):
         try:
             w, h = self.width(), self.height()
             lvl = self._level
-            # The whole sphere swells a little with the voice, and the light beam surges.
-            r = (min(w, h) / 2.0 - 4) * (0.93 + 0.07 * lvl)
             cx, cy = w / 2.0, h / 2.0
+            base = min(w, h) / 2.0 - 6
+            pal = self._palette
+            n = len(pal)
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            breathe = 0.5 + 0.5 * math.sin(self._t * self._breath)
-            breathe = min(1.0, breathe * (1.0 + 0.4 * lvl) + 0.25 * lvl)
-
-            # 1. Dark glossy sphere base.
-            sphere = QRadialGradient(QPointF(cx - r * 0.25, cy - r * 0.3), r * 1.5)
-            sphere.setColorAt(0.0, QColor(58, 60, 74))
-            sphere.setColorAt(0.55, QColor(24, 25, 34))
-            sphere.setColorAt(1.0, QColor(10, 10, 16))
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(sphere))
-            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            breathe = 0.5 + 0.5 * math.sin(self._t * self._breath)
 
-            # 2. A refined horizontal LIGHT BEAM across the middle — mostly silver-white with a
-            # faint iridescent tint (more premium/Siri-like than a rainbow band).
-            p.setClipPath(self._circle_path(cx, cy, r))
-            ang = (self._t * self._speed * 360.0) % 360.0
-            # subtle spectral wash underneath
-            grad = QConicalGradient(cx, cy, ang)
-            n = len(self._palette)
-            for i, base in enumerate(self._palette + [self._palette[0]]):
-                c = QColor(base)
-                c.setAlpha(int(70 + 55 * breathe))
-                grad.setColorAt(min(1.0, i / n), c)
-            wash_h = r * (0.5 + 0.16 * breathe + 0.22 * lvl)
-            p.setBrush(QBrush(grad))
-            p.drawEllipse(QRectF(cx - r * 1.05, cy - wash_h / 2, 2 * r * 1.05, wash_h))
-            # bright white core beam on top — surges with the voice level.
-            beam_h = r * (0.26 + 0.10 * breathe + 0.30 * lvl)
-            core = QLinearGradient(cx - r, cy, cx + r, cy)
-            core.setColorAt(0.0, QColor(255, 255, 255, 0))
-            core.setColorAt(0.5, QColor(255, 255, 255, int(min(255, 180 + 60 * breathe + 40 * lvl))))
-            core.setColorAt(1.0, QColor(255, 255, 255, 0))
-            p.setBrush(QBrush(core))
-            p.drawEllipse(QRectF(cx - r, cy - beam_h / 2, 2 * r, beam_h))
-            # dark veil top & bottom so it reads as a contained beam, not a glowing disc
-            veil = QLinearGradient(0, cy - r, 0, cy + r)
-            veil.setColorAt(0.0, QColor(9, 9, 14, 235))
-            veil.setColorAt(0.5, QColor(9, 9, 14, 0))
-            veil.setColorAt(1.0, QColor(9, 9, 14, 235))
-            p.setBrush(QBrush(veil))
-            p.drawRect(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            def col(i, a):
+                c = QColor(pal[int(i) % n])
+                c.setAlpha(max(0, min(255, int(a))))
+                return c
+
+            drift = self._t * 0.20             # slow colour rotation through the palette
+            R = base * 0.60 * (0.95 + 0.06 * lvl)   # core sphere radius (leaves room for glow)
+            circle = QRectF(cx - R, cy - R, 2 * R, 2 * R)
+
+            # ---- 1. Outer glow bloom — what makes it actually GLOW ----
+            glow_r = base * (0.98 + 0.12 * lvl) * (0.95 + 0.05 * breathe)
+            halo = QRadialGradient(QPointF(cx, cy), glow_r)
+            a_edge = 120 + 70 * breathe + 55 * lvl
+            halo.setColorAt(0.0, col(drift, a_edge * 0.35))
+            halo.setColorAt(max(0.05, (R / glow_r) * 0.80), col(drift, a_edge))
+            halo.setColorAt(0.92, col(drift + 2, 36))
+            halo.setColorAt(1.0, col(drift + 2, 0))
+            p.setBrush(QBrush(halo))
+            p.drawEllipse(QRectF(cx - glow_r, cy - glow_r, 2 * glow_r, 2 * glow_r))
+
+            # ---- 2. Luminous core ----
+            p.setClipPath(self._circle_path(cx, cy, R))
+            depth = QRadialGradient(QPointF(cx, cy), R)
+            depth.setColorAt(0.0, QColor(46, 36, 86))
+            depth.setColorAt(1.0, QColor(12, 12, 24))
+            p.setBrush(QBrush(depth))
+            p.drawEllipse(circle)
+            # swirling iridescent light (rotates; faster + brighter with the voice)
+            ang = (self._t * (34.0 + 70.0 * lvl)) % 360.0
+            swirl = QConicalGradient(cx, cy, ang)
+            for i in range(n + 1):
+                swirl.setColorAt(min(1.0, i / n), col(drift + i, 120 + 80 * breathe + 40 * lvl))
+            p.setBrush(QBrush(swirl))
+            p.drawEllipse(circle)
+            # 3 drifting soft blobs -> organic, liquid-light motion
+            for j in range(3):
+                ph = self._t * (0.55 + 0.22 * j) + j * 2.1
+                bx = cx + math.cos(ph) * R * 0.42
+                by = cy + math.sin(ph * 1.3) * R * 0.42
+                br = R * (0.60 + 0.14 * math.sin(self._t * 1.6 + j))
+                blob = QRadialGradient(QPointF(bx, by), max(4.0, br))
+                blob.setColorAt(0.0, col(drift + j * 2 + 1, 150 + 60 * lvl))
+                blob.setColorAt(1.0, col(drift + j * 2 + 1, 0))
+                p.setBrush(QBrush(blob))
+                p.drawEllipse(circle)
+            # central white bloom (the hotspot), gently drifting + pulsing
+            hx = cx + math.cos(self._t * 0.9) * R * 0.16
+            hy = cy + math.sin(self._t * 1.1) * R * 0.16
+            bloom = QRadialGradient(QPointF(hx, hy), R * 0.95)
+            bloom.setColorAt(0.0, QColor(255, 255, 255, int(150 + 70 * breathe + 50 * lvl)))
+            bloom.setColorAt(0.45, QColor(255, 255, 255, 38))
+            bloom.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setBrush(QBrush(bloom))
+            p.drawEllipse(circle)
             p.setClipping(False)
 
-            # 3. Specular highlight + bright rim.
-            hi = QRadialGradient(QPointF(cx - r * 0.35, cy - r * 0.45), r * 0.7)
-            hi.setColorAt(0.0, QColor(255, 255, 255, 120))
+            # ---- 3. Glass sheen + bright rim ----
+            hi = QRadialGradient(QPointF(cx - R * 0.34, cy - R * 0.42), R * 0.8)
+            hi.setColorAt(0.0, QColor(255, 255, 255, 150))
+            hi.setColorAt(0.5, QColor(255, 255, 255, 30))
             hi.setColorAt(1.0, QColor(255, 255, 255, 0))
             p.setBrush(QBrush(hi))
-            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
-            pen = QPen(QColor(255, 255, 255, int(70 + 60 * breathe)), 2.0)
-            p.setPen(pen)
+            p.drawEllipse(circle)
+            p.setPen(QPen(QColor(255, 255, 255, int(55 + 70 * breathe)), 1.6))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            p.drawEllipse(circle)
             p.end()
         except Exception:
             pass
