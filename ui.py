@@ -415,6 +415,8 @@ def load_settings() -> dict:
         "lean_tools": True,
         "hotkey": "ctrl+shift+space",
         "hotkey_daemon": False,       # always-on login helper so the hotkey works even when quit
+        "mouse_humanize": True,       # curved/eased human-like pointer movement
+        "mouse_speed": 1.0,           # pointer movement speed multiplier (0.25x–3.0x)
         "request_timeout_seconds": 15,
         "animations_enabled": True,
         "glow_enabled": True,
@@ -1739,9 +1741,35 @@ class SettingsDialog(QDialog):
             import human_mouse
             self._human_mouse_chk = QCheckBox("Human-like mouse movement (curved, eased, natural)")
             self._human_mouse_chk.setChecked(bool(human_mouse.get_options().get("enabled", True)))
-            self._human_mouse_chk.stateChanged.connect(
-                lambda s: human_mouse.set_options(enabled=bool(s)))
+            self._human_mouse_chk.stateChanged.connect(self._on_mouse_humanize_toggled)
             v.addWidget(self._human_mouse_chk)
+
+            # Mouse movement speed (0.25x slow & deliberate → 3.0x snappy). Applies live.
+            cur_speed = float(self.settings.get("mouse_speed",
+                                                human_mouse.get_options().get("speed", 1.0)))
+            self._mouse_speed_slider = QSlider(Qt.Orientation.Horizontal)
+            self._mouse_speed_slider.setRange(25, 300)   # value/100 = speed multiplier
+            self._mouse_speed_slider.setValue(int(round(max(0.25, min(3.0, cur_speed)) * 100)))
+            self._mouse_speed_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+            self._mouse_speed_slider.setTickInterval(25)
+            self._mouse_speed_value = QLabel(f"{self._mouse_speed_slider.value() / 100:.2f}×")
+            self._mouse_speed_slider.valueChanged.connect(self._on_mouse_speed_changed)
+            self._mouse_speed_slider.sliderReleased.connect(self._persist_mouse_speed)
+            srow = QHBoxLayout()
+            slow = QLabel("slow")
+            slow.setStyleSheet("color:#565f89; font-size:11px;")
+            fast = QLabel("fast")
+            fast.setStyleSheet("color:#565f89; font-size:11px;")
+            srow.addWidget(slow)
+            srow.addWidget(self._mouse_speed_slider, 1)
+            srow.addWidget(fast)
+            srow.addWidget(self._mouse_speed_value)
+            swrap = QWidget()
+            swrap.setLayout(srow)
+            mlbl = QLabel("Mouse movement speed")
+            mlbl.setStyleSheet("color:#9aa0b4; font-size:12px;")
+            v.addWidget(mlbl)
+            v.addWidget(swrap)
         except Exception:
             pass
 
@@ -2019,6 +2047,38 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, "Launch at login", r.get("error", "failed"))
         except Exception as e:
             QMessageBox.warning(self, "Launch at login", str(e))
+
+    def _on_mouse_humanize_toggled(self, state):
+        on = bool(state)
+        self.settings["mouse_humanize"] = on
+        try:
+            import human_mouse
+            human_mouse.set_options(enabled=on)
+        except Exception:
+            pass
+        try:
+            save_settings(self.settings)   # this tab applies live + sticks immediately
+        except Exception:
+            pass
+
+    def _on_mouse_speed_changed(self, value):
+        # Applies live on every tick; persistence happens on release (see _persist_mouse_speed)
+        # so dragging doesn't hammer the settings file.
+        speed = max(0.25, min(3.0, value / 100.0))
+        self.settings["mouse_speed"] = speed
+        if hasattr(self, "_mouse_speed_value"):
+            self._mouse_speed_value.setText(f"{speed:.2f}×")
+        try:
+            import human_mouse
+            human_mouse.set_options(speed=speed)
+        except Exception:
+            pass
+
+    def _persist_mouse_speed(self):
+        try:
+            save_settings(self.settings)
+        except Exception:
+            pass
 
     def _toggle_hotkey_daemon(self, state):
         on = bool(state)
@@ -3000,6 +3060,7 @@ class EmberWindow(QWidget):
             # Always-on "Hey Ember" wake word — starts listening shortly after launch.
             QTimer.singleShot(2400, self._autostart_wake_word)
         QTimer.singleShot(300, self._apply_tts_config)   # push read-aloud engine to voice
+        QTimer.singleShot(350, self._apply_mouse_options)  # restore saved pointer speed/humanize
         if self.settings.get("auto_update", True):
             # Auto-update on every launch. Frozen .app: check + auto-install a published
             # release. Git/source checkout: fast-forward to the latest commit. Both are
@@ -5375,6 +5436,16 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             except Exception:
                 self._orb = None
         return getattr(self, "_orb", None)
+
+    def _apply_mouse_options(self):
+        """Push the saved pointer speed + humanize flag into human_mouse on launch."""
+        try:
+            import human_mouse
+            human_mouse.set_options(
+                enabled=bool(self.settings.get("mouse_humanize", True)),
+                speed=max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0)))))
+        except Exception:
+            pass
 
     def _apply_tts_config(self):
         """Push the read-aloud engine settings to the voice module."""

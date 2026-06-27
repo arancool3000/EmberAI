@@ -144,6 +144,30 @@ def test_drag_down_at_start_up_at_end_exact():
         import importlib; importlib.reload(hm)
 
 
+def test_plain_move_duration_scales_with_speed():
+    """With humanize OFF, the speed setting still controls travel time (faster = shorter)."""
+    class _DurPG(_FakePG):
+        def __init__(self):
+            super().__init__()
+            self.durations = []
+        def moveTo(self, x, y, duration=0, _pause=True):
+            self.durations.append(duration)
+            self._pos = (x, y)
+            self.calls.append(("moveTo", x, y))
+    fake = _DurPG()
+    hm._pg = lambda: fake
+    try:
+        hm.set_options(enabled=False, speed=1.0)
+        assert hm.move(500, 500) is False        # plain path
+        slow = fake.durations[-1]
+        hm.set_options(enabled=False, speed=2.0)
+        hm.move(700, 700)
+        fast = fake.durations[-1]
+        assert slow > 0 and fast < slow, (slow, fast)
+    finally:
+        import importlib; importlib.reload(hm)
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())

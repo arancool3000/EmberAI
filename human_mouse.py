@@ -168,7 +168,11 @@ def move(x, y, duration: float | None = None) -> bool:
     if pg is None:
         return False
     if not _OPTS["enabled"]:
-        pg.moveTo(x, y, duration=duration if duration is not None else 0.2)
+        # Plain (non-humanized) move still honours the speed setting: faster speed = shorter
+        # travel time. duration=0 when speed is very high so it snaps instantly.
+        if duration is None:
+            duration = max(0.0, 0.2 / max(0.1, _OPTS.get("speed", 1.0)))
+        pg.moveTo(x, y, duration=duration)
         return False
     try:
         start = tuple(pg.position())
