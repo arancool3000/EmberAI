@@ -1271,16 +1271,35 @@ class SettingsDialog(QDialog):
                 self.tts_engine_combo.setCurrentIndex(i)
         layout.addRow("Read-aloud voice:", self.tts_engine_combo)
 
-        self.edge_voice_input = QLineEdit(self.settings.get("edge_tts_voice", "en-US-AriaNeural"))
-        self.edge_voice_input.setPlaceholderText(
-            "Edge voice, e.g. en-US-AriaNeural, en-GB-SoniaNeural, en-US-GuyNeural")
-        self.edge_voice_input.setToolTip(
-            "Microsoft Edge neural voices — free, no API key, not rate-limited. Needs the "
-            "'edge-tts' package (pip install edge-tts). Falls back to the system voice if missing.")
+        def _voice_picker(options, current, tip=""):
+            """An editable dropdown: pick a known voice, or type a custom one."""
+            cb = QComboBox()
+            cb.setEditable(True)
+            cb.addItems(options)
+            cur = (current or "").strip()
+            if cur and cur not in options:
+                cb.insertItem(0, cur)
+            cb.setCurrentText(cur or (options[0] if options else ""))
+            if tip:
+                cb.setToolTip(tip)
+            return cb
+
+        self.edge_voice_input = _voice_picker(
+            ["en-US-AriaNeural", "en-US-JennyNeural", "en-US-EmmaNeural", "en-US-AvaNeural",
+             "en-US-GuyNeural", "en-US-AndrewNeural", "en-US-BrianNeural", "en-GB-SoniaNeural",
+             "en-GB-LibbyNeural", "en-GB-RyanNeural", "en-AU-NatashaNeural", "en-AU-WilliamNeural",
+             "en-CA-ClaraNeural", "en-IN-NeerjaNeural", "en-IE-EmilyNeural"],
+            self.settings.get("edge_tts_voice", "en-US-AriaNeural"),
+            tip=("Microsoft Edge neural voices — free, no API key, not rate-limited. Needs the "
+                 "'edge-tts' package (pip install edge-tts). Falls back to the system voice if missing."))
         layout.addRow("Edge voice:", self.edge_voice_input)
 
-        self.gemini_voice_input = QLineEdit(self.settings.get("gemini_tts_voice", "Kore"))
-        self.gemini_voice_input.setPlaceholderText("Gemini voice name, e.g. Kore, Puck, Charon, Aoede")
+        self.gemini_voice_input = _voice_picker(
+            ["Kore", "Puck", "Charon", "Aoede", "Zephyr", "Fenrir", "Leda", "Orus", "Callirrhoe",
+             "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome",
+             "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Schedar", "Gacrux", "Sulafat"],
+            self.settings.get("gemini_tts_voice", "Kore"),
+            tip="Gemini TTS prebuilt voice (used when Read-aloud voice = Gemini TTS).")
         layout.addRow("Gemini voice:", self.gemini_voice_input)
 
         # soundtools.io has no public API key, so the old key field is gone. This is now an
@@ -1300,8 +1319,10 @@ class SettingsDialog(QDialog):
             "per-message rate limit. Needs a Gemini key + pyaudio.")
         layout.addRow(self.live_voice_check)
 
-        self.live_voice_voice_input = QLineEdit(self.settings.get("live_voice_voice", "Zephyr"))
-        self.live_voice_voice_input.setPlaceholderText("Live voice name, e.g. Zephyr, Puck, Charon, Kore, Aoede")
+        self.live_voice_voice_input = _voice_picker(
+            ["Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus"],
+            self.settings.get("live_voice_voice", "Zephyr"),
+            tip="Gemini Live API (native-audio) voice for real-time natural voice chat.")
         layout.addRow("Natural voice name:", self.live_voice_voice_input)
 
         self.voice_chat_reply_check = QCheckBox("Voice chat always speaks replies")
@@ -2368,12 +2389,12 @@ class SettingsDialog(QDialog):
         self.settings["voice_output"] = self.voice_check.isChecked()
         if hasattr(self, "tts_engine_combo"):
             self.settings["tts_engine"] = self.tts_engine_combo.currentData() or "system"
-            self.settings["edge_tts_voice"] = self.edge_voice_input.text().strip() or "en-US-AriaNeural"
-            self.settings["gemini_tts_voice"] = self.gemini_voice_input.text().strip() or "Kore"
+            self.settings["edge_tts_voice"] = self.edge_voice_input.currentText().strip() or "en-US-AriaNeural"
+            self.settings["gemini_tts_voice"] = self.gemini_voice_input.currentText().strip() or "Kore"
             self.settings["soundtools_url"] = self.soundtools_url_input.text().strip()
         if hasattr(self, "live_voice_check"):
             self.settings["live_voice_enabled"] = self.live_voice_check.isChecked()
-            self.settings["live_voice_voice"] = self.live_voice_voice_input.text().strip() or "Zephyr"
+            self.settings["live_voice_voice"] = self.live_voice_voice_input.currentText().strip() or "Zephyr"
         self.settings["voice_chat_spoken_replies"] = self.voice_chat_reply_check.isChecked()
         self.settings["voice_chat_auto_send"] = self.voice_auto_send_check.isChecked()
         self.settings["voice_chat_continue_after_silence"] = self.voice_continue_check.isChecked()
