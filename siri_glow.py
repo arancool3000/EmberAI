@@ -358,65 +358,77 @@ class _Orb(QWidget):
                 c.setAlpha(max(0, min(255, int(a))))
                 return c
 
-            drift = self._t * 0.20             # slow colour rotation through the palette
-            R = base * 0.60 * (0.95 + 0.06 * lvl)   # core sphere radius (leaves room for glow)
+            drift = self._t * 0.18             # slow colour rotation through the palette
+            # CONSTANT sizes — the orb never grows/shrinks (no "bouncing"); all life comes
+            # from flowing light, a rotating signature arc, and brightness that tracks the voice.
+            R = base * 0.62
+            glow_r = base * 1.0
             circle = QRectF(cx - R, cy - R, 2 * R, 2 * R)
 
-            # ---- 1. Outer glow bloom — what makes it actually GLOW ----
-            glow_r = base * (0.98 + 0.12 * lvl) * (0.95 + 0.05 * breathe)
+            # ---- 1. Outer glow bloom (brightness pulses; size fixed) ----
             halo = QRadialGradient(QPointF(cx, cy), glow_r)
-            a_edge = 120 + 70 * breathe + 55 * lvl
-            halo.setColorAt(0.0, col(drift, a_edge * 0.35))
-            halo.setColorAt(max(0.05, (R / glow_r) * 0.80), col(drift, a_edge))
-            halo.setColorAt(0.92, col(drift + 2, 36))
+            a_edge = min(210.0, 90 + 80 * breathe + 70 * lvl)
+            halo.setColorAt(0.0, col(drift, a_edge * 0.30))
+            halo.setColorAt(max(0.05, (R / glow_r) * 0.78), col(drift, a_edge))
+            halo.setColorAt(0.93, col(drift + 2, 30))
             halo.setColorAt(1.0, col(drift + 2, 0))
             p.setBrush(QBrush(halo))
             p.drawEllipse(QRectF(cx - glow_r, cy - glow_r, 2 * glow_r, 2 * glow_r))
 
-            # ---- 2. Luminous core ----
+            # ---- 2. Luminous liquid-light core ----
             p.setClipPath(self._circle_path(cx, cy, R))
             depth = QRadialGradient(QPointF(cx, cy), R)
-            depth.setColorAt(0.0, QColor(46, 36, 86))
-            depth.setColorAt(1.0, QColor(12, 12, 24))
+            depth.setColorAt(0.0, QColor(44, 34, 82))
+            depth.setColorAt(1.0, QColor(10, 10, 20))
             p.setBrush(QBrush(depth))
             p.drawEllipse(circle)
-            # swirling iridescent light (rotates; faster + brighter with the voice)
-            ang = (self._t * (34.0 + 70.0 * lvl)) % 360.0
+            ang = (self._t * (30.0 + 50.0 * lvl)) % 360.0    # iridescence rotates, no resize
             swirl = QConicalGradient(cx, cy, ang)
             for i in range(n + 1):
-                swirl.setColorAt(min(1.0, i / n), col(drift + i, 120 + 80 * breathe + 40 * lvl))
+                swirl.setColorAt(min(1.0, i / n), col(drift + i, 110 + 70 * breathe + 40 * lvl))
             p.setBrush(QBrush(swirl))
             p.drawEllipse(circle)
-            # 3 drifting soft blobs -> organic, liquid-light motion
+            # soft blobs drift in POSITION only (constant size) -> liquid motion, never bouncing
             for j in range(3):
-                ph = self._t * (0.55 + 0.22 * j) + j * 2.1
-                bx = cx + math.cos(ph) * R * 0.42
-                by = cy + math.sin(ph * 1.3) * R * 0.42
-                br = R * (0.60 + 0.14 * math.sin(self._t * 1.6 + j))
-                blob = QRadialGradient(QPointF(bx, by), max(4.0, br))
-                blob.setColorAt(0.0, col(drift + j * 2 + 1, 150 + 60 * lvl))
+                ph = self._t * (0.5 + 0.2 * j) + j * 2.1
+                bx = cx + math.cos(ph) * R * 0.40
+                by = cy + math.sin(ph * 1.27) * R * 0.40
+                blob = QRadialGradient(QPointF(bx, by), R * 0.62)
+                blob.setColorAt(0.0, col(drift + j * 2 + 1, 140 + 55 * lvl))
                 blob.setColorAt(1.0, col(drift + j * 2 + 1, 0))
                 p.setBrush(QBrush(blob))
                 p.drawEllipse(circle)
-            # central white bloom (the hotspot), gently drifting + pulsing
-            hx = cx + math.cos(self._t * 0.9) * R * 0.16
-            hy = cy + math.sin(self._t * 1.1) * R * 0.16
-            bloom = QRadialGradient(QPointF(hx, hy), R * 0.95)
-            bloom.setColorAt(0.0, QColor(255, 255, 255, int(150 + 70 * breathe + 50 * lvl)))
-            bloom.setColorAt(0.45, QColor(255, 255, 255, 38))
+            hx = cx + math.cos(self._t * 0.8) * R * 0.14
+            hy = cy + math.sin(self._t * 1.0) * R * 0.14
+            bloom = QRadialGradient(QPointF(hx, hy), R * 0.9)
+            bloom.setColorAt(0.0, QColor(255, 255, 255, int(min(235, 130 + 70 * breathe + 55 * lvl))))
+            bloom.setColorAt(0.45, QColor(255, 255, 255, 34))
             bloom.setColorAt(1.0, QColor(255, 255, 255, 0))
             p.setBrush(QBrush(bloom))
             p.drawEllipse(circle)
             p.setClipping(False)
 
-            # ---- 3. Glass sheen + bright rim ----
+            # ---- 3. Signature: a bright light-arc that orbits the rim (its unique identity) ----
+            arc_r = R * 0.93
+            arc_rect = QRectF(cx - arc_r, cy - arc_r, 2 * arc_r, 2 * arc_r)
+            arc_col = QColor(pal[int(drift + 1) % n])
+            arc_col.setAlpha(int(min(255, 165 + 80 * lvl)))
+            apen = QPen(arc_col, 2.6)
+            apen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(apen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            start = (-(self._t * 120.0)) % 360.0
+            p.drawArc(arc_rect, int(start * 16), int(72 * 16))   # a 72° comet sweeping round
+
+            # ---- 4. Glass sheen + crisp rim ----
             hi = QRadialGradient(QPointF(cx - R * 0.34, cy - R * 0.42), R * 0.8)
-            hi.setColorAt(0.0, QColor(255, 255, 255, 150))
-            hi.setColorAt(0.5, QColor(255, 255, 255, 30))
+            hi.setColorAt(0.0, QColor(255, 255, 255, 140))
+            hi.setColorAt(0.5, QColor(255, 255, 255, 26))
             hi.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(hi))
             p.drawEllipse(circle)
-            p.setPen(QPen(QColor(255, 255, 255, int(55 + 70 * breathe)), 1.6))
+            p.setPen(QPen(QColor(255, 255, 255, int(50 + 50 * breathe)), 1.4))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(circle)
             p.end()
@@ -521,13 +533,17 @@ class SiriOrb(QWidget):
         self._caption.setVisible(False)
 
     def _reposition(self):
-        """Sit near the bottom-centre of the primary screen (like the macOS Siri orb)."""
+        """Sit near the bottom-centre of the primary screen (like the macOS Siri orb).
+
+        The window is anchored by a FIXED top Y, not by total height — so when the caption
+        grows/shrinks the window expands DOWNWARD and the orb itself stays put instead of
+        jumping around (that vertical re-centring was the 'bouncing' you saw)."""
         try:
             from PyQt6.QtWidgets import QApplication
             self.adjustSize()
             scr = QApplication.primaryScreen().availableGeometry()
             x = scr.x() + (scr.width() - self.width()) // 2
-            y = scr.y() + scr.height() - self.height() - 70
+            y = scr.y() + scr.height() - 330   # fixed anchor; reserves room for the caption
             self.move(x, y)
         except Exception:
             pass
