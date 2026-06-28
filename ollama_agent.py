@@ -16,6 +16,7 @@ so it stays testable without the cloud SDKs installed.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import traceback
 from typing import Callable
@@ -75,6 +76,98 @@ def _memory_extras() -> str:
         return system_extras() or ""
     except Exception:
         return ""
+
+
+_TOOLCALL_TAG_RE = re.compile(
+    r"<(?:tool_call|function_call|tool|function)>(.*?)</(?:tool_call|function_call|tool|function)>",
+    re.DOTALL | re.IGNORECASE)
+_FENCE_RE = re.compile(r"```(?:json|tool_code|tool|python)?\s*(.*?)```", re.DOTALL)
+_NAME_RE = re.compile(r'"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_]*)"')
+
+
+def _iter_json_objects(text: str):
+    """Yield each top-level {...} object in `text` as a parsed dict, skipping braces that
+    appear inside string literals (so a value like \"{}\" doesn't break brace matching)."""
+    out = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text or ""):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try:
+                        out.append(json.loads(text[start:i + 1]))
+                    except Exception:
+                        pass
+                    start = -1
+    return out
+
+
+def _coerce_toolcall_obj(obj, tool_names) -> dict | None:
+    """Normalize a parsed object into Ollama's tool_call shape {function:{name,arguments}} if it
+    names a known tool, else None. Accepts name/tool/function keys and arguments/parameters/args."""
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name") or obj.get("tool") or obj.get("function")
+    args = obj.get("arguments")
+    if args is None:
+        args = obj.get("parameters")
+    if args is None:
+        args = obj.get("args")
+    if isinstance(name, dict):  # e.g. {"function": {"name": ..., "arguments": ...}}
+        inner = name
+        name = inner.get("name")
+        if args is None:
+            args = inner.get("arguments") or inner.get("parameters")
+    if not isinstance(name, str) or name not in tool_names:
+        return None
+    if not isinstance(args, dict):
+        args = {}
+    return {"function": {"name": name, "arguments": args}}
+
+
+def extract_text_tool_calls(content: str, tool_names) -> list:
+    """Some local models emit tool calls as TEXT in the message body instead of using Ollama's
+    structured tool_calls field (often wrapped in <tool_call>…/```json…``` or even malformed,
+    e.g. {"name": "take_screenshot", "{}"}). Pull any well-formed-enough calls out so the tool
+    still runs. Returns a list of {function:{name,arguments}} (possibly empty)."""
+    if not content:
+        return []
+    calls = []
+    seen = set()
+    chunks = list(_TOOLCALL_TAG_RE.findall(content)) + list(_FENCE_RE.findall(content)) + [content]
+    for chunk in chunks:
+        for obj in _iter_json_objects(chunk):
+            c = _coerce_toolcall_obj(obj, tool_names)
+            if c:
+                key = json.dumps(c, sort_keys=True)
+                if key not in seen:
+                    seen.add(key)
+                    calls.append(c)
+    if not calls:
+        # Fallback for malformed JSON: just find a known tool name in a "name": "…" position.
+        for name in _NAME_RE.findall(content):
+            if name in tool_names:
+                calls.append({"function": {"name": name, "arguments": {}}})
+                break
+    return calls
 
 
 def _parse_stream_line(line) -> dict:
@@ -246,8 +339,15 @@ class OllamaAgent:
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
                 content = (msg.get("content") or "").strip()
-                self._emit(AgentEvent("message", content or "[no response from the local model]"))
-                return True
+                # Some local models write the tool call as TEXT in the reply instead of using the
+                # structured tool_calls field (e.g. {"name": "take_screenshot", ...}). Parse and
+                # run those so the action happens instead of dumping raw JSON into the chat.
+                text_calls = extract_text_tool_calls(content, ollama_tools.TOOL_NAMES)
+                if text_calls:
+                    tool_calls = text_calls
+                else:
+                    self._emit(AgentEvent("message", content or "[no response from the local model]"))
+                    return True
             for tc in tool_calls:
                 if self._stop_flag.is_set():
                     break

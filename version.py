@@ -13,7 +13,7 @@ import os
 import sys
 
 # Bump this for every release (RELEASE.command does it for you). Semantic versioning.
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 # --- GitHub Pages + Releases distribution -----------------------------------
 # Set this to your GitHub username/org. The placeholder keeps the updater dormant

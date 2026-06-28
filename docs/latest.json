@@ -1,5 +1,5 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "pub_date": "2026-06-28",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.2.1\n\n• Fix: opening Settings could crash the app (\"Ember quit unexpectedly\") — the Offline Mode toggle was wired to a missing handler. Settings now opens reliably.\n• Hardening: Ember now catches unexpected errors and logs them (ember-crash.log) instead of quitting, and any settings section that fails to load no longer takes the whole window down.\n\nIncludes everything from 1.2.0: works 100% offline, the free offline brain (Ollama) can drive your computer + analyse images, countdown timers, the newbie Setup Tour, and the workflow-recorder macOS crash fix."
+  "notes": "Ember 1.2.2\n\n• Fix: the free offline brain (Ollama) now actually runs its tools. Smaller local models that write a tool call as plain text (e.g. for \"can you see my screen?\") used to dump raw JSON into the chat instead of doing it — Ember now understands those and runs the tool (screenshot, click, type, etc.).\n\nIncludes 1.2.1's Settings-crash fix and crash logging, plus everything from 1.2.0: works 100% offline, the offline brain can drive your computer + analyse images, countdown timers, the newbie Setup Tour, and the workflow-recorder macOS crash fix."
 }
