@@ -27,10 +27,13 @@ from datetime import datetime
 # Wake phrases + detection
 # ---------------------------------------------------------------------------
 
-# The canonical phrase plus the ways speech-to-text commonly mangles "ember".
+# The canonical phrase plus the ways speech-to-text commonly mangles "ember". Every entry is a
+# GREETING + ember-ish bigram on purpose: a bare "ember" (or it embedded in "remember"/"december")
+# must NOT wake. (The old "a ember" entry was too loose — fuzz.partial_ratio matched the "ember a…"
+# in "ember alone word here" at 83 and woke on unrelated speech.)
 _WAKE_PHRASES = (
     "hey ember", "hi ember", "hello ember", "okay ember", "ok ember", "yo ember",
-    "hey amber", "hey ambre", "hey umber", "hey ember", "a ember", "hey ember",
+    "hey amber", "hey ambre", "hey umber",
 )
 # A precise regex catch for "<greeting> <ember-ish>" so a clean transcript always wins.
 _WAKE_RE = re.compile(
