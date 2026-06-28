@@ -21,7 +21,10 @@ import threading
 import traceback
 from typing import Callable
 
-import requests
+# NOTE: `requests` is imported LAZILY inside the HTTP methods (not at module top) so this module
+# — and the pure helpers like extract_text_tool_calls + the OllamaAgent tool dispatch — import
+# with only the standard library. That keeps the hermetic tests (and any non-networked use)
+# working in environments where `requests` isn't installed (e.g. CI).
 
 OLLAMA_BASE = "http://localhost:11434"
 
@@ -266,6 +269,7 @@ class OllamaAgent:
 
     def _plain_chat(self):
         """Stream a plain text answer (no tools) — the original local-chat behaviour."""
+        import requests
         payload = {
             "model": self.active_model,
             "messages": [{"role": "system", "content": self._system_prompt()}] + self._messages,
@@ -306,6 +310,7 @@ class OllamaAgent:
         """Let the local model call Ember's curated LOCAL tools. Returns True if it produced a
         final answer (or errored), False if this model can't do tools (caller falls back)."""
         import ollama_tools
+        import requests
         sys_prompt = OFFLINE_TOOLS_SYSTEM_PROMPT + _memory_extras()
         max_steps = 6
         for step in range(max_steps):
