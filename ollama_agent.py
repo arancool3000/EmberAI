@@ -123,9 +123,23 @@ def _iter_json_objects(text: str):
     return out
 
 
-def _coerce_toolcall_obj(obj, tool_names) -> dict | None:
+def _canon_name(name, tool_names, aliases) -> str | None:
+    """Map a model-supplied tool name (possibly an alias / different case) to a known tool."""
+    if not isinstance(name, str):
+        return None
+    if name in tool_names:
+        return name
+    low = name.strip().lower()
+    if low in tool_names:
+        return low
+    canon = (aliases or {}).get(low)
+    return canon if canon in tool_names else None
+
+
+def _coerce_toolcall_obj(obj, tool_names, aliases=None) -> dict | None:
     """Normalize a parsed object into Ollama's tool_call shape {function:{name,arguments}} if it
-    names a known tool, else None. Accepts name/tool/function keys and arguments/parameters/args."""
+    names a known tool (resolving common aliases), else None. Accepts name/tool/function keys
+    and arguments/parameters/args."""
     if not isinstance(obj, dict):
         return None
     name = obj.get("name") or obj.get("tool") or obj.get("function")
@@ -139,18 +153,21 @@ def _coerce_toolcall_obj(obj, tool_names) -> dict | None:
         name = inner.get("name")
         if args is None:
             args = inner.get("arguments") or inner.get("parameters")
-    if not isinstance(name, str) or name not in tool_names:
+    canon = _canon_name(name, tool_names, aliases)
+    if canon is None:
         return None
     if not isinstance(args, dict):
         args = {}
-    return {"function": {"name": name, "arguments": args}}
+    return {"function": {"name": canon, "arguments": args}}
 
 
-def extract_text_tool_calls(content: str, tool_names) -> list:
+def extract_text_tool_calls(content: str, tool_names, aliases=None) -> list:
     """Some local models emit tool calls as TEXT in the message body instead of using Ollama's
     structured tool_calls field (often wrapped in <tool_call>…/```json…``` or even malformed,
-    e.g. {"name": "take_screenshot", "{}"}). Pull any well-formed-enough calls out so the tool
-    still runs. Returns a list of {function:{name,arguments}} (possibly empty)."""
+    e.g. {"name": "take_screenshot", "{}"}, or with an aliased name like "screenshot"). Pull any
+    well-formed-enough calls out so the tool still runs — and the raw JSON doesn't leak into the
+    chat. Pass `aliases` (alias->canonical) to resolve invented names. Returns a list of
+    {function:{name,arguments}} (possibly empty)."""
     if not content:
         return []
     calls = []
@@ -158,19 +175,76 @@ def extract_text_tool_calls(content: str, tool_names) -> list:
     chunks = list(_TOOLCALL_TAG_RE.findall(content)) + list(_FENCE_RE.findall(content)) + [content]
     for chunk in chunks:
         for obj in _iter_json_objects(chunk):
-            c = _coerce_toolcall_obj(obj, tool_names)
+            c = _coerce_toolcall_obj(obj, tool_names, aliases)
             if c:
                 key = json.dumps(c, sort_keys=True)
                 if key not in seen:
                     seen.add(key)
                     calls.append(c)
     if not calls:
-        # Fallback for malformed JSON: just find a known tool name in a "name": "…" position.
+        # Fallback for malformed JSON: just find a known (or aliased) tool name in a "name" slot.
         for name in _NAME_RE.findall(content):
-            if name in tool_names:
-                calls.append({"function": {"name": name, "arguments": {}}})
+            canon = _canon_name(name, tool_names, aliases)
+            if canon:
+                calls.append({"function": {"name": canon, "arguments": {}}})
                 break
     return calls
+
+
+# Local models that can actually look at images (so we may send a screenshot). Everything else
+# is treated as text-only — sending images would 400 ("model does not support multimodal").
+_VISION_MODEL_HINTS = (
+    "llava", "bakllava", "vision", "moondream", "minicpm-v", "qwen2-vl", "qwen2.5-vl",
+    "qwen2.5vl", "llama3.2-vision", "llama-3.2-vision", "llama4", "llama-4", "pixtral",
+    "cogvlm", "internvl", "gemma3", "gemma-3", "granite3.2-vision", "mistral-small3.1",
+)
+
+
+def model_supports_vision(model_name: str) -> bool:
+    """Heuristic: can this local model accept image inputs? True only for known vision families;
+    a runtime "multimodal not supported" 400 is still caught as a safety net."""
+    m = (model_name or "").lower()
+    return any(h in m for h in _VISION_MODEL_HINTS)
+
+
+def _is_multimodal_error(body: str) -> bool:
+    """True if an Ollama/endpoint error body says the model can't accept images."""
+    b = (body or "").lower()
+    return ("multimodal" in b) or ("does not support" in b and ("image" in b or "vision" in b))
+
+
+def _strip_images(messages) -> bool:
+    """Remove any `images` from chat messages in place (for text-only models). Returns True if
+    anything was stripped."""
+    changed = False
+    for m in messages or []:
+        if isinstance(m, dict) and m.get("images"):
+            m.pop("images", None)
+            changed = True
+    return changed
+
+
+def quick_complete(prompt: str, model: str = "", base_url: str = OLLAMA_BASE,
+                   timeout: float = 30.0) -> str:
+    """One-shot, non-streaming local completion (used for cheap background jobs like naming a
+    chat). Returns the text, or "" on any problem. Never raises."""
+    import requests
+    res = resolve_model(model, base_url)
+    if not res.get("ok"):
+        return ""
+    try:
+        r = requests.post(
+            f"{base_url.rstrip('/')}/api/chat",
+            json={"model": res["model"], "stream": False,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "options": {"temperature": 0.2}},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return ""
+        return ((r.json().get("message") or {}).get("content") or "").strip()
+    except Exception:
+        return ""
 
 
 def _parse_stream_line(line) -> dict:
@@ -218,6 +292,8 @@ class OllamaAgent:
         self.tools_enabled = bool(_kwargs.get("tools_enabled", True))
         self._messages: list[dict] = []
         self._pending_images: list[str] = []   # base64 imgs (e.g. a screenshot) for the vision model
+        # None = unknown (decided per model); True/False = can this model accept image input.
+        self._vision_ok: bool | None = None
         self._event_subs: list[Callable[[AgentEvent], None]] = []
         self._stop_flag = threading.Event()
 
@@ -253,9 +329,17 @@ class OllamaAgent:
                 self._emit(AgentEvent("error", res.get("error", "Ollama unavailable")))
                 return
             self.active_model = res["model"]
+            if self._vision_ok is None:
+                self._vision_ok = model_supports_vision(self.active_model)
             user_msg = {"role": "user", "content": user_text}
             if images:   # a pasted/dropped image for the vision model to analyse
-                user_msg["images"] = list(images)
+                if self._vision_ok:
+                    user_msg["images"] = list(images)
+                else:   # text-only local model — sending images would 400; explain instead
+                    user_msg["content"] = (
+                        user_text + f"\n\n[An image was attached, but the local model "
+                        f"'{self.active_model}' is text-only and can't view images. Switch to "
+                        f"Gemini/Claude, or a local vision model like llava, to analyse pictures.]")
             self._messages.append(user_msg)
             # Try the tool-using loop first. If the model/endpoint doesn't support tools, fall
             # back to a plain streaming chat so it still answers.
@@ -267,9 +351,11 @@ class OllamaAgent:
         finally:
             self._emit(AgentEvent("done"))
 
-    def _plain_chat(self):
+    def _plain_chat(self, _retry: bool = True):
         """Stream a plain text answer (no tools) — the original local-chat behaviour."""
         import requests
+        if not self._vision_ok:
+            _strip_images(self._messages)
         payload = {
             "model": self.active_model,
             "messages": [{"role": "system", "content": self._system_prompt()}] + self._messages,
@@ -280,8 +366,13 @@ class OllamaAgent:
             with requests.post(f"{self.base_url}/api/chat", json=payload,
                                stream=True, timeout=300) as r:
                 if r.status_code != 200:
+                    body = (r.text or "")
+                    if _is_multimodal_error(body) and _retry:
+                        self._vision_ok = False
+                        _strip_images(self._messages)
+                        return self._plain_chat(_retry=False)   # retry once, text-only
                     self._emit(AgentEvent("error",
-                               f"Ollama returned {r.status_code}: {(r.text or '')[:300]}"))
+                               f"Ollama returned {r.status_code}: {body[:300]}"))
                     return
                 for line in r.iter_lines():
                     if self._stop_flag.is_set():
@@ -308,21 +399,32 @@ class OllamaAgent:
 
     def _run_tool_loop(self) -> bool:
         """Let the local model call Ember's curated LOCAL tools. Returns True if it produced a
-        final answer (or errored), False if this model can't do tools (caller falls back)."""
+        final answer (or errored), False only if this model can't be driven at all (caller falls
+        back to a plain streamed chat).
+
+        Robust against the two ways local models 'mess up': (1) emitting tool calls as TEXT /
+        under invented names (we parse + alias-resolve them so the action runs and raw JSON never
+        leaks), and (2) rejecting the structured `tools` field or image input (we retry without
+        them, and feed OCR text in place of a screenshot for text-only models)."""
         import ollama_tools
         import requests
         sys_prompt = OFFLINE_TOOLS_SYSTEM_PROMPT + _memory_extras()
-        max_steps = 6
+        include_tools = True       # send the structured `tools` field until the model rejects it
+        progressed = False         # have we executed any tool / consumed a real model turn?
+        max_steps = 8
         for step in range(max_steps):
             if self._stop_flag.is_set():
                 self._emit(AgentEvent("message", "[stopped]"))
                 return True
+            if not self._vision_ok:
+                _strip_images(self._messages)
             payload = {
                 "model": self.active_model,
                 "messages": [{"role": "system", "content": sys_prompt}] + self._messages,
-                "tools": ollama_tools.TOOLS,
                 "stream": False,
             }
+            if include_tools:
+                payload["tools"] = ollama_tools.TOOLS
             try:
                 r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=300)
             except requests.exceptions.RequestException as e:
@@ -330,55 +432,93 @@ class OllamaAgent:
                 return True
             if r.status_code != 200:
                 body = (r.text or "")
-                # The model doesn't support tools -> let the caller retry as a plain chat.
-                if step == 0 and ("tool" in body.lower() or "function" in body.lower()
-                                  or r.status_code == 400):
-                    return False
+                if _is_multimodal_error(body):
+                    # Model can't see images — drop them (and any pending screenshot) and retry.
+                    self._vision_ok = False
+                    self._pending_images = []
+                    _strip_images(self._messages)
+                    continue
+                if include_tools and ("tool" in body.lower() or "function" in body.lower()
+                                      or r.status_code == 400):
+                    # Endpoint/model doesn't accept the structured tools field. Keep going WITHOUT
+                    # it and parse any tool calls the model writes as text — so we never drop to a
+                    # chat that dumps raw tool-call JSON at the user.
+                    include_tools = False
+                    continue
                 self._emit(AgentEvent("error", f"Ollama returned {r.status_code}: {body[:300]}"))
                 return True
             try:
                 msg = (r.json().get("message")) or {}
             except Exception:
+                if progressed:
+                    self._emit(AgentEvent("error", "the local model returned an unreadable response"))
+                    return True
                 return False
             self._messages.append(msg)
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
                 content = (msg.get("content") or "").strip()
-                # Some local models write the tool call as TEXT in the reply instead of using the
-                # structured tool_calls field (e.g. {"name": "take_screenshot", ...}). Parse and
-                # run those so the action happens instead of dumping raw JSON into the chat.
-                text_calls = extract_text_tool_calls(content, ollama_tools.TOOL_NAMES)
+                # Some local models write the tool call as TEXT (e.g. {"name": "screenshot", ...})
+                # instead of the structured field. Parse + alias-resolve and run those so the
+                # action happens instead of the raw JSON leaking into the chat.
+                text_calls = extract_text_tool_calls(content, ollama_tools.TOOL_NAMES,
+                                                      ollama_tools.TOOL_ALIASES)
                 if text_calls:
                     tool_calls = text_calls
                 else:
                     self._emit(AgentEvent("message", content or "[no response from the local model]"))
                     return True
+            progressed = True
             for tc in tool_calls:
                 if self._stop_flag.is_set():
                     break
                 fnobj = tc.get("function") or {}
-                result = self._exec_tool(fnobj.get("name") or "", fnobj.get("arguments"))
+                name = ollama_tools.resolve_name(fnobj.get("name") or "")
+                result = self._exec_tool(name, fnobj.get("arguments"))
                 self._messages.append({
-                    "role": "tool", "name": fnobj.get("name") or "",
+                    "role": "tool", "name": name,
                     "content": json.dumps(result)[:6000],
                 })
-            # Surface any captured screenshots to the vision model for the next step.
+            # A screenshot was captured — hand the image to a vision model, or OCR text otherwise.
             if self._pending_images:
-                self._messages.append({
-                    "role": "user",
-                    "content": "[Screenshot captured — look at the image and continue.]",
-                    "images": self._pending_images,
-                })
+                if self._vision_ok:
+                    self._messages.append({
+                        "role": "user",
+                        "content": "[Screenshot captured — look at the image and continue.]",
+                        "images": self._pending_images,
+                    })
+                else:
+                    self._messages.append({
+                        "role": "user",
+                        "content": ("[Screenshot captured. This local model is text-only and "
+                                    "can't view images, so here is the on-screen text (OCR):]\n\n"
+                                    + self._ocr_fallback_text()),
+                    })
                 self._pending_images = []
         self._emit(AgentEvent("message",
                    "[stopped after several tool steps — ask me to continue if needed]"))
         return True
+
+    def _ocr_fallback_text(self) -> str:
+        """On-screen text via OCR, for text-only local models that can't view a screenshot."""
+        try:
+            import ollama_tools
+            res = ollama_tools.call("read_screen_text", {})
+            if isinstance(res, dict):
+                if res.get("ok") is False:
+                    return f"(OCR unavailable: {res.get('error', 'no text extracted')})"
+                txt = res.get("text") or res.get("ocr") or res.get("result") or ""
+                return (str(txt)[:4000] or "(no readable text found on screen)")
+            return str(res)[:4000]
+        except Exception as e:
+            return f"(OCR unavailable: {e})"
 
     def _exec_tool(self, name: str, raw_args) -> dict:
         """Run one curated tool with safety + confirmation, emitting the same events the cloud
         agent does so the UI shows the activity."""
         import ollama_tools
         import safety
+        name = ollama_tools.resolve_name(name)
         args = ollama_tools.coerce_args(name, raw_args)
         self._emit(AgentEvent("tool_call", {"name": name, "args": args}))
         if name not in ollama_tools.TOOL_NAMES:

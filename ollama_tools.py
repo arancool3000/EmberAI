@@ -73,8 +73,69 @@ READONLY = frozenset({"read_file", "list_directory", "search_files", "take_scree
                       "read_screen_text", "list_windows", "get_system_info",
                       "get_running_processes", "recall", "list_timers"})
 
+# Common name variants local models invent for our tools (e.g. it asks for "screenshot"
+# instead of "take_screenshot"). Resolving these means the action runs instead of the raw
+# tool-call JSON leaking into the chat. Map alias -> canonical tool name.
+TOOL_ALIASES = {
+    "screenshot": "take_screenshot",
+    "take_screen_shot": "take_screenshot",
+    "capture_screen": "take_screenshot",
+    "capture_screenshot": "take_screenshot",
+    "screen_capture": "take_screenshot",
+    "grab_screen": "take_screenshot",
+    "read_screen": "read_screen_text",
+    "screen_text": "read_screen_text",
+    "ocr": "read_screen_text",
+    "ocr_screen": "read_screen_text",
+    "type": "type_text",
+    "type_string": "type_text",
+    "keyboard_type": "type_text",
+    "press": "press_key",
+    "press_keys": "press_key",
+    "keypress": "press_key",
+    "hotkey": "press_key",
+    "shell": "run_shell",
+    "bash": "run_shell",
+    "run_command": "run_shell",
+    "execute": "run_shell",
+    "exec": "run_shell",
+    "terminal": "run_shell",
+    "open_application": "open_app",
+    "launch_app": "open_app",
+    "launch": "open_app",
+    "ls": "list_directory",
+    "list_dir": "list_directory",
+    "list_files": "list_directory",
+    "cat": "read_file",
+    "open_file": "open_path",
+    "mouse_click": "click",
+    "left_click": "click",
+    "move": "move_mouse",
+    "system_info": "get_system_info",
+    "processes": "get_running_processes",
+    "windows": "list_windows",
+}
+
+
+def resolve_name(name: str) -> str:
+    """Canonicalise a (possibly aliased) tool name to one Ember actually has.
+    Returns the canonical name if known, else the input unchanged."""
+    if not isinstance(name, str):
+        return ""
+    if name in TOOL_NAMES:
+        return name
+    low = name.strip().lower()
+    if low in TOOL_NAMES:
+        return low
+    return TOOL_ALIASES.get(low, name)
+
 # Args that must be integers (local models often send them as strings).
 _INT_ARGS = {"x", "y", "amount"}
+
+# The arguments each tool actually declares — used to drop hallucinated extras (e.g. a model
+# calling take_screenshot with a bogus {"path": ...}) so the call doesn't error on bad kwargs.
+_ALLOWED_ARGS = {t["function"]["name"]: set((t["function"]["parameters"].get("properties") or {}))
+                 for t in TOOLS}
 
 
 def _dispatch() -> dict:
@@ -126,8 +187,11 @@ def coerce_args(name: str, args) -> dict:
             args = {}
     if not isinstance(args, dict):
         args = {}
+    allowed = _ALLOWED_ARGS.get(resolve_name(name))
     out = {}
     for k, v in args.items():
+        if allowed is not None and k not in allowed:
+            continue   # drop hallucinated args the tool doesn't declare
         if k in _INT_ARGS and isinstance(v, str):
             try:
                 v = int(float(v))
@@ -139,6 +203,7 @@ def coerce_args(name: str, args) -> dict:
 
 def call(name: str, args) -> dict:
     """Run one curated tool by name with the model's args. Returns the tool's result dict."""
+    name = resolve_name(name)
     if name not in TOOL_NAMES:
         return {"ok": False, "error": f"unknown tool {name}"}
     fn = _dispatch().get(name)

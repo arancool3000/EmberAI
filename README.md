@@ -47,6 +47,12 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 - **Local AI that drives the computer** — the free offline model (Ollama) can now run terminal
   commands, read/write files, see the screen (screenshot + OCR), move the mouse/type, and
   **analyse images** with a local vision model — not just chat. No API key, no rate limits.
+  Text-only local models no longer crash on screen-reading requests (Ember detects vision
+  support and falls back to OCR text), and tool calls a local model writes as plain text now
+  run reliably instead of leaking raw JSON.
+- **Pick who names your chats** — auto-title new chats with a tiny **local Ollama** model
+  (fully offline, free) or a small free **Gemma** (1B/4B/12B/27B), chosen from a dropdown in
+  Settings → Models.
 
 ### 🛡️ Security
 - **Always-on antivirus** — file scanning **+ real-time fileless/behavioral process protection**,
@@ -203,7 +209,8 @@ System Settings → Privacy & Security:
 Ask Ember to “start remote control,” or it runs the `start_remote_control` tool. You’ll get a
 **URL + 4-digit PIN**. On your phone (same Wi-Fi) open the URL, enter the PIN, and you get
 **Ember Link**: a faster mirrored screen with tap, click-and-drag, fullscreen mirror,
-trackpad, keyboard, quality controls, and a Chat tab for telling Ember what to do remotely.
+trackpad, keyboard, quality controls, **one-tap quick-actions** (Lock PC, Mute, Mic Off,
+Sleep Screen, and a custom-command box), and a Chat tab for telling Ember what to do remotely.
 It’s LAN-only and PIN-gated; stop it when done.
 
 ---

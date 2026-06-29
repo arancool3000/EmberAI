@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "pub_date": "2026-06-29",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.5.0 — Norton-style security suite\n\n• Security Dashboard (Settings → Security): one 0-100 score across every protection — real-time antivirus, fileless/behavioral, smart-firewall network monitoring, Safe Web, software updates, password vault, VPN, AI safe-open and auto-lockdown — with a letter grade and prioritised fixes.\n• Software Updater: lists outdated apps + pending OS updates (read-only; never installs).\n• Dark-web monitoring surfaced in the dashboard (breach check for your email).\n\nWith Ember's existing antivirus, smart-firewall scan, VPN, password vault, breach checks, cleanup and the emergency lockdown (1.4.0), this covers the bulk of Norton 360's consumer features — locally and privately."
+  "notes": "Ember 1.6.0 — smarter local AI, chat-title picker & phone quick-actions\n\n• Local Ollama fixes: no more 'multimodal not supported' crash on text-only models (Ember now detects vision support, and feeds on-screen OCR text instead of an image), and tool calls a local model writes as plain text — even under invented names like 'screenshot' — now actually run instead of leaking raw JSON into the chat.\n• Chat-title model picker (Settings → Models): name your chats with a tiny local Ollama model (fully offline, free) or a small free Gemma (1B/4B/12B/27B) — your call, via a dropdown.\n• More models in the selector: Gemma 3 1B/4B/12B added alongside the latest Gemini & Claude.\n• Phone remote quick-actions: one-tap Lock PC, Mute, Mic Off, Sleep Screen, plus a custom command box — right in Ember Link.\n\nAlso includes the Norton-style Security Dashboard + Software Updater (one 0-100 score across every protection, with prioritised fixes)."
 }

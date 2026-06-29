@@ -58,6 +58,7 @@ jobs:
             test_offline.py \
             test_ollama_tools.py \
             test_ollama_textcalls.py \
+            test_ollama_loop.py \
             test_setup_tour.py \
             test_timers.py \
             test_updater.py \
@@ -65,7 +66,8 @@ jobs:
             test_settings_dialog_methods.py \
             test_bulk_tools.py \
             test_panic.py \
-            test_security_dashboard.py; do
+            test_security_dashboard.py \
+            test_remote_macros.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

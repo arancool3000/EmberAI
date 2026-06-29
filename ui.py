@@ -413,6 +413,7 @@ def load_settings() -> dict:
         "keep_running_in_background": True,  # closing the window hides to tray so wake word keeps working
         "launch_at_login": False,     # install a login item so Ember is always running for the wake word
         "ai_chat_titles": True,
+        "chat_title_model": "gemma-3-4b-it",  # which model names chats: "ollama" or a small Gemma
         "dual_api_failover": True,
         "automation_enabled": True,
         "auto_confirm_popups": False,
@@ -1306,9 +1307,22 @@ class SettingsDialog(QDialog):
         rate_btn.clicked.connect(self._show_rates)
         mlayout.addRow("", rate_btn)
 
-        self.ai_titles_check = QCheckBox("Generate chat titles with Gemma 3 27B")
+        self.ai_titles_check = QCheckBox("Auto-name chats with a small AI")
         self.ai_titles_check.setChecked(bool(self.settings.get("ai_chat_titles", True)))
         mlayout.addRow(self.ai_titles_check)
+
+        # Which (cheap) model writes the short chat title — local Ollama or a small free Gemma.
+        self.title_model_combo = QComboBox()
+        _cur_title = self.settings.get("chat_title_model", model_catalog.DEFAULT_TITLE_MODEL)
+        _ti = 0
+        for i, (mid, label) in enumerate(model_catalog.TITLE_MODELS):
+            self.title_model_combo.addItem(label, userData=mid)
+            if mid == _cur_title:
+                _ti = i
+        self.title_model_combo.setCurrentIndex(_ti)
+        self.title_model_combo.setEnabled(self.ai_titles_check.isChecked())
+        self.ai_titles_check.toggled.connect(self.title_model_combo.setEnabled)
+        mlayout.addRow("Chat-title model:", self.title_model_combo)
 
         # Local AI (Ollama): pick "Local (Ollama)" as the model above; optionally name a model.
         self.ollama_model_input = QLineEdit(self.settings.get("ollama_model", ""))
@@ -1319,11 +1333,12 @@ class SettingsDialog(QDialog):
         mlayout.addRow("", ollama_btn)
 
         mlayout.addRow(self._hint(
-            "Gemini 3.1 Flash Lite has the highest free-tier RPD (500/day). "
-            "Gemma 4 models go to 1500 RPD but don't support tool-use — text only. "
-            "Gemma 3 27B is used for short chat titles. Pick a Claude model to switch to Anthropic. "
-            "Local (Ollama) runs fully offline with no key or limits (chat only — no computer "
-            "control). Install from ollama.com and `ollama pull llama3.2`."))
+            "Gemini 3.1 Flash Lite has the highest free-tier RPD (500/day) and drives Ember's "
+            "tools. Gemma models are text-only (no tool-use) but have huge free limits — ideal "
+            "for the tiny 'name this chat' job above. Pick 'Local (Ollama)' there to name chats "
+            "entirely offline. Pick a Claude model to switch to Anthropic. Local (Ollama) as the "
+            "primary model runs fully offline with no key or limits. Install from ollama.com and "
+            "`ollama pull llama3.2`."))
 
         # --- Gmail / Email (one App Password powers both sending mail AND organising the inbox) ---
         gmail_box, glayout = self._group("Gmail / Email")
@@ -2809,6 +2824,9 @@ class SettingsDialog(QDialog):
         self.settings["gemini_api_key_4"] = self.gemini_key_4_input.text().strip()
         self.settings["dual_api_failover"] = self.dual_api_check.isChecked()
         self.settings["ai_chat_titles"] = self.ai_titles_check.isChecked()
+        if hasattr(self, "title_model_combo"):
+            self.settings["chat_title_model"] = (
+                self.title_model_combo.currentData() or model_catalog.DEFAULT_TITLE_MODEL)
         self.settings["anthropic_api_key"] = self.anthropic_key_input.text().strip()
         if hasattr(self, "gmail_addr_input"):
             addr = self.gmail_addr_input.text().strip()
@@ -5246,27 +5264,42 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return
         if not bool(self.settings.get("ai_chat_titles", True)):
             return
+        title_model = (self.settings.get("chat_title_model")
+                       or model_catalog.DEFAULT_TITLE_MODEL)
+        use_ollama = (title_model == "ollama")
         key = (self.settings.get("gemini_api_key") or self.settings.get("gemini_api_key_secondary")
                or self.settings.get("gemini_api_key_3") or self.settings.get("gemini_api_key_4") or "").strip()
-        if not key:
-            return
+        if not use_ollama and not key:
+            return   # cloud title needs a Gemini key; local Ollama needs none
         self._title_jobs.add(chat_id)
+
+        prompt = (
+            "Create a concise chat title for this user request. "
+            "Use 2 to 6 words. No quotes, no punctuation at the end.\n\n"
+            f"Request: {first_text[:1200]}"
+        )
+
+        def _clean(raw: str) -> str:
+            t = (raw or "").strip()
+            # local models sometimes add a "Title:" preamble or wrap in quotes — strip both
+            t = re.sub(r"^(?:title|chat title)\s*[:\-]\s*", "", t, flags=re.IGNORECASE)
+            t = re.sub(r"^[\"'`]+|[\"'`.]+$", "", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            return " ".join(t.split()[:7])[:56].strip(" -:,.")
 
         def _run():
             title = ""
             try:
-                from google import genai
-                prompt = (
-                    "Create a concise chat title for this user request. "
-                    "Use 2 to 6 words. No quotes, no punctuation at the end.\n\n"
-                    f"Request: {first_text[:1200]}"
-                )
-                client = genai.Client(api_key=key)
-                resp = client.models.generate_content(model="gemma-3-27b-it", contents=prompt)
-                title = (getattr(resp, "text", "") or "").strip()
-                title = re.sub(r"^[\"'`]+|[\"'`.]+$", "", title)
-                title = re.sub(r"\s+", " ", title).strip()
-                title = " ".join(title.split()[:7])[:56].strip(" -:,.")
+                if use_ollama:
+                    import ollama_agent
+                    title = _clean(ollama_agent.quick_complete(
+                        prompt, model=(self.settings.get("ollama_model") or "")))
+                else:
+                    from google import genai
+                    client = genai.Client(api_key=key)
+                    resp = client.models.generate_content(
+                        model=model_catalog.resolve(title_model), contents=prompt)
+                    title = _clean(getattr(resp, "text", "") or "")
             except Exception:
                 title = ""
             if title:

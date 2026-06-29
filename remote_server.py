@@ -246,6 +246,18 @@ button.small{flex:0;padding:8px 11px;font-size:12px;border-radius:14px}
   </div>
   <div class=hint style="padding-bottom:10px">Tap the mirror to click. Drag directly on it to drag items, sliders, or selections.</div>
 
+  <div class=lbl>Quick actions</div>
+  <div class=grid3>
+    <button onpointerdown="macro('lock')">🔒 Lock PC</button>
+    <button onpointerdown="macro('mute_mic')">🎙️ Mic Off</button>
+    <button onpointerdown="macro('sleep_display')">🌙 Sleep</button>
+  </div>
+  <div class=grid2>
+    <button onpointerdown="macro('mute')">🔇 Mute</button>
+    <button onpointerdown="macro('unmute')">🔊 Unmute</button>
+  </div>
+  <div id=kb><input id=cmdx placeholder="run a command, e.g. open -a Safari"><button onclick="runcmd()" style="max-width:90px">Run</button></div>
+
   <div class=lbl>Scroll</div>
   <div class=grid4>
     <button onpointerdown="scroll(5)">▲▲</button><button onpointerdown="scroll(2)">▲</button>
@@ -349,6 +361,9 @@ function attachPad(pad){if(!pad)return;let lx=0,ly=0,moving=false,moved=0,ax=0,a
  pad.addEventListener("pointerup",end);pad.addEventListener("pointercancel",end)}
 attachPad(document.getElementById("pad"));attachPad(document.getElementById("bigpad"));
 function ev(k){post({t:k})}function scroll(a){post({t:"scroll",a:a})}function key(k){post({t:"key",k:k})}
+function flash(m){let t=document.getElementById("tag");if(t){t.textContent=m;setTimeout(()=>{t.textContent="live"},900)}}
+function macro(n){post({t:"macro",name:n});flash(n.replace(/_/g," ")+" ✓")}
+function runcmd(){let i=document.getElementById("cmdx");if(i&&i.value){post({t:"macro_cmd",cmd:i.value});flash("ran ✓");i.value=""}}
 function sendtext(){let i=document.getElementById("tx");if(i.value){post({t:"type",text:i.value});i.value=""}}
 function setMode(m){MODE=m;document.querySelectorAll(".modepane").forEach(el=>{el.style.display=el.dataset.mode===m?(m==="chat"?"grid":""):"none"});["full","mouse","kb","chat"].forEach(x=>document.getElementById("m_"+x).classList.toggle("on",x===m));if(m==="kb")setTimeout(()=>document.getElementById("livekb").focus(),60);if(m==="chat")pollChat()}
 function toggleFS(){let d=document.getElementById("screenwrap");if(!document.fullscreenElement&&!document.webkitFullscreenElement)(d.requestFullscreen||d.webkitRequestFullscreen||function(){}).call(d);else(document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document)}
@@ -476,7 +491,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 def _apply(o: dict):
     with _INPUT_LOCK:
-        _apply_locked(o)
+        return _apply_locked(o)
 
 
 def _apply_locked(o: dict):
@@ -509,6 +524,124 @@ def _apply_locked(o: dict):
         tools.press_key(str(o.get("k", "")))
     elif t == "type":
         tools.type_text(str(o.get("text", "")))
+    elif t == "macro":
+        return _run_macro(str(o.get("name", "")))
+    elif t == "macro_cmd":
+        return _run_shell_macro(str(o.get("cmd", "")))
+
+
+# --- Quick one-tap macros (the phone toolbar) --------------------------------------------
+# Each macro is a best-effort OS action triggered from the phone with a single tap (Gemini's
+# "Lock PC / Mute Mic / custom command" idea). The desktop app can override any macro via
+# set_macro_hooks(); tests inject fakes there. Kept tiny + stdlib-only so it's hermetically
+# testable, and every entry point returns a dict and NEVER raises (so the HTTP handler can't 500).
+_MACRO_HOOKS: dict = {}
+
+# internal name -> phone button label
+MACROS = [
+    ("lock", "🔒 Lock PC"),
+    ("mute", "🔇 Mute"),
+    ("unmute", "🔊 Unmute"),
+    ("mute_mic", "🎙️ Mic Off"),
+    ("sleep_display", "🌙 Sleep Screen"),
+]
+MACRO_NAMES = frozenset(n for n, _ in MACROS)
+
+
+def set_macro_hooks(**hooks) -> None:
+    """Override a macro's implementation (name -> callable() returning a dict/bool on success).
+    The desktop app uses this to wire, e.g., 'lock' to its own secure lock."""
+    for k, v in hooks.items():
+        if callable(v):
+            _MACRO_HOOKS[k] = v
+
+
+def _macro_cmd(cmd) -> tuple:
+    import subprocess
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+        return (r.returncode == 0, (r.stdout or r.stderr or "").strip()[:200])
+    except Exception as e:
+        return (False, str(e)[:200])
+
+
+def _default_macro(name: str) -> dict:
+    """Best-effort OS implementation for a macro when the app hasn't injected a hook."""
+    import sys
+    if name == "lock":
+        try:
+            import panic
+            r = panic._default_lock_screen()
+            return {"ok": bool(r.get("ok")), "macro": name, "detail": r.get("detail", "locked")}
+        except Exception as e:
+            return {"ok": False, "macro": name, "detail": str(e)}
+    if name == "sleep_display":
+        if sys.platform == "darwin":
+            ok, d = _macro_cmd(["pmset", "displaysleepnow"])
+        elif sys.platform.startswith("win"):
+            ok, d = _macro_cmd(["powershell", "-NoProfile", "-Command",
+                "(Add-Type -Name M -Namespace W -PassThru -MemberDefinition "
+                "'[DllImport(\"user32.dll\")]public static extern int "
+                "SendMessage(int h,int m,int w,int l);')::SendMessage(-1,0x0112,0xF170,2)"])
+        else:
+            ok, d = _macro_cmd(["xset", "dpms", "force", "off"])
+        return {"ok": ok, "macro": name, "detail": d or "display asleep"}
+    if name in ("mute", "unmute"):
+        on = (name == "mute")
+        if sys.platform == "darwin":
+            ok, d = _macro_cmd(["osascript", "-e",
+                                f"set volume output muted {'true' if on else 'false'}"])
+        elif sys.platform.startswith("win"):
+            # VolumeMute is a toggle key; best-effort on Windows without extra tooling.
+            ok, d = _macro_cmd(["powershell", "-NoProfile", "-Command",
+                                "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"])
+        else:
+            ok, d = _macro_cmd(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1" if on else "0"])
+        return {"ok": ok, "macro": name, "detail": d or ("muted" if on else "unmuted")}
+    if name == "mute_mic":
+        if sys.platform == "darwin":
+            ok, d = _macro_cmd(["osascript", "-e", "set volume input volume 0"])
+        elif sys.platform.startswith("win"):
+            return {"ok": False, "macro": name,
+                    "detail": "mic mute needs nircmd on Windows"}
+        else:
+            ok, d = _macro_cmd(["pactl", "set-source-mute", "@DEFAULT_SOURCE@", "1"])
+        return {"ok": ok, "macro": name, "detail": d or "microphone muted"}
+    return {"ok": False, "macro": name, "detail": "unhandled macro"}
+
+
+def _run_macro(name: str) -> dict:
+    """Run a quick macro by name (injected hook first, else the OS default). Never raises."""
+    name = (name or "").strip().lower()
+    if name not in MACRO_NAMES:
+        return {"ok": False, "macro": name, "detail": "unknown macro"}
+    hook = _MACRO_HOOKS.get(name)
+    try:
+        if hook is not None:
+            res = hook()
+            if isinstance(res, dict):
+                res.setdefault("ok", True)
+                res.setdefault("macro", name)
+                return res
+            return {"ok": (res is None or bool(res)), "macro": name, "detail": "ok"}
+        return _default_macro(name)
+    except Exception as e:
+        return {"ok": False, "macro": name, "detail": f"{type(e).__name__}: {e}"}
+
+
+def _run_shell_macro(cmd: str) -> dict:
+    """Run a one-tap custom shell command from the phone (PIN-gated, LAN-only). Best-effort."""
+    cmd = (cmd or "").strip()
+    if not cmd:
+        return {"ok": False, "detail": "empty command"}
+    hook = _MACRO_HOOKS.get("shell")
+    try:
+        if hook is not None:
+            res = hook(cmd)
+            return res if isinstance(res, dict) else {"ok": bool(res), "detail": "ok"}
+        return tools.run_powershell(cmd)
+    except Exception as e:
+        return {"ok": False, "detail": f"{type(e).__name__}: {e}"}
 
 
 def _data_dir():

@@ -10,8 +10,12 @@ GEMINI_MODELS = [
     ("gemini-3.5-flash",       "Gemini 3.5 Flash",        5,   20, 250_000, "free", "newest free flash, high TPM"),
     ("gemini-2.5-flash-lite",  "Gemini 2.5 Flash Lite",  10,   20, 250_000, "free", "high TPM, low RPD"),
     ("gemini-2.5-flash",       "Gemini 2.5 Flash",        5,   20,  10_120, "free", "older but stable"),
-    ("gemma-3-27b-it",         "Gemma 3 27B",            15, 1500,       0, "free", "text-only - used for chat titles"),
-    ("gemma-4-31b-it",         "Gemma 4 31B",            15, 1500,       0, "free", "1500 RPD - text-only, no tool use"),
+    # Gemma open models — text-only here (no tool-use/vision wired) but generous free limits,
+    # perfect for cheap background jobs like chat-title generation. Smallest first.
+    ("gemma-3-1b-it",          "Gemma 3 1B",             30, 14400,       0, "free", "tiny + fastest - great for chat titles"),
+    ("gemma-3-4b-it",          "Gemma 3 4B",             30, 14400,       0, "free", "small + quick - text-only, no tool use"),
+    ("gemma-3-12b-it",         "Gemma 3 12B",            30, 14400,       0, "free", "mid Gemma - text-only, no tool use"),
+    ("gemma-3-27b-it",         "Gemma 3 27B",            30, 14400,       0, "free", "largest Gemma - text-only, no tool use"),
     ("gemini-3.1-pro",         "Gemini 3.1 Pro",          0,    0,       0, "paid", "paid only - top reasoning"),
     ("gemini-2.5-pro",         "Gemini 2.5 Pro",          0,    0,       0, "paid", "paid only"),
 ]
@@ -29,8 +33,25 @@ CLAUDE_MODELS = [
 RECOMMENDED_FREE = "gemini-3.1-flash-lite"
 
 
+# Cheap models used only for the tiny background "name this chat" job. "ollama" runs the
+# title locally (offline, free); the gemma/gemini ids run on the Gemini free tier. The UI
+# exposes these in the chat-title dropdown.
+TITLE_MODELS = [
+    ("ollama",                "Local (Ollama) — offline, free, no key"),
+    ("gemma-3-1b-it",         "Gemma 3 1B — fastest, free"),
+    ("gemma-3-4b-it",         "Gemma 3 4B — free"),
+    ("gemma-3-12b-it",        "Gemma 3 12B — free"),
+    ("gemma-3-27b-it",        "Gemma 3 27B — free"),
+    ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite — free"),
+]
+DEFAULT_TITLE_MODEL = "gemma-3-4b-it"
+
+
 # Model ids that have been retired / 404 — remap saved settings to a working equivalent.
-_DEAD_MODELS = {"gemini-3.1-flash": "gemini-3.1-flash-lite"}
+_DEAD_MODELS = {
+    "gemini-3.1-flash": "gemini-3.1-flash-lite",
+    "gemma-4-31b-it": "gemma-3-27b-it",   # was a placeholder id; map to a real Gemma
+}
 
 
 def resolve(model_id: str | None) -> str:
