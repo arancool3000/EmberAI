@@ -1205,6 +1205,13 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
+    def _voice_val(self, combo, default: str) -> str:
+        """Read a voice dropdown's value, ignoring the 'Other…' placeholder and blanks."""
+        v = (combo.currentText() or "").strip()
+        if not v or v == getattr(self, "_CUSTOM_VOICE", None):
+            return default
+        return v
+
     def _add_tab(self, page, title: str, scroll: bool = True):
         """Add a tab, optionally wrapped in a scroll area so tall content never clips
         off the bottom of the dialog."""
@@ -1515,17 +1522,35 @@ class SettingsDialog(QDialog):
                 self.tts_engine_combo.setCurrentIndex(i)
         layout.addRow("Read-aloud voice:", self.tts_engine_combo)
 
+        CUSTOM_VOICE = "✏️  Other (type a name)…"
+        self._CUSTOM_VOICE = CUSTOM_VOICE
+
         def _voice_picker(options, current, tip=""):
-            """An editable dropdown: pick a known voice, or type a custom one."""
-            cb = QComboBox()
-            cb.setEditable(True)
+            """A real dropdown of known voices (matches the other Settings dropdowns), with an
+            'Other…' item to type a custom voice when you need one outside the list."""
+            cb = QComboBox()                       # non-editable -> a clear dropdown with an arrow
             cb.addItems(options)
             cur = (current or "").strip()
             if cur and cur not in options:
-                cb.insertItem(0, cur)
-            cb.setCurrentText(cur or (options[0] if options else ""))
+                cb.insertItem(0, cur)              # surface a previously-saved custom voice
+            cb.addItem(CUSTOM_VOICE)
+            cb.setCurrentText(cur if cur else (options[0] if options else ""))
             if tip:
                 cb.setToolTip(tip)
+
+            def _maybe_custom(idx, _cb=cb):
+                if _cb.itemText(idx) != CUSTOM_VOICE:
+                    return
+                from PyQt6.QtWidgets import QInputDialog
+                text, ok = QInputDialog.getText(self, "Custom voice", "Voice name:")
+                name = (text or "").strip()
+                if ok and name:
+                    if _cb.findText(name) < 0:
+                        _cb.insertItem(_cb.count() - 1, name)   # insert above the 'Other…' item
+                    _cb.setCurrentText(name)
+                else:
+                    _cb.setCurrentIndex(0)
+            cb.currentIndexChanged.connect(_maybe_custom)
             return cb
 
         self.edge_voice_input = _voice_picker(
@@ -2687,12 +2712,12 @@ class SettingsDialog(QDialog):
         self.settings["voice_output"] = self.voice_check.isChecked()
         if hasattr(self, "tts_engine_combo"):
             self.settings["tts_engine"] = self.tts_engine_combo.currentData() or "system"
-            self.settings["edge_tts_voice"] = self.edge_voice_input.currentText().strip() or "en-US-AriaNeural"
-            self.settings["gemini_tts_voice"] = self.gemini_voice_input.currentText().strip() or "Kore"
+            self.settings["edge_tts_voice"] = self._voice_val(self.edge_voice_input, "en-US-AriaNeural")
+            self.settings["gemini_tts_voice"] = self._voice_val(self.gemini_voice_input, "Kore")
             self.settings["soundtools_url"] = self.soundtools_url_input.text().strip()
         if hasattr(self, "live_voice_check"):
             self.settings["live_voice_enabled"] = self.live_voice_check.isChecked()
-            self.settings["live_voice_voice"] = self.live_voice_voice_input.currentText().strip() or "Zephyr"
+            self.settings["live_voice_voice"] = self._voice_val(self.live_voice_voice_input, "Zephyr")
         self.settings["voice_chat_spoken_replies"] = self.voice_chat_reply_check.isChecked()
         self.settings["voice_chat_auto_send"] = self.voice_auto_send_check.isChecked()
         self.settings["voice_chat_continue_after_silence"] = self.voice_continue_check.isChecked()

@@ -1,5 +1,5 @@
 {
-  "version": "1.2.6",
+  "version": "1.2.7",
   "pub_date": "2026-06-29",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.2.6\n\n• Fix: a couple of Settings toggles on the Performance tab (the quit-proof hotkey helper, and running a file in the sandbox) showed \"'SettingsDialog' object has no attribute '_set_status'\" instead of working. They now work. Added an automatic check so this class of Settings bug can't slip through again.\n\nIncludes the setup-tour Gmail step (1.2.5), Gmail organising (1.2.4), the self-update fix + AI safe-open guard (1.2.3), and earlier fixes."
+  "notes": "Ember 1.2.7\n\n• The Edge voice and Gemini voice pickers in Settings → Voice are now proper dropdowns (they looked like plain text boxes before). Pick from the list, or choose “Other…” to type a custom voice name.\n\nIncludes the 1.2.6 Settings-toggle fix, the setup-tour Gmail step, Gmail organising, and the self-update + antivirus improvements."
 }
