@@ -1,6 +1,6 @@
 {
-  "version": "1.2.3",
-  "pub_date": "2026-06-28",
+  "version": "1.2.4",
+  "pub_date": "2026-06-29",
   "min_macos": "12.0",
   "min_windows": "10",
   "downloads": {
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.2.3\n\n• Fix: \"Check for updates\" now actually finds new versions. The installed app couldn't verify HTTPS (no CA roots bundled), so every check silently failed and falsely said \"you're up to date.\" Ember now ships the CA roots, and a failed check tells you it couldn't reach the server instead of pretending you're current.\n• New: AI safe-open guard. Before opening an unconfirmed executable/script (or anything the scanner flags), Ember runs an AI second-opinion scan and HOLDS the file until you confirm it's safe — confirmed files are remembered and open normally after. Toggle in Settings → Security.\n\nIncludes 1.2.2's offline-Ollama tool fix, 1.2.1's Settings-crash fix, and everything from 1.2.0."
+  "notes": "Ember 1.2.4\n\n• New: Ember can organise your Gmail. Ask it to clean up or sort your inbox and it searches (Gmail's own query syntax), labels/files, archives, stars, marks read/unread, and trashes (recoverable) email for you. Set it up in Settings → Models → Gmail / Email: your Gmail address + a Google App Password (the same one used to send email). It asks before bulk actions or trashing.\n\nIncludes 1.2.3's self-update fix + AI safe-open guard, 1.2.2's offline-Ollama tool fix, and 1.2.1's Settings-crash fix."
 }

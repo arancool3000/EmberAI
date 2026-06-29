@@ -1306,6 +1306,24 @@ class SettingsDialog(QDialog):
             "Local (Ollama) runs fully offline with no key or limits (chat only — no computer "
             "control). Install from ollama.com and `ollama pull llama3.2`."))
 
+        # --- Gmail / Email (one App Password powers both sending mail AND organising the inbox) ---
+        gmail_box, glayout = self._group("Gmail / Email")
+        outer.addWidget(gmail_box)
+        self.gmail_addr_input = QLineEdit(
+            self.settings.get("gmail_address") or self.settings.get("email_smtp_user", ""))
+        self.gmail_addr_input.setPlaceholderText("you@gmail.com")
+        glayout.addRow("Gmail address:", self.gmail_addr_input)
+        self.gmail_pw_input = QLineEdit(
+            self.settings.get("gmail_app_password") or self.settings.get("email_smtp_password", ""))
+        self.gmail_pw_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gmail_pw_input.setPlaceholderText("16-char Google App Password (not your login password)")
+        glayout.addRow("App Password:", self.gmail_pw_input)
+        glayout.addRow(self._hint(
+            "Lets Ember send email AND organise your inbox (search, label, archive, star, trash). "
+            "Turn on 2-Step Verification, then create an App Password at "
+            "myaccount.google.com/apppasswords and paste it here. Stored locally; used only to "
+            "connect to Gmail (IMAP/SMTP)."))
+
         outer.addStretch()
         self._add_tab(page, "Models")
 
@@ -2612,6 +2630,19 @@ class SettingsDialog(QDialog):
         self.settings["dual_api_failover"] = self.dual_api_check.isChecked()
         self.settings["ai_chat_titles"] = self.ai_titles_check.isChecked()
         self.settings["anthropic_api_key"] = self.anthropic_key_input.text().strip()
+        if hasattr(self, "gmail_addr_input"):
+            addr = self.gmail_addr_input.text().strip()
+            pw = self.gmail_pw_input.text().strip()
+            self.settings["gmail_address"] = addr
+            self.settings["gmail_app_password"] = pw
+            # Mirror into the SMTP/IMAP keys so the SAME App Password powers send_email + gmail_*.
+            self.settings["email_smtp_user"] = addr
+            self.settings["email_smtp_password"] = pw
+            if addr.lower().endswith("@gmail.com") or addr.lower().endswith("@googlemail.com"):
+                self.settings.setdefault("email_smtp_host", "smtp.gmail.com")
+                if not self.settings.get("email_smtp_host"):
+                    self.settings["email_smtp_host"] = "smtp.gmail.com"
+                self.settings["gmail_imap_host"] = "imap.gmail.com"
         sel_id = self.model_combo.currentData()
         self.settings["model_id"] = sel_id or "gemini-3.1-flash-lite"
         provider = model_catalog.provider_for(sel_id)

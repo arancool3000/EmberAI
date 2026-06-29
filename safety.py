@@ -154,6 +154,7 @@ SAFE_READONLY = {
     "list_custom_tools", "get_custom_tool", "export_custom_tool",  # AI-authored custom tools
     "adblock_status",                                         # system-wide ad blocker (read-only)
     "list_timers",                                            # countdown timers (read-only)
+    "gmail_status", "gmail_list_labels", "gmail_search", "gmail_read",  # Gmail (read-only)
 }
 
 SAFE_INTERACTION = {
@@ -194,6 +195,9 @@ SAFE_INTERACTION = {
     # antivirus open-gate: the agent only calls these AFTER the user confirms they trust a
     # held file, so they don't need a second confirmation prompt.
     "confirm_file_safe", "unconfirm_file",
+    # Gmail organising: reversible label/archive/star/read; trash is recoverable for 30 days.
+    "gmail_apply_label", "gmail_remove_label", "gmail_archive", "gmail_mark_read",
+    "gmail_star", "gmail_trash", "gmail_create_label",
 }
 
 QUICK_FIX_RISK = {

@@ -60,7 +60,8 @@ jobs:
             test_ollama_textcalls.py \
             test_setup_tour.py \
             test_timers.py \
-            test_updater.py; do
+            test_updater.py \
+            test_gmail_tools.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"
