@@ -202,7 +202,9 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
             silence_secs = 0.0
             waited = 0.0
             max_wait = max(2.0, float(listen_timeout))
-            max_phrase = max(1.0, float(phrase_timeout))
+            # phrase_timeout None/0 -> "Auto": no hard cap; the silence tail ends the turn when
+            # you stop talking. Keep a generous safety ceiling so noise can't record forever.
+            max_phrase = max(1.0, float(phrase_timeout)) if phrase_timeout else 60.0
 
             while True:
                 try:
@@ -268,7 +270,7 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
 
 
 def listen_metered(on_transcript: Callable[[str, str], None],
-                   phrase_timeout: float = 8.0, listen_timeout: float = 10.0,
+                   phrase_timeout: "float | None" = 8.0, listen_timeout: float = 10.0,
                    on_level: Optional[Callable[[float], None]] = None) -> bool:
     """Drop-in, level-publishing replacement for voice.listen_once.
 

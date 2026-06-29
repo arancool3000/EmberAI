@@ -140,7 +140,9 @@ def _enum_connections():
             return _NET_ENUM()
         except Exception:
             return None
-    # psutil gives pid + addresses + state in one call — preferred.
+    # psutil gives pid + addresses + state in one call — preferred WHEN it yields anything.
+    # On macOS it needs root and often returns [] (or raises AccessDenied) for a normal user,
+    # so an empty/failed result must fall through to lsof/netstat instead of reporting "0".
     try:
         import psutil
         out = []
@@ -157,10 +159,60 @@ def _enum_connections():
                         "lport": (c.laddr.port if c.laddr else None),
                         "rport": (c.raddr.port if c.raddr else None),
                         "status": c.status})
-        return out
+        if out:
+            return out
     except Exception:
         pass
+    # lsof works without root for the user's own connections on macOS/Linux and gives the
+    # process name + pid + addresses + TCP state — the best fallback.
+    res = _enum_connections_lsof()
+    if res:
+        return res
     return _enum_connections_fallback()
+
+
+def _enum_connections_lsof():
+    """Enumerate connections via `lsof -nP -i` (macOS/Linux). No root needed for the user's own
+    processes; yields command name, pid, local/remote addresses and TCP state."""
+    if not _which("lsof"):
+        return None
+    try:
+        r = subprocess.run(["lsof", "-nP", "-i"], capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    if not r.stdout:
+        return None
+    out = []
+    for line in r.stdout.splitlines()[1:]:        # skip the COMMAND/PID/... header
+        parts = line.split()
+        if len(parts) < 9:
+            continue
+        proto = parts[7].upper()                  # NODE column: TCP / UDP
+        if proto not in ("TCP", "UDP"):
+            continue
+        name = parts[0]
+        try:
+            pid = int(parts[1])
+        except Exception:
+            pid = None
+        namecol = " ".join(parts[8:])             # NAME col, e.g. "1.2.3.4:51234->5.6.7.8:443 (ESTABLISHED)"
+        m = re.search(r"\(([A-Z_]+)\)\s*$", namecol)
+        status = m.group(1) if m else ""
+        addrspec = re.sub(r"\s*\([A-Z_]+\)\s*$", "", namecol).strip()
+        if "->" in addrspec:
+            local, remote = (p.strip() for p in addrspec.split("->", 1))
+        else:
+            local, remote = addrspec.strip(), ""
+        if not status:
+            status = "ESTABLISHED" if remote else ("LISTEN" if proto == "TCP" else "")
+        out.append({"pid": pid, "name": name, "laddr": local, "raddr": remote,
+                    "lport": _port_of(local), "rport": _port_of(remote), "status": status})
+    return out or None
+
+
+def _which(cmd: str):
+    import shutil
+    return shutil.which(cmd)
 
 
 def _enum_connections_fallback():
@@ -257,13 +309,28 @@ def _evaluate_connection(c: dict, bad_ips: set) -> tuple[str, str]:
 
 
 def scan_network() -> dict:
-    """One-shot scan of network connections for backdoors / C2 / mining / shells."""
+    """One-shot scan of network connections for backdoors / C2 / mining / shells.
+
+    Returns a rich result so the UI can be useful even when nothing is flagged: how many
+    connections were seen, an established/listening breakdown, the busiest remote hosts, and a
+    plain-language summary (incl. a hint when the OS hid connections behind root)."""
     conns = _enum_connections()
     if conns is None:
-        return {"ok": False, "error": "could not enumerate network connections"}
+        return {"ok": False, "error": "could not enumerate network connections",
+                "summary": "Couldn't read network connections on this system."}
     bad_ips = _bad_ips()
     flagged = []
+    established = listening = 0
+    remotes: dict = {}
     for c in conns:
+        status = (c.get("status") or "").upper()
+        if "LISTEN" in status:
+            listening += 1
+        elif status.startswith("ESTAB"):
+            established += 1
+        rip = (c.get("raddr") or "").rsplit(":", 1)[0]
+        if rip and not rip.startswith(("127.", "::1")):
+            remotes[rip] = remotes.get(rip, 0) + 1
         sev, detail = _evaluate_connection(c, bad_ips)
         if sev in ("suspicious", "malicious"):
             flagged.append({"severity": sev, "detail": detail,
@@ -271,7 +338,23 @@ def scan_network() -> dict:
                             "laddr": c.get("laddr"), "raddr": c.get("raddr"),
                             "status": c.get("status")})
     flagged.sort(key=lambda f: 0 if f["severity"] == "malicious" else 1)
-    return {"ok": True, "scanned": len(conns), "flagged_count": len(flagged), "flagged": flagged}
+    top_remote = sorted(remotes.items(), key=lambda kv: kv[1], reverse=True)[:5]
+
+    n = len(conns)
+    if n == 0:
+        summary = ("No active network connections were visible. On macOS some connections are "
+                   "only listed with elevated permissions — this isn't a sign of a problem.")
+    elif flagged:
+        mal = sum(1 for f in flagged if f["severity"] == "malicious")
+        summary = (f"Checked {n} connections — {len(flagged)} need attention"
+                   + (f" ({mal} malicious)" if mal else "") + ".")
+    else:
+        summary = (f"Checked {n} connections ({established} active, {listening} listening) — "
+                   "all clean. No backdoors, C2, or known-bad hosts.")
+    return {"ok": True, "scanned": n, "flagged_count": len(flagged), "flagged": flagged,
+            "established": established, "listening": listening,
+            "top_remote": [{"ip": ip, "count": cnt} for ip, cnt in top_remote],
+            "summary": summary}
 
 
 def _network_cycle() -> None:

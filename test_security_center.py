@@ -88,6 +88,63 @@ def test_scan_network_handles_failure():
     _reset()
 
 
+def test_scan_network_reports_breakdown_and_summary():
+    """A clean scan still returns useful context (counts + top remotes + a plain summary)."""
+    _reset()
+    sc._NET_ENUM = lambda: [
+        {"pid": 1, "name": "Chrome", "laddr": "10.0.0.2:5111", "raddr": "140.82.112.3:443",
+         "lport": 5111, "rport": 443, "status": "ESTABLISHED"},
+        {"pid": 1, "name": "Chrome", "laddr": "10.0.0.2:5112", "raddr": "140.82.112.3:443",
+         "lport": 5112, "rport": 443, "status": "ESTABLISHED"},
+        {"pid": 2, "name": "Controller", "laddr": "0.0.0.0:7000", "raddr": "",
+         "lport": 7000, "rport": None, "status": "LISTEN"},
+    ]
+    r = sc.scan_network()
+    assert r["ok"] and r["scanned"] == 3
+    assert r["established"] == 2 and r["listening"] == 1
+    assert r["flagged_count"] == 0          # port 7000 / GitHub IP aren't suspicious
+    assert r["top_remote"] and r["top_remote"][0]["ip"] == "140.82.112.3"
+    assert r["top_remote"][0]["count"] == 2
+    assert "all clean" in r["summary"].lower()
+    _reset()
+
+
+def test_scan_network_empty_is_graceful_not_error():
+    """0 connections (e.g. macOS hid them behind root) is OK + explained, not a failure."""
+    _reset()
+    sc._NET_ENUM = lambda: []
+    r = sc.scan_network()
+    assert r["ok"] is True and r["scanned"] == 0 and r["flagged_count"] == 0
+    assert "permission" in r["summary"].lower()
+    _reset()
+
+
+def test_lsof_parser_extracts_connections():
+    """The lsof fallback parses command/pid/addresses/state from `lsof -nP -i` output."""
+    sample = (
+        "COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
+        "Google    901 user   30u  IPv4  0xabc      0t0  TCP 192.168.1.5:51234->140.82.112.3:443 (ESTABLISHED)\n"
+        "sshd      55  user    3u  IPv4  0xdef      0t0  TCP *:22 (LISTEN)\n"
+        "rapportd  77  user    5u  IPv4  0xff0      0t0  UDP *:5353\n"
+    )
+    import types
+    orig = sc.subprocess.run
+    sc.subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=sample, stderr="")
+    orig_which = sc._which
+    sc._which = lambda cmd: "/usr/bin/lsof"
+    try:
+        conns = sc._enum_connections_lsof()
+    finally:
+        sc.subprocess.run = orig
+        sc._which = orig_which
+    assert conns and len(conns) == 3
+    chrome = conns[0]
+    assert chrome["name"] == "Google" and chrome["pid"] == 901
+    assert chrome["raddr"] == "140.82.112.3:443" and chrome["rport"] == 443
+    assert chrome["status"] == "ESTABLISHED"
+    assert conns[1]["status"] == "LISTEN" and conns[1]["lport"] == 22
+
+
 # --- persistence scanning ------------------------------------------------------
 
 def test_scan_persistence_flags_malicious_autostart():

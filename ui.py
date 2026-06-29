@@ -399,7 +399,7 @@ def load_settings() -> dict:
         "voice_chat_spoken_replies": True,
         "voice_chat_auto_send": True,
         "voice_chat_continue_after_silence": True,
-        "voice_chat_phrase_timeout": 8,
+        "voice_chat_phrase_timeout": "auto",  # "auto" = end the turn when you pause; or a max seconds
         "tts_engine": "system",       # read-aloud engine: system | edge | gemini | soundtools
         "edge_tts_voice": "en-US-AriaNeural",  # Microsoft Edge neural voice (free, no key)
         "gemini_tts_voice": "Kore",
@@ -1606,12 +1606,27 @@ class SettingsDialog(QDialog):
         self.voice_continue_check.setChecked(bool(self.settings.get("voice_chat_continue_after_silence", True)))
         layout.addRow(self.voice_continue_check)
 
-        self.voice_phrase_input = QLineEdit(str(self.settings.get("voice_chat_phrase_timeout", 8)))
-        self.voice_phrase_input.setPlaceholderText("seconds, 4-20")
-        layout.addRow("Voice turn length:", self.voice_phrase_input)
+        self.voice_phrase_combo = QComboBox()
+        self.voice_phrase_combo.addItem("Auto — stop when I pause (recommended)", userData="auto")
+        for sec in (4, 6, 8, 10, 15, 20):
+            self.voice_phrase_combo.addItem(f"Up to {sec} seconds", userData=str(sec))
+        _cur_vt = str(self.settings.get("voice_chat_phrase_timeout", "auto")).strip().lower()
+        _vt_idx = 0
+        for i in range(self.voice_phrase_combo.count()):
+            if self.voice_phrase_combo.itemData(i) == _cur_vt:
+                _vt_idx = i
+                break
+        self.voice_phrase_combo.setCurrentIndex(_vt_idx)
+        self.voice_phrase_combo.setToolTip(
+            "How long one spoken turn can last in Voice Chat. Auto (recommended) listens until "
+            "you naturally pause, so it never cuts you off — pick a fixed cap only if you want a "
+            "hard limit.")
+        layout.addRow("Voice turn length:", self.voice_phrase_combo)
 
         note = QLabel(
-            "Voice chat uses the same computer-control brain as typed chat. Microphone permission is required."
+            "Auto stops listening when you pause talking. Natural voice (Live API) also lets the "
+            "AI decide turn-taking. Voice chat uses the same brain as typed chat; mic permission "
+            "is required."
         )
         note.setStyleSheet("color: #565f89; font-size: 11px;")
         note.setWordWrap(True)
@@ -2520,12 +2535,20 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Network scan", r.get("error", "scan failed"))
             return
         flagged = r.get("flagged", [])
-        detail = "\n\n".join(f"{f['severity'].upper()}: {f['detail']}" for f in flagged[:20]) \
-            or "No suspicious connections found."
-        QMessageBox.information(
-            self, "Network scan",
-            f"Scanned {r.get('scanned', 0)} connections — flagged {r.get('flagged_count', 0)}."
-            f"\n\n{detail}")
+        summary = r.get("summary") or (
+            f"Scanned {r.get('scanned', 0)} connections — flagged {r.get('flagged_count', 0)}.")
+        if flagged:
+            body = "\n\n".join(f"{f['severity'].upper()}: {f['detail']}" for f in flagged[:20])
+        else:
+            # No threats — still show something useful (who you're connected to).
+            top = r.get("top_remote") or []
+            if top:
+                body = "Top remote hosts:\n" + "\n".join(
+                    f"  • {t['ip']}  ({t['count']} connection{'s' if t['count'] != 1 else ''})"
+                    for t in top)
+            else:
+                body = "Nothing to report."
+        QMessageBox.information(self, "Network scan", f"{summary}\n\n{body}")
 
     def _scan_persistence_ui(self):
         try:
@@ -2721,10 +2744,8 @@ class SettingsDialog(QDialog):
         self.settings["voice_chat_spoken_replies"] = self.voice_chat_reply_check.isChecked()
         self.settings["voice_chat_auto_send"] = self.voice_auto_send_check.isChecked()
         self.settings["voice_chat_continue_after_silence"] = self.voice_continue_check.isChecked()
-        try:
-            self.settings["voice_chat_phrase_timeout"] = max(4, min(20, int(self.voice_phrase_input.text().strip() or 8)))
-        except ValueError:
-            self.settings["voice_chat_phrase_timeout"] = 8
+        if hasattr(self, "voice_phrase_combo"):
+            self.settings["voice_chat_phrase_timeout"] = self.voice_phrase_combo.currentData() or "auto"
         self.settings["hotkey"] = self.hotkey_input.text().strip() or "ctrl+shift+space"
         # If the quit-proof hotkey helper is installed, refresh it with the (possibly new) combo.
         try:
@@ -4395,11 +4416,16 @@ class EmberWindow(QWidget):
             self._bridge.transcript.emit(text or "", err or "")
         phrase_timeout = 6.0
         if mode == "voice_chat":
-            try:
-                phrase_timeout = float(self.settings.get("voice_chat_phrase_timeout", 8))
-            except Exception:
-                phrase_timeout = 8.0
-        listen_timeout = max(8.0, phrase_timeout + 2.0)
+            raw = self.settings.get("voice_chat_phrase_timeout", "auto")
+            if str(raw).strip().lower() in ("auto", "", "0", "none"):
+                phrase_timeout = None      # Auto: end the turn when the user pauses (silence)
+            else:
+                try:
+                    phrase_timeout = float(raw)
+                except Exception:
+                    phrase_timeout = None
+        # When Auto, wait ~10s for speech to START; the silence tail ends the turn after that.
+        listen_timeout = 10.0 if phrase_timeout is None else max(8.0, phrase_timeout + 2.0)
         started = False
         try:
             import audio_level

@@ -339,7 +339,7 @@ def stop_speaking():
 
 
 def listen_once(on_transcript: Callable[[str, str | None], None],
-                phrase_timeout: float = 6.0, listen_timeout: float = 8.0):
+                phrase_timeout: "float | None" = 6.0, listen_timeout: float = 8.0):
     """Record one utterance from the default mic, transcribe via Google Web Speech (free),
     then call on_transcript(text, error).
 
@@ -367,8 +367,10 @@ def listen_once(on_transcript: Callable[[str, str | None], None],
             with MIC_LOCK:
                 with mic as source:
                     rec.adjust_for_ambient_noise(source, duration=0.3)
+                    # phrase_time_limit=None -> "Auto": the recognizer ends the phrase on a
+                    # natural pause (pause_threshold) instead of a fixed cap.
                     audio = rec.listen(source, timeout=listen_timeout,
-                                       phrase_time_limit=phrase_timeout)
+                                       phrase_time_limit=(phrase_timeout or None))
         except sr.WaitTimeoutError:
             on_transcript("", "no speech detected")
             return
