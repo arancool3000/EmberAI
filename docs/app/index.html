@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ember AI">
+<meta name="theme-color" content="#070708">
+<link rel="apple-touch-icon" href="./icon.png">
+<link rel="icon" href="./icon.png">
+<link rel="manifest" href="./manifest.webmanifest">
+<title>Ember AI</title>
+<style>
+:root{--bg:#070708;--fg:rgba(255,255,255,.94);--mut:rgba(255,255,255,.6);--faint:rgba(255,255,255,.4);--line:rgba(255,255,255,.16);--line2:rgba(255,255,255,.3);--accent:#ff8a3d;--err:#ff6b6b}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+html,body{height:100%;margin:0;overscroll-behavior:none}
+body{background:radial-gradient(circle at 50% -8%,#3a3a3d 0,#18191b 40%,#060607 86%);color:var(--fg);-webkit-overflow-scrolling:touch}
+button{font:inherit;color:var(--fg);border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.06));padding:11px 14px;font-weight:650}
+button:active{background:rgba(255,255,255,.86);color:#0a0a0c}
+input,textarea,select{font:inherit;color:var(--fg);background:rgba(255,255,255,.08);border:1px solid var(--line);border-radius:14px;padding:12px;outline:none}
+input:focus,textarea:focus{border-color:var(--accent)}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;border-bottom:1px solid var(--line);background:rgba(7,7,8,.5);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+header img{width:30px;height:30px;border-radius:8px}
+header .t{font-weight:800;font-size:18px;letter-spacing:-.2px}
+header .t b{font-weight:500;color:var(--mut)}
+header .spacer{flex:1}
+header select{padding:7px 9px;font-size:13px;max-width:46vw}
+.iconbtn{padding:8px 11px;border-radius:12px}
+#log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:860px;width:100%;margin:0 auto}
+.msg{max-width:88%;padding:12px 14px;border-radius:18px;line-height:1.4;font-size:15px;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{align-self:flex-end;background:rgba(255,255,255,.9);color:#0a0a0c}
+.msg.ai{align-self:flex-start;background:rgba(255,255,255,.09);border:1px solid var(--line)}
+.msg.sys{align-self:center;color:var(--mut);font-size:12.5px;text-align:center;background:none;border:none;max-width:96%}
+.msg.err{align-self:flex-start;background:rgba(255,107,107,.14);border:1px solid rgba(255,107,107,.4);color:#ffd0d0}
+.msg img{max-width:100%;border-radius:12px;margin-top:6px;display:block}
+.msg code{background:rgba(255,255,255,.12);padding:1px 5px;border-radius:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.msg.user code{background:rgba(0,0,0,.1)}
+.msg pre{background:rgba(0,0,0,.34);border:1px solid var(--line);border-radius:12px;padding:11px;overflow:auto;margin:8px 0}
+.msg pre code{background:none;padding:0}
+footer{padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:rgba(7,7,8,.5);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+.chip{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);border:1px solid var(--line);border-radius:999px;padding:5px 10px;font-size:12px;color:var(--mut);margin-bottom:8px}
+.chip b{color:var(--fg);font-weight:600}
+.chip .x{cursor:pointer;font-weight:800;color:var(--faint)}
+.row{display:flex;gap:8px;align-items:flex-end;max-width:860px;margin:0 auto}
+#ta{flex:1;resize:none;max-height:140px;min-height:48px;border-radius:18px}
+.send{border-radius:16px;min-width:54px;font-size:18px;background:linear-gradient(180deg,#ff9a4d,#ff7a1f);border-color:rgba(255,255,255,.2);color:#1a0f05}
+.send:disabled{opacity:.5}
+.gate{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:26px;background:radial-gradient(circle at 50% 0,#3a3a3d 0,#141416 48%,#070708 100%)}
+.gate h1{margin:0;font-size:34px}.gate h1 b{font-weight:500;color:var(--mut)}
+.gate p{color:var(--mut);font-size:14px;line-height:1.5;margin:0}
+.gate a{color:var(--accent)}
+.gate input{font-size:16px}
+.gate .note{font-size:12px;color:var(--faint)}
+@media(min-width:760px){.msg{font-size:16px}#ta{min-height:54px}header .t{font-size:20px}}
+</style>
+</head>
+<body>
+<div id="app" style="display:none">
+  <header>
+    <img src="./icon.png" alt="">
+    <div class="t">Ember <b>AI</b></div>
+    <div class="spacer"></div>
+    <select id="model" title="Model"></select>
+    <button class="iconbtn" id="newchat" title="New chat">✚</button>
+    <button class="iconbtn" id="gear" title="Settings">⚙</button>
+  </header>
+  <main id="log"></main>
+  <footer>
+    <div id="attachChip" style="display:none" class="chip"><b id="attachName"></b><span class="x" id="attachX">✕</span></div>
+    <div class="row">
+      <button class="iconbtn" id="attach" title="Attach photo or text file">📎</button>
+      <button class="iconbtn" id="mic" title="Voice input" style="display:none">🎙️</button>
+      <textarea id="ta" rows="1" placeholder="Ask Ember anything…"></textarea>
+      <button class="send" id="send" title="Send">➤</button>
+    </div>
+    <input type="file" id="file" accept="image/*,text/plain,.txt,.md,.csv,.json,.log" style="display:none">
+  </footer>
+</div>
+
+<div class="gate" id="gate" style="display:none">
+  <h1>Ember <b>AI</b></h1>
+  <p>Your private AI assistant — chat, ask about photos, and get answers. Runs entirely on this
+     device using your own free Google&nbsp;AI key.</p>
+  <input id="keyInput" type="password" inputmode="text" autocomplete="off" placeholder="Paste your Google AI (Gemini) API key">
+  <button id="saveKey">Start</button>
+  <p class="note">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+     The key is stored only on this device and is sent only to Google — never to us.</p>
+  <p class="note">Note: this is the Ember <b>assistant</b>. Controlling your computer (the desktop
+     Ember’s job) isn’t possible inside an iPad app — use the Mac/PC app or Ember Link for that.</p>
+</div>
+
+<script>
+"use strict";
+const LS={key:"ember_ai_key",model:"ember_ai_model",hist:"ember_ai_history"};
+const MODELS=[["gemini-2.5-flash","Gemini 2.5 Flash — fast (recommended)"],
+              ["gemini-2.5-flash-lite","Gemini 2.5 Flash-Lite — fastest"],
+              ["gemini-2.5-pro","Gemini 2.5 Pro — most capable"]];
+const SYS="You are Ember, a warm, concise and capable AI assistant on the user's iPad. Help with "+
+  "questions, writing, brainstorming, explanations, code, and analysing photos or documents the "+
+  "user shares. Use clear, friendly language and Markdown when helpful. You run on the user's "+
+  "device and cannot control their computer or other apps; if they need that, point them to the "+
+  "Ember desktop app or Ember Link.";
+
+let apiKey="",model=MODELS[0][0],history=[],attachment=null,busy=false;
+const $=s=>document.querySelector(s);
+const logEl=$("#log");
+
+function loadState(){
+  apiKey=localStorage.getItem(LS.key)||"";
+  model=localStorage.getItem(LS.model)||MODELS[0][0];
+  try{history=JSON.parse(localStorage.getItem(LS.hist)||"[]")||[]}catch(e){history=[]}
+}
+function saveHist(){try{localStorage.setItem(LS.hist,JSON.stringify(history.slice(-60)))}catch(e){}}
+
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function md(t){
+  // minimal, safe markdown: escape first, then format
+  let s=esc(t);
+  s=s.replace(/```([\s\S]*?)```/g,(m,c)=>"<pre><code>"+c.replace(/^\n/,"")+"</code></pre>");
+  s=s.replace(/`([^`\n]+)`/g,"<code>$1</code>");
+  s=s.replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+  s=s.replace(/(^|[\s(])\*([^*\n]+)\*/g,"$1<i>$2</i>");
+  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+function bubble(role,text,imgUrl){
+  const d=document.createElement("div");
+  d.className="msg "+(role==="user"?"user":role==="error"?"err":role==="system"?"sys":"ai");
+  d.innerHTML=(role==="ai")?md(text):esc(text);
+  if(imgUrl){const im=document.createElement("img");im.src=imgUrl;d.appendChild(im);}
+  logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;
+  return d;
+}
+function renderHistory(){
+  logEl.innerHTML="";
+  if(!history.length){bubble("system","Hi — I’m Ember. Ask me anything, or tap 📎 to share a photo.");return;}
+  for(const m of history){bubble(m.role==="user"?"user":"ai",m.text,m.img||null);}
+}
+
+function showApp(){$("#app").style.display="flex";$("#gate").style.display="none";renderHistory();$("#ta").focus();}
+function showGate(){$("#gate").style.display="flex";$("#app").style.display="none";}
+
+// --- attachments ---
+$("#attach").onclick=()=>$("#file").click();
+$("#attachX").onclick=()=>{attachment=null;$("#attachChip").style.display="none";$("#file").value="";};
+$("#file").onchange=e=>{
+  const f=e.target.files&&e.target.files[0];if(!f)return;
+  const r=new FileReader();
+  if(f.type.startsWith("image/")){
+    r.onload=()=>{attachment={kind:"image",mime:f.type,dataUrl:r.result,name:f.name};showChip("📷 "+f.name);};
+    r.readAsDataURL(f);
+  }else{
+    r.onload=()=>{attachment={kind:"text",text:String(r.result).slice(0,20000),name:f.name};showChip("📄 "+f.name);};
+    r.readAsText(f);
+  }
+};
+function showChip(label){$("#attachName").textContent=label;$("#attachChip").style.display="inline-flex";}
+
+// --- model select ---
+function buildModels(){
+  const sel=$("#model");sel.innerHTML="";
+  for(const[id,label]of MODELS){const o=document.createElement("option");o.value=id;o.textContent=label.split(" — ")[0];o.title=label;sel.appendChild(o);}
+  sel.value=model;
+  sel.onchange=()=>{model=sel.value;localStorage.setItem(LS.model,model);};
+}
+
+// --- gemini call (streaming) ---
+function buildContents(userText){
+  const contents=[];
+  for(const m of history){contents.push({role:m.role==="user"?"user":"model",parts:[{text:m.text}]});}
+  const parts=[{text:userText||""}];
+  if(attachment&&attachment.kind==="image"){
+    const b64=attachment.dataUrl.split(",")[1]||"";
+    parts.push({inline_data:{mime_type:attachment.mime,data:b64}});
+  }else if(attachment&&attachment.kind==="text"){
+    parts[0].text=(userText||"")+"\n\n[Attached file "+attachment.name+"]:\n"+attachment.text;
+  }
+  contents.push({role:"user",parts});
+  return contents;
+}
+async function send(){
+  if(busy)return;
+  const ta=$("#ta");const text=ta.value.trim();
+  if(!text&&!attachment)return;
+  busy=true;$("#send").disabled=true;
+  const imgUrl=(attachment&&attachment.kind==="image")?attachment.dataUrl:null;
+  bubble("user",text||(attachment?("["+attachment.name+"]"):""),imgUrl);
+  const contents=buildContents(text);
+  // store user turn (text only — images aren't re-sent on later turns to keep payloads small)
+  history.push({role:"user",text:text||("["+(attachment?attachment.name:"")+"]"),img:imgUrl});
+  ta.value="";autoGrow();
+  const usedAttachment=attachment;attachment=null;$("#attachChip").style.display="none";$("#file").value="";
+  const out=bubble("ai","");let acc="";
+  try{
+    const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+
+      ":streamGenerateContent?alt=sse&key="+encodeURIComponent(apiKey);
+    const resp=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents,systemInstruction:{parts:[{text:SYS}]}})});
+    if(!resp.ok){
+      let msg="HTTP "+resp.status;try{const j=await resp.json();msg=(j.error&&j.error.message)||msg;}catch(e){}
+      out.remove();bubble("error",errHint(resp.status,msg));history.pop();
+    }else{
+      const reader=resp.body.getReader();const dec=new TextDecoder();let buf="";
+      for(;;){const{done,value}=await reader.read();if(done)break;
+        buf+=dec.decode(value,{stream:true});
+        let i;while((i=buf.indexOf("\n"))>=0){
+          const line=buf.slice(0,i).trim();buf=buf.slice(i+1);
+          if(!line.startsWith("data:"))continue;
+          const payload=line.slice(5).trim();if(payload==="[DONE]")continue;
+          try{const j=JSON.parse(payload);
+            const t=j&&j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts;
+            if(t)for(const p of t){if(p.text){acc+=p.text;out.innerHTML=md(acc);logEl.scrollTop=logEl.scrollHeight;}}
+          }catch(e){}
+        }
+      }
+      if(!acc){out.innerHTML=md("(no response)");}
+      history.push({role:"model",text:acc||"(no response)"});saveHist();
+    }
+  }catch(e){
+    out.remove();bubble("error","Network error: "+e.message+" — check your connection.");history.pop();
+  }finally{busy=false;$("#send").disabled=false;saveHist();}
+}
+function errHint(status,msg){
+  if(status===400||status===403)return "API error: "+msg+"\n\nDouble-check your Gemini API key in ⚙ Settings.";
+  if(status===429)return "Rate limit reached on the free tier — wait a moment, or pick a lighter model.";
+  if(status===404)return "That model isn’t available for your key. Pick another model up top.";
+  return "API error: "+msg;
+}
+
+// --- input handling ---
+function autoGrow(){const ta=$("#ta");ta.style.height="auto";ta.style.height=Math.min(140,ta.scrollHeight)+"px";}
+$("#ta").addEventListener("input",autoGrow);
+$("#ta").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
+$("#send").onclick=send;
+$("#newchat").onclick=()=>{if(history.length&&!confirm("Start a new chat? This clears the current one."))return;history=[];saveHist();renderHistory();};
+$("#gear").onclick=()=>{$("#keyInput").value=apiKey;showGate();};
+
+// --- voice (best-effort; iOS support varies) ---
+(function(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return;
+  $("#mic").style.display="";
+  let rec=null,on=false;
+  $("#mic").onclick=()=>{
+    if(on){try{rec&&rec.stop()}catch(e){}return;}
+    rec=new SR();rec.lang="en-US";rec.interimResults=true;rec.continuous=false;
+    const base=$("#ta").value;
+    rec.onresult=ev=>{let s="";for(let i=ev.resultIndex;i<ev.results.length;i++)s+=ev.results[i][0].transcript;
+      $("#ta").value=(base?base+" ":"")+s;autoGrow();};
+    rec.onstart=()=>{on=true;$("#mic").style.background="rgba(255,138,61,.5)";};
+    rec.onend=()=>{on=false;$("#mic").style.background="";};
+    rec.onerror=()=>{on=false;$("#mic").style.background="";};
+    try{rec.start()}catch(e){}
+  };
+})();
+
+// --- settings gate ---
+$("#saveKey").onclick=()=>{
+  const k=$("#keyInput").value.trim();
+  if(!k){$("#keyInput").focus();return;}
+  apiKey=k;localStorage.setItem(LS.key,k);showApp();
+};
+$("#keyInput").addEventListener("keydown",e=>{if(e.key==="Enter"){$("#saveKey").click();}});
+
+// --- boot ---
+loadState();buildModels();
+if(apiKey)showApp();else showGate();
+if("serviceWorker"in navigator){navigator.serviceWorker.register("./sw.js").catch(()=>{});}
+</script>
+</body>
+</html>

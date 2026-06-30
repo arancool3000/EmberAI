@@ -71,7 +71,8 @@ jobs:
             test_push_to_talk.py \
             test_mac_keys.py \
             test_terminal.py \
-            test_agent_tasks.py; do
+            test_agent_tasks.py \
+            test_ipad_app.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"
