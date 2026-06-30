@@ -170,6 +170,14 @@ def _chat_snapshot() -> list[dict]:
 
 PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ember Link">
+<meta name="theme-color" content="#070708">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Ember Link</title><style>
 :root{--bg:#070708;--fg:rgba(255,255,255,.94);--mut:rgba(255,255,255,.62);--faint:rgba(255,255,255,.38);--glass:rgba(255,255,255,.105);--glass2:rgba(255,255,255,.16);--line:rgba(255,255,255,.2);--line2:rgba(255,255,255,.32);--solid:#fff;--dark:#0a0a0c;--err:#ff6b6b}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -215,6 +223,23 @@ body.fakefs #screen{max-width:100%;max-height:100%;width:auto;height:auto}
 body.fakefs .toolbar,body.fakefs .tag,body.fakefs .top{display:none}
 body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;transform:translateY(-50%) rotate(90deg);transform-origin:center center;background:rgba(0,0,0,.55);font-size:13px;padding:8px 13px;border-radius:14px;flex:0 0 auto;width:auto}
 @media(max-width:410px){button{font-size:13px;padding:12px 8px}.top{gap:5px}.toolbar{left:10px;right:auto;top:auto;bottom:10px}.tag{top:10px}}
+/* iPad / large tablets: roomier layout, bigger mirror + touch targets, centred content.
+   (Add to Home Screen launches it standalone like a native app; iPadOS Safari also gives
+   real fullscreen so the mirror uses the OS Fullscreen API, not the Kindle rotate fallback.) */
+@media(min-width:760px){
+  body{max-width:1000px;margin:0 auto}
+  .top{gap:10px;padding:12px 16px calc(12px + env(safe-area-inset-top))}
+  button{font-size:16px;padding:16px 12px;border-radius:20px}
+  button.small{font-size:13px;padding:9px 14px}
+  #fsbtn{width:56px;font-size:20px}
+  #screenwrap{max-height:72vh}
+  #screen{max-height:72vh}
+  .pane{padding:18px;max-width:760px;margin:0 auto}
+  .grid4,.grid3,.grid2{gap:12px}
+  #bigpad{min-height:420px}
+  #pin{font-size:34px;width:260px}
+  .msg{font-size:15px;max-width:80%}
+}
 </style></head><body>
 <div id=gate>
   <h1><span>Ember</span><b> Link</b></h1>
@@ -400,6 +425,40 @@ document.getElementById("chatInput").addEventListener("keydown",e=>{if(e.key==="
 </script></body></html>"""
 
 
+# PWA install assets (so an iPad/phone can "Add to Home Screen" and launch Ember Link
+# standalone, like a native app). Served without a PIN — they hold no private data.
+_ICON_CACHE = {"bytes": None}
+
+
+def _icon_bytes() -> bytes:
+    if _ICON_CACHE["bytes"] is None:
+        import os
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+        try:
+            with open(p, "rb") as f:
+                _ICON_CACHE["bytes"] = f.read()
+        except Exception:
+            _ICON_CACHE["bytes"] = b""
+    return _ICON_CACHE["bytes"]
+
+
+MANIFEST = json.dumps({
+    "name": "Ember Link",
+    "short_name": "Ember",
+    "description": "Control your computer from this device — Ember Link.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#070708",
+    "theme_color": "#070708",
+    "icons": [
+        {"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    ],
+})
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silence console spam
         pass
@@ -425,6 +484,25 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path.startswith("/manifest.webmanifest") or self.path.startswith("/manifest.json"):
+            body = MANIFEST.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/icon.png") or self.path.startswith("/apple-touch-icon"):
+            data = _icon_bytes()
+            if not data:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if self.path.startswith("/api/screen"):
             from urllib.parse import urlparse, parse_qs

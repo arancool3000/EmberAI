@@ -219,6 +219,11 @@ trackpad, keyboard, quality controls, **one-tap quick-actions** (Lock PC, Mute, 
 Sleep Screen, and a custom-command box), and a Chat tab for telling Ember what to do remotely.
 It’s LAN-only and PIN-gated; stop it when done.
 
+**iPad / tablet:** open the link in Safari, then **Share → Add to Home Screen** — Ember Link
+installs with its own icon and launches full-screen like a native app (it’s a PWA), with an
+iPad-optimised layout. A native iPad app can’t control a computer (iOS sandboxing), so this
+client is the supported way to use an iPad with Ember.
+
 ---
 
 ## 🛡️ Built-in malware defense

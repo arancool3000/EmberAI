@@ -1,5 +1,5 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "pub_date": "2026-06-30",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.8.0 — In-app Terminal, Parallel Agent Tasks & Ember Link polish\n\n• Built-in Terminal + Python runner (Command Center → ⌨️ Terminal, or /terminal): run shell commands AND Python in-app, with a Python session that persists between runs. No more leaving Ember to use a terminal.\n• Parallel Agent Tasks (Command Center → 🧠 Agent tasks, or /agents): kick off several Ember jobs at once and watch each one's live status + output in a dashboard; stop any of them. Great for running research/file tasks side by side.\n• Ember Link polish: fixed the toolbar buttons whose labels (Balanced/Fast) ran off the edge; smoother mirroring on e-ink (frames decode off-screen so the picture no longer flashes black — Kindle); and on devices without the Fullscreen API (e.g. Kindle) the Fullscreen button now rotates the mirror to landscape and fills the screen — use your e-reader as a second monitor — with tap-to-click still mapped correctly.\n\nIncludes the 1.7.1 macOS shortcut fix, 1.7.0 push-to-talk voice, and 1.6.0's smarter local Ollama + chat-title picker."
+  "notes": "Ember 1.8.1 — Ember Link as an installable iPad/tablet app (PWA)\n\n• Add to Home Screen: open Ember Link in Safari on your iPad (or iPhone/Android), Share → Add to Home Screen, and it installs with the Ember icon and launches full-screen like a native app — no App Store needed. (A native iPad app can't control a computer due to iOS sandboxing, so this client is the right way to use an iPad with Ember.)\n• iPad-optimised layout: roomier, centred design with a bigger mirror and larger touch targets on tablet-sized screens; iPadOS gives real fullscreen too.\n\nBuilds on 1.8.0's in-app Terminal + Parallel Agent Tasks, the 1.7.x voice/shortcut fixes, and 1.6.0's smarter local Ollama."
 }

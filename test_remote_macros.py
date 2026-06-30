@@ -119,6 +119,24 @@ def test_phone_page_button_and_fullscreen_fixes():
     assert "x=ry;y=1-rx" in page and "id=fsexit" in page
 
 
+def test_phone_page_is_installable_pwa():
+    page = rs.PAGE
+    assert 'rel="manifest"' in page and "apple-mobile-web-app-capable" in page
+    assert "apple-touch-icon" in page
+    assert "@media(min-width:760px)" in page          # iPad / tablet layout
+    import json
+    m = json.loads(rs.MANIFEST)
+    assert m["display"] == "standalone" and m["icons"]
+    assert isinstance(rs._icon_bytes(), (bytes, bytearray))   # icon endpoint has data to serve
+
+
+def test_manifest_and_icon_routes_constants():
+    # the manifest must be valid JSON and reference the icon route the page links to
+    import json
+    m = json.loads(rs.MANIFEST)
+    assert any(i["src"] == "/icon.png" for i in m["icons"])
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
