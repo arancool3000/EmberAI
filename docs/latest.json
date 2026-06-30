@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.7.1",
   "pub_date": "2026-06-29",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.7.0 — Push-to-talk voice (zero-latency, offline Whisper)\n\n• Push-to-talk: hold a key, talk, release — Ember transcribes and sends it instantly. No 'Hey Ember' wake-word wait and no false triggers. Set it up in Settings → Voice (default key F9, off until you enable it).\n• Local, private transcription with Whisper when installed (pip install faster-whisper) — fully offline; otherwise it uses your Gemini key or free Google speech. Pick the engine + Whisper model size in Settings.\n\nBuilds on 1.6.0 (smarter local Ollama, chat-title model picker, phone quick-actions) and the Norton-style Security Dashboard."
+  "notes": "Ember 1.7.1 — macOS shortcut fix\n\n• Keyboard shortcuts like ⌘W, ⌘C and ⌘V now fire correctly on macOS. They used to be split into 'command' then the key as two separate presses (so the shortcut never triggered); Ember now sends the whole chord at once.\n\nIncludes 1.7.0's push-to-talk voice (hold a key to talk, offline Whisper), 1.6.0's smarter local Ollama + chat-title picker + phone quick-actions, and the Norton-style Security Dashboard."
 }

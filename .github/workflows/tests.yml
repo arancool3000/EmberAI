@@ -68,7 +68,8 @@ jobs:
             test_panic.py \
             test_security_dashboard.py \
             test_remote_macros.py \
-            test_push_to_talk.py; do
+            test_push_to_talk.py \
+            test_mac_keys.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

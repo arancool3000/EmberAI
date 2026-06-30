@@ -305,8 +305,17 @@ def paste_text(text):
         try: prev = pyperclip.paste()
         except Exception: pass
         pyperclip.copy(text); time.sleep(0.05)
-        _paste_mod = "command" if sys.platform == "darwin" else "ctrl"
-        pyautogui.hotkey(_paste_mod, "v"); time.sleep(0.1)
+        # Use the atomic macOS combo path so the paste shortcut isn't split into 'command' then 'v'.
+        pasted = False
+        if sys.platform == "darwin":
+            try:
+                import mac_keys
+                pasted = mac_keys.send_combo(["command", "v"])
+            except Exception:
+                pasted = False
+        if not pasted:
+            pyautogui.hotkey("command" if sys.platform == "darwin" else "ctrl", "v")
+        time.sleep(0.1)
         if prev is not None:
             try: pyperclip.copy(prev)
             except Exception: pass
@@ -315,12 +324,30 @@ def paste_text(text):
         return {"ok": False, "error": str(e)}
 
 
-_MAC_KEY_MAP = {"win": "command", "windows": "command", "ctrl": "control", "meta": "command"}
+# pyautogui key-name aliases for the macOS fallback path (applied ONLY on darwin).
+_MAC_KEY_MAP = {"win": "command", "windows": "command", "cmd": "command", "command": "command",
+                "meta": "command", "super": "command", "ctrl": "control", "control": "control",
+                "alt": "option", "opt": "option", "option": "option"}
 
 
 def press_key(keys):
     try:
-        parts = [_MAC_KEY_MAP.get(k.strip().lower(), k.strip().lower()) for k in keys.split("+")]
+        raw = [k.strip().lower() for k in str(keys).split("+") if k.strip()]
+        if not raw:
+            return {"ok": False, "error": "no keys given"}
+        # macOS: send a multi-key COMBO atomically via AppleScript. pyautogui.hotkey releases the
+        # modifier before the key registers on macOS (cmd+w -> 'command' then 'w' separately), so
+        # shortcuts silently fail; System Events keystroke holds the modifiers down.
+        if sys.platform == "darwin" and len(raw) > 1:
+            try:
+                import mac_keys
+                if mac_keys.send_combo(raw):
+                    return {"ok": True, "pressed": keys}
+            except Exception:
+                pass
+            parts = [_MAC_KEY_MAP.get(k, k) for k in raw]
+        else:
+            parts = raw
         if len(parts) > 1:
             pyautogui.hotkey(*parts)
         else:
