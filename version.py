@@ -23,18 +23,24 @@ GITHUB_OWNER = os.environ.get("EMBER_GITHUB_OWNER", "arancool3000")
 GITHUB_REPO = os.environ.get("EMBER_GITHUB_REPO", "EmberAI")
 
 # Per-OS release asset names (the updater downloads these; the release scripts produce them).
-ASSET_NAMES = {"macos": "Ember-macOS.zip", "windows": "Ember-Windows.zip"}
+# Linux ships a raw AppImage (not zipped) - that's the idiomatic AppImage UX for someone
+# downloading it by hand (chmod +x and run, no unzip step); updater.py detects the .AppImage
+# extension and skips the unzip step it uses for the macOS/Windows .zip assets.
+ASSET_NAMES = {"macos": "Ember-macOS.zip", "windows": "Ember-Windows.zip",
+               "linux": "Ember-Linux.AppImage"}
 MANIFEST_NAME = "latest.json"
 
 _PLACEHOLDER_OWNER = "YOUR_GITHUB_USERNAME"
 
 
 def platform_key() -> str | None:
-    """'macos' | 'windows' | None — which OS we're running on for update purposes."""
+    """'macos' | 'windows' | 'linux' | None — which OS we're running on for update purposes."""
     if sys.platform == "darwin":
         return "macos"
     if sys.platform.startswith("win"):
         return "windows"
+    if sys.platform.startswith("linux"):
+        return "linux"
     return None
 
 

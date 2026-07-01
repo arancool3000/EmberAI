@@ -1,10 +1,11 @@
-# PyInstaller spec for Ember (cross-platform: macOS + Windows)
+# PyInstaller spec for Ember (cross-platform: macOS + Windows + Linux)
 # Build with:  pyinstaller --noconfirm Ember.spec
 import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform.startswith("win")
+IS_LINUX = sys.platform.startswith("linux")
 
 datas = []
 binaries = []
@@ -58,6 +59,12 @@ elif IS_MAC:
         "psutil._psosx", "pyttsx3.drivers", "pyttsx3.drivers.nsss",
         "pynput.keyboard._darwin", "pynput.mouse._darwin",
         "Vision", "Quartz", "Foundation", "objc", "ApplicationServices",
+    ]
+elif IS_LINUX:
+    hiddenimports += [
+        "mss.linux", "pyautogui._pyautogui_x11",
+        "psutil._pslinux", "pyttsx3.drivers", "pyttsx3.drivers.espeak",
+        "pynput.keyboard._xorg", "pynput.mouse._xorg",
     ]
 
 icon_file = "icon.ico" if IS_WIN else "icon.png"

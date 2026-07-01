@@ -74,7 +74,9 @@ jobs:
             test_agent_tasks.py \
             test_ipad_app.py \
             test_tunnel.py \
-            test_pairing.py; do
+            test_pairing.py \
+            test_tools_linux.py \
+            test_version.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -77,6 +78,24 @@ def _osa(script: str, timeout: int = 8) -> tuple[bool, str]:
         return r.returncode == 0, (r.stdout or r.stderr or "").strip()
     except Exception as e:
         return False, str(e)
+
+
+def is_wayland() -> bool:
+    """True on a Linux Wayland session. Mouse/keyboard injection (pyautogui) and screenshots
+    (mss) rely on X11 and are unreliable-to-blocked under Wayland's app sandboxing, so callers
+    use this to give a clear, actionable error instead of a cryptic failure."""
+    if not sys.platform.startswith("linux"):
+        return False
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+_WAYLAND_HINT = ("This looks like a Wayland session, where Linux restricts apps from moving the "
+                 "mouse/keyboard or capturing the screen for security. Log out and choose an "
+                 "'... on Xorg' / 'X11' session at the login screen for full computer control.")
+
+
+def _wayland_note(error: str) -> str:
+    return f"{error} ({_WAYLAND_HINT})" if is_wayland() else error
 
 
 def _augmented_env() -> dict:
@@ -156,14 +175,17 @@ def _draw_cursor(img, x, y):
 
 
 def take_screenshot(region=None, grid=True, show_cursor=True):
-    cursor_x, cursor_y = pyautogui.position()
-    with mss.mss() as sct:
-        monitor = sct.monitors[1] if not region else {
-            "left": int(region["x"]), "top": int(region["y"]),
-            "width": int(region["width"]), "height": int(region["height"]),
-        }
-        raw = sct.grab(monitor)
-        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    try:
+        cursor_x, cursor_y = pyautogui.position()
+        with mss.mss() as sct:
+            monitor = sct.monitors[1] if not region else {
+                "left": int(region["x"]), "top": int(region["y"]),
+                "width": int(region["width"]), "height": int(region["height"]),
+            }
+            raw = sct.grab(monitor)
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    except Exception as e:
+        return {"ok": False, "error": _wayland_note(f"{type(e).__name__}: {e}")}
     # mss grabs PHYSICAL pixels, but cursor_x/y and the coords the model clicks with are
     # LOGICAL points. On a Retina display they differ ~2x, which would draw the cursor ring
     # and every grid label at the wrong place. Downscale to logical points so 1px == 1
@@ -258,7 +280,7 @@ def click(x, y, button="left", double=False):
         (pyautogui.doubleClick if double else pyautogui.click)(button=button)
         return {"ok": True, "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": _wayland_note(str(e))}
 
 
 def move_mouse(x, y, duration=0.2):
@@ -272,7 +294,7 @@ def move_mouse(x, y, duration=0.2):
         pyautogui.moveTo(x, y, duration=duration)
         return {"ok": True, "x": x, "y": y}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": _wayland_note(str(e))}
 
 
 def drag(from_x, from_y, to_x, to_y, button="left", duration=0.4):
@@ -570,11 +592,16 @@ def _mac_collect_ui_elements(scope: str) -> dict:
 
 
 def find_ui_elements(filter_text="", scope="foreground", max_results=80):
-    """List clickable UI elements: accessibility tree on macOS, UI Automation on Windows."""
+    """List clickable UI elements: accessibility tree on macOS, UI Automation on Windows.
+    Not implemented on Linux (would need an AT-SPI accessibility-bus integration this build
+    doesn't include) - use take_screenshot + read_screen_text (OCR) there instead."""
     if sys.platform.startswith("win"):
         res = _win_collect_ui_elements(scope)
-    else:
+    elif sys.platform == "darwin":
         res = _mac_collect_ui_elements(scope)
+    else:
+        return {"ok": False, "error": "find_ui_elements isn't available on Linux yet - use "
+                "take_screenshot (OCR-based read_screen_text) to locate things on screen instead."}
     if not res.get("ok"):
         return res
     return _rank_ui_elements(res["elements"], filter_text, scope, max_results)
@@ -600,9 +627,53 @@ def right_click_element_by_text(text, scope="foreground"):
     return res
 
 
+def _parse_wmctrl_lpg(output: str) -> list:
+    """Pure parser for `wmctrl -lpG` output: <id> <desktop> <pid> <x> <y> <w> <h> <client> <title>
+    (title may contain spaces, hence the maxsplit). Returns the same window-dict shape as the
+    macOS/Windows implementations. Never raises - a malformed line is just skipped."""
+    windows = []
+    for line in (output or "").splitlines():
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        try:
+            windows.append({
+                "title": parts[8][:120], "class": parts[7],
+                "x": int(parts[3]), "y": int(parts[4]),
+                "w": int(parts[5]), "h": int(parts[6]),
+                "process_id": int(parts[2]),
+            })
+        except ValueError:
+            continue
+    return windows
+
+
+def _linux_list_windows() -> dict:
+    """Window list via wmctrl (id, desktop, pid, geometry, client machine, title)."""
+    if not shutil.which("wmctrl"):
+        return {"ok": False, "error": "wmctrl isn't installed - install it (e.g. "
+                "`sudo apt install wmctrl` / `sudo dnf install wmctrl`) to list/focus windows."}
+    r = _sh(["wmctrl", "-lpG"], timeout=8)
+    if not r["ok"]:
+        return {"ok": False, "error": r.get("error") or r.get("stderr") or "wmctrl failed"}
+    windows = _parse_wmctrl_lpg(r["stdout"])
+    return {"ok": True, "window_count": len(windows), "windows": windows}
+
+
+def _linux_focus_window(title_contains: str) -> dict:
+    if not shutil.which("wmctrl"):
+        return {"ok": False, "error": "wmctrl isn't installed - install it to focus windows."}
+    r = _sh(["wmctrl", "-a", title_contains], timeout=5)
+    if not r["ok"]:
+        return {"ok": False, "error": f"no window matching '{title_contains}'"}
+    return {"ok": True, "focused": title_contains}
+
+
 def list_windows():
     if sys.platform.startswith("win"):
         return _win_list_windows()
+    if sys.platform.startswith("linux"):
+        return _linux_list_windows()
     script = '''
     set out to ""
     tell application "System Events"
@@ -644,6 +715,8 @@ def list_windows():
 def focus_window(title_contains):
     if sys.platform.startswith("win"):
         return _win_focus_window(title_contains)
+    if sys.platform.startswith("linux"):
+        return _linux_focus_window(title_contains)
     t = title_contains.lower()
     for w in list_windows().get("windows", []):
         if t in w["title"].lower():
@@ -662,10 +735,15 @@ def capture_window(title_contains, grid=True):
 
 
 def run_powershell(command, timeout=60):
-    """OS-aware shell: PowerShell on Windows, /bin/zsh on macOS."""
+    """OS-aware shell: PowerShell on Windows, /bin/zsh on macOS, bash (or $SHELL) on Linux.
+    (Used to hardcode /bin/zsh for every non-Windows OS - zsh isn't installed on most Linux
+    distros by default, so that silently failed every shell command there.)"""
     if sys.platform.startswith("win"):
         return _sh(["powershell", "-NoProfile", "-NonInteractive", "-Command", command], timeout=timeout)
-    return _sh(["/bin/zsh", "-c", command], timeout=timeout)
+    if sys.platform == "darwin":
+        return _sh(["/bin/zsh", "-c", command], timeout=timeout)
+    shell = shutil.which("bash") or os.environ.get("SHELL") or "/bin/sh"
+    return _sh([shell, "-c", command], timeout=timeout)
 
 
 def run_cmd(command, timeout=60):

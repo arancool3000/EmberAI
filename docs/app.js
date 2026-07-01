@@ -8,11 +8,12 @@ function detectOS() {
   const ua = (navigator.userAgent || "") + " " + (navigator.platform || "");
   if (/Win/i.test(ua)) return "windows";
   if (/Mac|iPhone|iPad|iPod/i.test(ua)) return "macos";
+  if (/Linux/i.test(ua) && !/Android/i.test(ua)) return "linux";
   return "macos";
 }
 const OS = detectOS();
-const OS_LABEL = { macos: "macOS", windows: "Windows" };
-const ASSET = { macos: "Ember-macOS.zip", windows: "Ember-Windows.zip" };
+const OS_LABEL = { macos: "macOS", windows: "Windows", linux: "Linux" };
+const ASSET = { macos: "Ember-macOS.zip", windows: "Ember-Windows.zip", linux: "Ember-Linux.AppImage" };
 
 function dlUrl(manifest, os) {
   const d = (manifest.downloads || {})[os];
@@ -34,6 +35,7 @@ function applyDownloads(manifest) {
   });
   document.querySelectorAll("[data-dl='macos']").forEach(b => b.href = dlUrl(manifest, "macos"));
   document.querySelectorAll("[data-dl='windows']").forEach(b => b.href = dlUrl(manifest, "windows"));
+  document.querySelectorAll("[data-dl='linux']").forEach(b => b.href = dlUrl(manifest, "linux"));
 
   document.querySelectorAll("[data-oscard]").forEach(c => {
     const isPrimary = c.getAttribute("data-oscard") === OS;

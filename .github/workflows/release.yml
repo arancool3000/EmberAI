@@ -1,9 +1,14 @@
 name: Release
 
-# Builds the macOS + Windows apps on native runners and publishes a GitHub Release
+# Builds the macOS + Windows + Linux apps on native runners and publishes a GitHub Release
 # with the binaries + latest.json (which the in-app auto-updater reads). This is the
 # "real GitHub Release" pipeline: tag a version and CI does the rest — no Mac needed
 # on the maintainer's side.
+#
+# Linux ships as a single-file AppImage (PyInstaller onedir -> AppDir -> appimagetool),
+# the idiomatic no-install Linux distribution format — matches the zero-setup feel of the
+# macOS/Windows zips. Full automation there needs an X11 session (see README); on Wayland
+# the app still runs but automation features show a clear message instead of failing silently.
 #
 # Usage:
 #   git tag v1.0.0 && git push origin v1.0.0
@@ -72,8 +77,73 @@ jobs:
           name: Ember-Windows
           path: Ember-Windows.zip
 
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install system libraries PyQt6 needs to build on Linux
+        # PyInstaller's Analysis phase imports PyQt6 to resolve its hooks, which needs the
+        # native Qt/X11 shared libraries present even though nothing is actually displayed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+            libxcb-xinerama0 libdbus-1-3 libfontconfig1 libfreetype6 \
+            libx11-xcb1 libxext6 libxrender1 libsm6 libice6 libglib2.0-0
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+      - name: Build Ember (onedir)
+        run: |
+          rm -rf build dist
+          python -m PyInstaller --noconfirm Ember.spec
+      - name: Package as an AppImage
+        run: |
+          set -e
+          APPDIR="$PWD/Ember.AppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR"
+          cp -r dist/Ember/* "$APPDIR/"
+          cp icon.png "$APPDIR/ember.png"
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          exec "$HERE/Ember" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+          cat > "$APPDIR/ember.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Ember
+          Comment=Ember AI agent
+          Exec=Ember
+          Icon=ember
+          Categories=Utility;
+          Terminal=false
+          EOF
+          wget -q -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          # --appimage-extract-and-run: CI containers usually lack a usable FUSE mount, which a
+          # plain `./appimagetool` invocation needs; this flag makes it self-extract instead.
+          ./appimagetool --appimage-extract-and-run "$APPDIR" Ember-Linux.AppImage
+      - name: Verify the AppImage was produced
+        run: |
+          test -s Ember-Linux.AppImage
+          chmod +x Ember-Linux.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ember-Linux
+          path: Ember-Linux.AppImage
+
   release:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +168,7 @@ jobs:
           mkdir -p out
           cp artifacts/Ember-macOS/Ember-macOS.zip out/ 2>/dev/null || true
           cp artifacts/Ember-Windows/Ember-Windows.zip out/ 2>/dev/null || true
+          cp artifacts/Ember-Linux/Ember-Linux.AppImage out/ 2>/dev/null || true
           python3 - <<'PY'
           import hashlib, json, os, pathlib
           out = pathlib.Path("out")
@@ -105,8 +176,9 @@ jobs:
           def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else ""
           def url(asset): return f"https://github.com/{owner}/{repo}/releases/latest/download/{asset}"
           downloads = {
-              "macos":   {"url": url("Ember-macOS.zip"),   "sha256": sha(out/"Ember-macOS.zip")},
-              "windows": {"url": url("Ember-Windows.zip"), "sha256": sha(out/"Ember-Windows.zip")},
+              "macos":   {"url": url("Ember-macOS.zip"),         "sha256": sha(out/"Ember-macOS.zip")},
+              "windows": {"url": url("Ember-Windows.zip"),       "sha256": sha(out/"Ember-Windows.zip")},
+              "linux":   {"url": url("Ember-Linux.AppImage"),    "sha256": sha(out/"Ember-Linux.AppImage")},
           }
           manifest = {
               "version": ver,
@@ -128,4 +200,5 @@ jobs:
           files: |
             out/Ember-macOS.zip
             out/Ember-Windows.zip
+            out/Ember-Linux.AppImage
             out/latest.json

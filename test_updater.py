@@ -1,7 +1,11 @@
-"""Tests for updater.py — the bits that don't touch the network: the SSL context, and the
+"""Tests for updater.py — the bits that don't touch the network: the SSL context, the
 raise_on_error contract that lets a USER-initiated check tell "up to date" apart from "couldn't
-reach the server" (the bug where a failed HTTPS fetch was misreported as 'up to date').
+reach the server" (the bug where a failed HTTPS fetch was misreported as 'up to date'), and the
+Linux AppImage self-update path (asset detection, the swap-script builder, and locating the
+running AppImage via $APPIMAGE).
 Run: python test_updater.py"""
+import os
+import sys
 import urllib.request
 
 import updater
@@ -60,6 +64,78 @@ def test_check_returns_manifest_when_newer():
         version.is_configured = orig_configured
         urllib.request.urlopen = orig_urlopen
         updater.current_version = orig_current
+
+
+# --- Linux AppImage self-update ---------------------------------------------------------
+def test_linux_platform_key_and_asset_name():
+    if not sys.platform.startswith("linux"):
+        return
+    assert version.platform_key() == "linux"
+    assert version.asset_name("linux") == "Ember-Linux.AppImage"
+
+
+def test_is_appimage_asset():
+    assert updater.is_appimage_asset("https://x/Ember-Linux.AppImage") is True
+    assert updater.is_appimage_asset("https://x/Ember-Linux.AppImage?x=1") is True
+    assert updater.is_appimage_asset("HTTPS://X/EMBER-LINUX.APPIMAGE") is True
+    assert updater.is_appimage_asset("https://x/Ember-macOS.zip") is False
+    assert updater.is_appimage_asset("https://x/Ember-Windows.zip") is False
+
+
+def test_linux_swap_script_has_backup_and_rollback():
+    script = updater.linux_swap_script("/tmp/new.AppImage", "/opt/Ember/Ember.AppImage", 4242)
+    assert script.startswith("#!/bin/bash")
+    assert "kill -0 4242" in script                       # waits for the old process to exit
+    assert "Ember.AppImage.old" in script                 # keeps a backup before replacing
+    assert "chmod +x" in script                           # re-executable after replacing
+    assert "setsid" in script                              # relaunches detached
+    assert script.count("if cp") == 1 and "else" in script  # rollback branch present
+
+
+def test_linux_swap_script_quotes_paths_with_spaces():
+    script = updater.linux_swap_script("/tmp/a b.AppImage", "/opt/My App/Ember.AppImage", 1)
+    assert "'/tmp/a b.AppImage'" in script
+    assert "'/opt/My App/Ember.AppImage'" in script
+
+
+def test_install_root_linux_uses_appimage_env_var():
+    if not sys.platform.startswith("linux"):
+        return
+    had_frozen = hasattr(sys, "frozen")
+    prev_frozen = getattr(sys, "frozen", None)
+    old_appimage = os.environ.get("APPIMAGE")
+    sys.frozen = True
+    os.environ["APPIMAGE"] = "/home/u/Applications/Ember.AppImage"
+    try:
+        from pathlib import Path
+        assert updater.install_root() == Path("/home/u/Applications/Ember.AppImage")
+    finally:
+        if had_frozen:
+            sys.frozen = prev_frozen
+        else:
+            del sys.frozen
+        if old_appimage is None:
+            os.environ.pop("APPIMAGE", None)
+        else:
+            os.environ["APPIMAGE"] = old_appimage
+
+
+def test_install_root_linux_none_without_appimage_env_var():
+    if not sys.platform.startswith("linux"):
+        return
+    had_frozen = hasattr(sys, "frozen")
+    prev_frozen = getattr(sys, "frozen", None)
+    old_appimage = os.environ.pop("APPIMAGE", None)
+    sys.frozen = True
+    try:
+        assert updater.install_root() is None
+    finally:
+        if had_frozen:
+            sys.frozen = prev_frozen
+        else:
+            del sys.frozen
+        if old_appimage is not None:
+            os.environ["APPIMAGE"] = old_appimage
 
 
 if __name__ == "__main__":

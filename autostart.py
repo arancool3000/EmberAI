@@ -63,6 +63,10 @@ def program_args() -> list[str]:
         return [exe, str(base / "main.py")]
     # Linux
     base = _base_dir()
+    if getattr(sys, "frozen", False):
+        # A frozen build's own binary IS the launcher (matches the Windows branch above) -
+        # run.sh is a source-checkout convenience script and won't exist in the dist folder.
+        return [sys.executable]
     sh = base / "run.sh"
     if sh.exists():
         return ["/bin/bash", str(sh)]

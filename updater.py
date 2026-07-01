@@ -1,4 +1,5 @@
-"""In-app auto-updater for the Ember desktop app — macOS (.app) and Windows (onedir).
+"""In-app auto-updater for the Ember desktop app — macOS (.app), Windows (onedir), and Linux
+(AppImage).
 
 Flow: fetch latest.json from GitHub Releases -> pick this OS's download -> compare to
 version.__version__ -> download -> verify sha256 -> unpack -> swap the running install via
@@ -9,6 +10,9 @@ Platform specifics:
   com.apple.quarantine xattr, swap the .app via a bash helper.
 - Windows: PyInstaller onedir folder; unpack with `zipfile`, swap the install folder via a
   batch helper (robocopy /MOVE with rollback), relaunch Ember.exe.
+- Linux: a single AppImage file (no unzip step - it's the payload as-is); swap the file itself
+  via a bash helper (mv + cp with rollback), chmod +x, relaunch. The running AppImage's own path
+  comes from $APPIMAGE, an env var the AppImage runtime always sets before exec'ing the payload.
 
 Robust by construction: any failure raises (caller surfaces it and aborts), the running
 install is kept as a `.old` backup during the swap and rolled back on failure, and the whole
@@ -56,9 +60,15 @@ def is_frozen_app() -> bool:
 
 
 def install_root() -> Path | None:
-    """What we swap on update: the .app bundle (macOS) or the install folder (Windows)."""
+    """What we swap on update: the .app bundle (macOS), the install folder (Windows), or the
+    AppImage file itself (Linux)."""
     if not is_frozen_app():
         return None
+    if sys.platform.startswith("linux"):
+        # $APPIMAGE is the absolute path to the running AppImage, set by its own runtime before
+        # it execs the payload - not something we compute, just what libappimage always provides.
+        appimage = os.environ.get("APPIMAGE")
+        return Path(appimage) if appimage else None
     exe = Path(sys.executable).resolve()
     if sys.platform == "darwin":
         for parent in exe.parents:           # .../Ember.app/Contents/MacOS/Ember
@@ -156,24 +166,32 @@ def _find_payload(extract_dir: Path) -> Path:
     raise RuntimeError(f"update archive did not contain {exe_name}")
 
 
+def is_appimage_asset(url: str) -> bool:
+    """True for a Linux AppImage download - it's the payload as-is, no archive to unpack
+    (unlike the macOS/Windows .zip assets). Pure so it's trivially unit-tested."""
+    return url.lower().split("?")[0].endswith(".appimage")
+
+
 def download_and_stage(manifest: dict, progress=None) -> Path:
-    """Download + verify + unpack the update. Returns the staged install path
-    (the new .app on macOS, or the new install folder on Windows). Raises on failure."""
+    """Download + verify + unpack the update. Returns the staged install path (the new .app on
+    macOS, the new install folder on Windows, or the new AppImage file on Linux). Raises on
+    failure."""
     url, expected_sha = _manifest_download(manifest)
     tmp = Path(tempfile.mkdtemp(prefix="ember_update_"))
-    zpath = tmp / "Ember.zip"
-    _download(url, zpath, progress=progress)
+    appimage = is_appimage_asset(url)
+    dlpath = tmp / ("Ember.AppImage" if appimage else "Ember.zip")
+    _download(url, dlpath, progress=progress)
 
     if expected_sha:
-        actual = _sha256(zpath)
+        actual = _sha256(dlpath)
         if actual != expected_sha:
             raise RuntimeError(f"checksum mismatch (expected {expected_sha[:12]}…, "
                                f"got {actual[:12]}…) — refusing to install")
 
-    # Defense in depth: scan the downloaded archive before unpacking it.
+    # Defense in depth: scan the downloaded archive/binary before unpacking or running it.
     try:
         import antivirus
-        scan = antivirus.scan_file(str(zpath), deep=True)
+        scan = antivirus.scan_file(str(dlpath), deep=True)
         if scan.get("verdict") == "malicious":
             raise RuntimeError("update archive flagged as malicious by the on-device "
                                "scanner — refusing to install")
@@ -182,15 +200,19 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
     except Exception:
         pass
 
+    if appimage:
+        dlpath.chmod(0o755)
+        return dlpath   # the AppImage IS the payload - nothing to extract
+
     extract_dir = tmp / "extracted"
     extract_dir.mkdir()
     if sys.platform == "darwin":
-        res = subprocess.run(["/usr/bin/ditto", "-x", "-k", str(zpath), str(extract_dir)],
+        res = subprocess.run(["/usr/bin/ditto", "-x", "-k", str(dlpath), str(extract_dir)],
                              capture_output=True, text=True, timeout=180)
         if res.returncode != 0:
             raise RuntimeError(f"could not unpack update: {res.stderr.strip()[:200]}")
     else:
-        with zipfile.ZipFile(zpath) as zf:
+        with zipfile.ZipFile(dlpath) as zf:
             zf.extractall(extract_dir)
 
     payload = _find_payload(extract_dir)
@@ -211,6 +233,8 @@ def apply_update_and_relaunch(staged: Path) -> None:
         _spawn_macos_swap(staged, target, pid)
     elif sys.platform.startswith("win"):
         _spawn_windows_swap(staged, target, pid)
+    elif sys.platform.startswith("linux"):
+        _spawn_linux_swap(staged, target, pid)
     else:
         raise RuntimeError("self-update not supported on this platform")
 
@@ -266,3 +290,33 @@ def _spawn_windows_swap(staged: Path, target: Path, pid: int) -> None:
     DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS|NEW_GROUP|NO_WINDOW
     subprocess.Popen(["cmd", "/c", str(helper_path)], creationflags=DETACHED,
                      close_fds=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def linux_swap_script(staged: str, target: str, pid: int) -> str:
+    """Build the swap helper for Linux: an AppImage is a single file, so the "install" is just
+    that file - wait for this process to exit, replace it (keeping a .old backup), chmod +x,
+    relaunch, roll back on failure. Pure string-builder so it's unit-tested without subprocess."""
+    backup = f"{target}.old"
+    t, n, b = shlex.quote(target), shlex.quote(staged), shlex.quote(backup)
+    return (
+        "#!/bin/bash\n"
+        f"while kill -0 {pid} 2>/dev/null; do sleep 0.4; done\n"
+        "sleep 0.3\n"
+        f"rm -f {b} 2>/dev/null\n"
+        f"mv {t} {b} 2>/dev/null\n"
+        f"if cp {n} {t}; then\n"
+        f"  chmod +x {t}\n"
+        f"  rm -f {b} 2>/dev/null\n"
+        "else\n"
+        f"  rm -f {t} 2>/dev/null; mv {b} {t} 2>/dev/null\n"
+        "fi\n"
+        f"setsid {t} >/dev/null 2>&1 &\n"
+    )
+
+
+def _spawn_linux_swap(staged: Path, target: Path, pid: int) -> None:
+    helper_path = Path(tempfile.mkdtemp(prefix="ember_swap_")) / "swap.sh"
+    helper_path.write_text(linux_swap_script(str(staged), str(target), pid))
+    helper_path.chmod(0o755)
+    subprocess.Popen(["/bin/bash", str(helper_path)], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
