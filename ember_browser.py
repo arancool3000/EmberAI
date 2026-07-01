@@ -23,6 +23,7 @@ from __future__ import annotations
 import html as _html
 import json
 import threading
+import time
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse, parse_qs, unquote
 
@@ -97,21 +98,58 @@ QSplitter::handle { background:#2a2d39; width:3px; }
 """
 
 
+def _host_is_blocked(host: str, domains: frozenset) -> bool:
+    """host == d or host is a subdomain of d, checked by walking up the label hierarchy with O(1)
+    set lookups instead of scanning every blocked domain — the merged list below can be 100k+
+    entries once the user pulls in a big public list (e.g. StevenBlack) via the Ad Blocker."""
+    parts = host.split(".")
+    for i in range(len(parts)):
+        if ".".join(parts[i:]) in domains:
+            return True
+    return False
+
+
 if WEBENGINE_OK:
     class _Guard(QWebEngineUrlRequestInterceptor):
+        """Blocks ad/tracker requests in-page. Shares Ember's system-wide ad-blocker list
+        (network_adblock.blocklist()) instead of a separate, much smaller hardcoded set, so
+        turning on a bigger list there (or adding a custom domain) also strengthens Ember
+        Browser — previously the two blockers were disconnected and the browser stayed stuck
+        on ~50 hardcoded domains no matter what the system-wide blocker was set to."""
         def __init__(self):
             super().__init__()
             self.blocked = 0
+            self._domains = frozenset(_TRACKERS)
+            self._refreshing = False
+            self._last_refresh = 0.0
+            self._refresh_domains()
+
+        def _refresh_domains(self):
+            if self._refreshing:
+                return
+            self._refreshing = True
+
+            def work():
+                domains = set(_TRACKERS)
+                try:
+                    import network_adblock
+                    domains |= network_adblock.blocklist()
+                except Exception:
+                    pass
+                self._domains = frozenset(domains)
+                self._last_refresh = time.monotonic()
+                self._refreshing = False
+
+            threading.Thread(target=work, daemon=True).start()
 
         def interceptRequest(self, info):
             try:
+                if time.monotonic() - self._last_refresh > 60:
+                    self._refresh_domains()
                 host = (info.requestUrl().host() or "").lower()
-                if host:
-                    for d in _TRACKERS:
-                        if host == d or host.endswith("." + d):
-                            info.block(True)
-                            self.blocked += 1
-                            return
+                if host and _host_is_blocked(host, self._domains):
+                    info.block(True)
+                    self.blocked += 1
             except Exception:
                 pass
 

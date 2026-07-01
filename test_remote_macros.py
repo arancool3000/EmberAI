@@ -140,6 +140,18 @@ def test_phone_page_has_no_decorative_emoji_on_macro_buttons():
     assert ">Mute<" in page and ">Unmute<" in page
 
 
+def test_phone_page_supports_two_finger_scroll_gesture():
+    page = rs.PAGE
+    # a physical two-finger scroll on a trackpad/mouse fires "wheel" events - the trackpad div
+    # and the live screen mirror must both forward that as a scroll command, not just the
+    # dedicated up/down buttons (pointerdown-only handlers don't see wheel events at all).
+    assert "function attachWheelScroll(" in page
+    assert 'addEventListener("wheel"' in page
+    assert "attachWheelScroll(pad)" in page
+    assert "attachWheelScroll(hit)" in page
+    assert 't:"scroll"' in page
+
+
 def test_macros_table_labels_are_plain_text():
     for _name, label in rs.MACROS:
         assert all(ord(c) < 0x2000 for c in label), f"MACROS label {label!r} has a non-plain-text char"

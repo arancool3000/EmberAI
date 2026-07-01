@@ -76,7 +76,9 @@ jobs:
             test_tunnel.py \
             test_pairing.py \
             test_tools_linux.py \
-            test_version.py; do
+            test_version.py \
+            test_remote_pin.py \
+            test_ember_browser_adblock.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

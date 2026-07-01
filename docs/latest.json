@@ -1,5 +1,5 @@
 {
-  "version": "1.9.1",
+  "version": "1.9.2",
   "pub_date": "2026-07-01",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.9.1 — Ember Link fixes + security dashboard actions\n\n• Kindle/e-ink: the live screen feed no longer flashes black between frames — the view now holds the last frame until the new one is fully decoded, then swaps.\n• Kindle: the Fullscreen button now works even when the browser silently ignores the real Fullscreen API — it falls back to a rotated, filled 'landscape' view automatically.\n• Fixed the Run/Send button text overflowing its box on the phone remote.\n• Removed decorative emoji from the phone remote's quick-action buttons in favor of plain text (Kindle e-ink friendly).\n• The 'Connect from anywhere' panel now clearly labels the tunnel link and adds a Copy button.\n• Security dashboard recommendations each get a Fix button that resolves the item directly instead of just describing it.\n• Fixed Ember Browser failing to load for some users — pinned PyQt6/PyQt6-WebEngine to matching versions.\n\nBuilds on 1.9.0's Ember Link connect-from-anywhere and 1.8.x's in-app Terminal + Parallel Agent Tasks."
+  "notes": "Ember 1.9.2 — Stable PIN fix, two-finger scroll, stronger ad blocking\n\n• Ember Link's PIN could occasionally regenerate itself after a close+reopen (a partial write to its save file could look 'corrupt' on the next launch) — the PIN is now written atomically so it can never be silently swapped out from under a paired phone.\n• Two-finger scroll on a trackpad/mouse now works over the phone remote's touchpad and live screen mirror (it only sent clicks/drags before — a physical scroll gesture did nothing).\n• Ember Browser's ad/tracker blocking now shares Ember's system-wide Ad Blocker list instead of a separate, much smaller hardcoded one — turning on a bigger list (or adding a custom domain) there now also strengthens in-browser blocking.\n• Fixed a silent-failure bug in the Features directory: a broken feature used to just close the dialog and do nothing, with no error shown — failures now surface properly.\n\nBuilds on 1.9.1's Kindle Ember Link fixes and 1.9.0's Ember Link connect-from-anywhere."
 }

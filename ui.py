@@ -3237,8 +3237,12 @@ class FeaturesDialog(QDialog):
         self.accept()
         try:
             self._on_action(action)
-        except Exception:
-            pass
+        except Exception as e:
+            # Surface it - a bare `except: pass` here means a broken feature just closes this
+            # dialog and does nothing else, which looks exactly like "the button does nothing"
+            # (the underlying failure, if any, never reaches the user).
+            traceback.print_exc()
+            QMessageBox.warning(self.parent(), "Couldn't open that", f"{type(e).__name__}: {e}")
 
     def _filter(self, text):
         q = (text or "").strip().lower()

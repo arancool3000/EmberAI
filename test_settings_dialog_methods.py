@@ -68,6 +68,24 @@ def test_remote_link_dialog_calls_are_defined():
     _assert_self_calls_defined("RemoteLinkDialog")
 
 
+def test_features_dialog_calls_are_defined():
+    _assert_self_calls_defined("FeaturesDialog")
+
+
+def test_features_dialog_do_surfaces_errors_instead_of_swallowing_them():
+    """Regression guard: FeaturesDialog._do() used to `except Exception: pass`, so a broken
+    feature just closed the directory and did nothing else - indistinguishable from a dead
+    button. Every except-handler in _do must actually do something observable (not bare pass)."""
+    tree = ast.parse(open(_UI, encoding="utf-8").read())
+    cls = _class_node(tree, "FeaturesDialog")
+    do_fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_do")
+    for node in ast.walk(do_fn):
+        if isinstance(node, ast.ExceptHandler):
+            assert not (len(node.body) == 1 and isinstance(node.body[0], ast.Pass)), (
+                "FeaturesDialog._do() silently swallows exceptions again - a failing feature "
+                "must surface an error, not just close the dialog and do nothing.")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

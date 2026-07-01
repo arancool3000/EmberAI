@@ -519,12 +519,19 @@ hit.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefaul
 hit.addEventListener("pointermove",e=>{if(!sd)return;let p=pxy(e);if(!p)return;e.preventDefault();let moved=Math.abs(p.cx-sd.cx)+Math.abs(p.cy-sd.cy);if(!screenDrag&&moved>9){screenDrag=true;post({t:"dragstart",x:sd.x,y:sd.y});document.getElementById("tag").textContent="dragging"}if(screenDrag&&performance.now()-lastDrag>16){post({t:"dragto",x:p.x,y:p.y});lastDrag=performance.now()}});
 function screenEnd(e){if(!sd)return;let p=pxy(e)||sd;e.preventDefault();if(screenDrag){post({t:"dragend",x:p.x,y:p.y});document.getElementById("tag").textContent="dropped"}else{post({t:"moveto",x:p.x,y:p.y});post({t:"click"});document.getElementById("tag").textContent="clicked"}sd=null;screenDrag=false;setTimeout(()=>document.getElementById("tag").textContent="live",450)}
 hit.addEventListener("pointerup",screenEnd);hit.addEventListener("pointercancel",screenEnd);
+function attachWheelScroll(el){if(!el)return;let accum=0,last=0;
+ el.addEventListener("wheel",e=>{e.preventDefault();accum-=e.deltaY;let now=performance.now();if(now-last>16){post({t:"scroll",a:Math.max(-8,Math.min(8,Math.round(accum/30)))});accum=0;last=now}},{passive:false});}
 function attachPad(pad){if(!pad)return;let lx=0,ly=0,moving=false,moved=0,ax=0,ay=0,last=0,held=false;
  pad.addEventListener("pointerdown",e=>{e.preventDefault();moving=true;moved=0;ax=ay=0;lx=e.clientX;ly=e.clientY;pad.classList.add("dragOn");pad.setPointerCapture&&pad.setPointerCapture(e.pointerId);if(dragLock){held=true;post({t:"down"})}});
  pad.addEventListener("pointermove",e=>{if(!moving)return;e.preventDefault();let dx=e.clientX-lx,dy=e.clientY-ly;lx=e.clientX;ly=e.clientY;moved+=Math.abs(dx)+Math.abs(dy);ax+=dx;ay+=dy;let now=performance.now();if(now-last>16){post({t:"move",dx:Math.round(ax*1.55),dy:Math.round(ay*1.55)});ax=ay=0;last=now}});
  function end(e){if(!moving)return;e&&e.preventDefault();if(Math.round(ax)||Math.round(ay))post({t:"move",dx:Math.round(ax*1.55),dy:Math.round(ay*1.55)});if(held)post({t:"up"});else if(moved<7)post({t:"click"});moving=false;held=false;ax=ay=0;pad.classList.remove("dragOn")}
- pad.addEventListener("pointerup",end);pad.addEventListener("pointercancel",end)}
+ pad.addEventListener("pointerup",end);pad.addEventListener("pointercancel",end);
+ // A physical two-finger scroll gesture on a trackpad/mouse fires "wheel" events even over a
+ // plain div - the pointer handlers above only cover single-pointer drag-to-move, so without
+ // this a two-finger scroll here silently did nothing.
+ attachWheelScroll(pad);}
 attachPad(document.getElementById("pad"));attachPad(document.getElementById("bigpad"));
+attachWheelScroll(hit);   // two-finger scroll over the live screen mirror also scrolls the desktop
 function ev(k){post({t:k})}function scroll(a){post({t:"scroll",a:a})}function key(k){post({t:"key",k:k})}
 function flash(m){let t=document.getElementById("tag");if(t){t.textContent=m;setTimeout(()=>{t.textContent="live"},900)}}
 function macro(n){post({t:"macro",name:n});flash(n.replace(/_/g," ")+" ✓")}
@@ -928,11 +935,22 @@ def stable_pin() -> str:
     # 6 digits (1,000,000 combos). Combined with the per-IP lockout below, that is
     # brute-force-resistant on a LAN; old 4-digit pins keep working until deleted.
     p = f"{secrets.randbelow(900000) + 100000}"
+    _write_stable_pin(f, p)
+    return p
+
+
+def _write_stable_pin(f, p: str) -> None:
+    """Write-then-rename so a crash/force-quit mid-write can never leave a truncated/corrupt
+    pin file behind - a partial write there would silently look 'invalid' to stable_pin() on the
+    next launch and mint a brand new (different!) pin, which is exactly the 'the PIN changed and
+    now it says wrong' symptom this guards against."""
     try:
-        f.write_text(p)
+        import os
+        tmp = f.with_suffix(f.suffix + f".tmp{os.getpid()}")
+        tmp.write_text(p)
+        os.replace(tmp, f)
     except OSError:
         pass
-    return p
 
 
 def _idle_watchdog(srv) -> None:
