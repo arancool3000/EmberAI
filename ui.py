@@ -2637,6 +2637,45 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Network", str(e))
 
+    # Each failing security check maps to something concrete this button can DO, instead of a
+    # static "recommendation" line the user has no way to act on directly. Direct toggles apply
+    # right here in Settings → Security; the rest open the dialog that owns that control.
+    _SECURITY_RESOLVE_DIRECT = {
+        "fileless_protection": "_sec_fileless",
+        "web_protection": "_sec_web",
+        "safe_open": "_sec_ai_hold",
+        "auto_lockdown": "_sec_auto_lockdown",
+    }
+    _SECURITY_RESOLVE_OPENER = {
+        "realtime_protection": "_open_antivirus_app",
+        "network_monitoring": "_open_antivirus_app",
+        "malware_engine": "_open_antivirus_app",
+        "no_active_threats": "_open_antivirus_app",
+        "vpn_available": "_open_vpn_manager",
+        "password_vault": "_open_passwords_manager",
+    }
+
+    def _resolve_security_item(self, key: str, box):
+        checkbox_attr = self._SECURITY_RESOLVE_DIRECT.get(key)
+        if checkbox_attr and hasattr(self, checkbox_attr):
+            getattr(self, checkbox_attr).setChecked(True)
+            self._set_status("Fixed — save Settings to keep it.")
+            box.accept()
+            return
+        if key == "updates_current":
+            box.accept()
+            self._check_software_updates()
+            return
+        opener = self._SECURITY_RESOLVE_OPENER.get(key)
+        parent_w = self.parent()
+        if opener and parent_w is not None and hasattr(parent_w, opener):
+            box.accept()
+            getattr(parent_w, opener)()
+            return
+        # Every current dashboard signal is covered by the two maps above; this only guards a
+        # future new signal key that hasn't been wired to an action yet.
+        QMessageBox.information(self, "Security dashboard", "See Settings → Security.")
+
     def _show_security_dashboard(self):
         from PyQt6.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -2648,21 +2687,47 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Security dashboard", str(e))
             return
         QApplication.restoreOverrideCursor()
-        comps = d.get("components", [])
-        lines = [f"<b>Security score: {d.get('score')}/100 — grade {d.get('grade')} "
-                 f"({d.get('rating')})</b>", ""]
-        for c in comps:
-            lines.append(f"{'✅' if c['ok'] else '⚠️'} {c['label']}")
+
+        box = QDialog(self)
+        box.setWindowTitle("Security dashboard")
+        box.setMinimumSize(480, 420)
+        v = QVBoxLayout(box)
+        head = QLabel(f"Security score: {d.get('score')}/100 — grade {d.get('grade')} "
+                     f"({d.get('rating')})")
+        head.setStyleSheet("font-weight:700;font-size:15px;")
+        head.setWordWrap(True)
+        v.addWidget(head)
+
+        for c in d.get("components", []):
+            row = QLabel(("✓ " if c["ok"] else "! ") + c["label"])
+            row.setStyleSheet("color:#3ecf6a;" if c["ok"] else "color:#e0af52;")
+            v.addWidget(row)
+
         upd = d.get("updates") or {}
         if upd.get("total"):
-            lines += ["", f"<b>Software Updater:</b> {upd.get('summary')}"]
-        recs = d.get("recommendations") or []
-        if recs:
-            lines += ["", "<b>Recommended:</b>"] + [f"• {r}" for r in recs[:6]]
-        box = QMessageBox(self)
-        box.setWindowTitle("Security dashboard")
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText("<br>".join(lines))
+            updlbl = QLabel(f"Software Updater: {upd.get('summary')}")
+            updlbl.setWordWrap(True)
+            updlbl.setStyleSheet("margin-top:8px;")
+            v.addWidget(updlbl)
+
+        items = d.get("recommendation_items") or []
+        if items:
+            rec_head = QLabel("Recommended")
+            rec_head.setStyleSheet("font-weight:700;margin-top:10px;")
+            v.addWidget(rec_head)
+            for it in items[:6]:
+                row = QHBoxLayout()
+                lab = QLabel(it["fix"])
+                lab.setWordWrap(True)
+                row.addWidget(lab, 1)
+                fix_btn = QPushButton("Fix")
+                fix_btn.clicked.connect(lambda _=False, k=it["key"]: self._resolve_security_item(k, box))
+                row.addWidget(fix_btn)
+                v.addLayout(row)
+
+        close = QPushButton("Close")
+        close.clicked.connect(box.accept)
+        v.addWidget(close)
         box.exec()
 
     def _check_software_updates(self):
@@ -4325,10 +4390,17 @@ class RemoteLinkDialog(QDialog):
         self.remote_check.toggled.connect(self._toggle_remote)
         v.addWidget(self.remote_check)
 
+        self._remote_url = ""   # the raw URL behind remote_info's HTML, for the Copy button
+        remote_row = QHBoxLayout()
         self.remote_info = QLabel("")
         self.remote_info.setWordWrap(True)
         self.remote_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        v.addWidget(self.remote_info)
+        remote_row.addWidget(self.remote_info, 1)
+        self.copy_link_btn = QPushButton("Copy")
+        self.copy_link_btn.setVisible(False)
+        self.copy_link_btn.clicked.connect(self._copy_remote_url)
+        remote_row.addWidget(self.copy_link_btn)
+        v.addLayout(remote_row)
 
         v.addWidget(self._hint(
             "Uses an outbound Cloudflare Tunnel (free, no account) — nothing is opened on your "
@@ -4357,6 +4429,18 @@ class RemoteLinkDialog(QDialog):
         lab.setStyleSheet("color:#565f89;font-size:11px;")
         return lab
 
+    def _set_remote_url_display(self, remote_url: str):
+        """The tunnel URL is DELIBERATELY a long, random-looking subdomain — that randomness is
+        what makes it safe to expose (nothing to guess), not a bug. Label it plainly so it isn't
+        mistaken for something wrong."""
+        self._remote_url = remote_url
+        if remote_url:
+            self.remote_info.setText(
+                f"<b>Your public link</b> (open this on your phone from any network):<br>{remote_url}")
+        else:
+            self.remote_info.setText("")
+        self.copy_link_btn.setVisible(bool(remote_url))
+
     def _refresh(self):
         st = self._rs.status()
         if st.get("running"):
@@ -4368,7 +4452,7 @@ class RemoteLinkDialog(QDialog):
         self.remote_check.blockSignals(True)
         self.remote_check.setChecked(bool(remote_url))
         self.remote_check.blockSignals(False)
-        self.remote_info.setText(f"<b>{remote_url}</b>" if remote_url else "")
+        self._set_remote_url_display(remote_url)
         n = st.get("paired", 0)
         self.paired_label.setText(f"{n} device(s) paired for remote access." if n
                                   else "No devices paired yet.")
@@ -4384,6 +4468,7 @@ class RemoteLinkDialog(QDialog):
             return
         self._busy = True
         self.remote_check.setEnabled(False)
+        self.copy_link_btn.setVisible(False)
         self.remote_info.setText("Starting tunnel…" if on else "Stopping…")
 
         def work():
@@ -4405,8 +4490,22 @@ class RemoteLinkDialog(QDialog):
         elif res.get("_enabling") and res.get("ok") and res.get("url"):
             # Trust the just-returned URL for the immediate UI update rather than depending on a
             # second status() round-trip landing before _refresh() below reads it.
-            self.remote_info.setText(f"<b>{res['url']}</b>")
+            self._set_remote_url_display(res["url"])
         self._refresh()
+
+    def _copy_remote_url(self):
+        if self._remote_url:
+            QApplication.clipboard().setText(self._remote_url)
+            self._set_status("Link copied.")
+
+    def _set_status(self, text: str) -> None:
+        """Forward to the main window's status bar (this dialog has none of its own)."""
+        try:
+            win = self.parent()
+            if win is not None and hasattr(win, "_set_status"):
+                win._set_status(text)
+        except Exception:
+            pass
 
     def _revoke(self):
         r = self._rs.revoke_pairings()
@@ -7114,14 +7213,23 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return
         if not ember_browser.WEBENGINE_OK:
             err = getattr(ember_browser, "WEBENGINE_ERROR", "") or "PyQt6-WebEngine not installed"
-            self._add_bubble("system",
-                "Ember Browser can't load the web engine (Qt WebEngine).\n\n"
-                f"Reason: {err}\n\n"
-                "Fix — install it into the SAME environment Ember runs from, matching your "
-                "PyQt6 version:\n"
-                "  uv pip install --reinstall PyQt6 PyQt6-WebEngine\n\n"
-                "Then fully quit and reopen Ember. (Compare versions with: "
-                "uv pip show PyQt6 PyQt6-WebEngine — they must match.)")
+            if getattr(sys, "frozen", False):
+                # A packaged-app user has no Python/pip at all - a pip command is unactionable.
+                # This build is simply missing/broken WebEngine; the fix is a fresh download.
+                self._add_bubble("error",
+                    "Ember Browser can't load its web engine in this build.\n\n"
+                    f"Reason: {err}\n\n"
+                    "This copy of Ember is missing a required component. Please redownload the "
+                    "latest version — Settings → gear → Check for updates, or from the website.")
+            else:
+                self._add_bubble("system",
+                    "Ember Browser can't load the web engine (Qt WebEngine).\n\n"
+                    f"Reason: {err}\n\n"
+                    "Fix — install it into the SAME environment Ember runs from, matching your "
+                    "PyQt6 version:\n"
+                    "  uv pip install --reinstall PyQt6 PyQt6-WebEngine\n\n"
+                    "Then fully quit and reopen Ember. (Compare versions with: "
+                    "uv pip show PyQt6 PyQt6-WebEngine — they must match.)")
             return
         try:
             if getattr(self, "_browser_win", None) is None:

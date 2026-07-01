@@ -1,6 +1,10 @@
 google-genai>=1.0.0
-PyQt6>=6.6.0
-PyQt6-WebEngine>=6.6.0
+# Pinned to the SAME exact version, not >= — PyQt6 and PyQt6-WebEngine are ABI-coupled but
+# release patch versions independently (e.g. PyQt6 has had 6.10.1/6.10.2 with PyQt6-WebEngine
+# stuck at 6.10.0), so an unpinned install can resolve a mismatched pair and Ember Browser fails
+# to load the web engine with a cryptic import error. Bump both together when upgrading.
+PyQt6==6.11.0
+PyQt6-WebEngine==6.11.0
 mss>=9.0.1
 pyautogui>=0.9.54
 Pillow>=10.0.0

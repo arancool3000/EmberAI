@@ -300,11 +300,17 @@ button.small{flex:0 0 auto;width:auto;padding:8px 12px;font-size:12px;border-rad
 #gate h1{margin:0;font-size:38px;letter-spacing:-.4px}#gate h1 span{font-weight:850}#gate h1 b{font-weight:500;color:rgba(255,255,255,.58)}
 #pin{font-size:32px;text-align:center;width:210px;letter-spacing:8px;padding:15px;border-radius:20px;border:1px solid var(--line2);background:rgba(255,255,255,.1);color:var(--fg);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
 .hint{color:var(--mut);font-size:12px;text-align:center}.err{color:var(--err)}
-#screenwrap{position:sticky;top:58px;z-index:20;background:#000;display:flex;align-items:center;justify-content:center;min-height:180px;max-height:58vh;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.12)}
+#screenwrap{position:sticky;top:58px;z-index:20;background:#000;min-height:180px;max-height:58vh;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.12)}
 #screenwrap:fullscreen{height:100vh;max-height:100vh;width:100vw;background:#000}
 #screenwrap:-webkit-full-screen{height:100vh;max-height:100vh;width:100vw;background:#000}
-#screen{max-width:100%;max-height:58vh;display:block;touch-action:none;object-fit:contain}
-#screenwrap:fullscreen #screen,#screenwrap:-webkit-full-screen #screen{max-width:100vw;max-height:100vh;width:100vw;height:100vh}
+/* Two stacked frames (only one ever visible) instead of one <img> whose src keeps changing -
+   swapping src on a live element flashes it blank on slow e-ink WebKit (Kindle) while the new
+   frame decodes. Each new frame loads into the HIDDEN one and only swaps visibility once fully
+   decoded, so the visible frame never blanks. #screenhit is a separate, never-swapped element
+   that owns all tap/drag handling so touch input isn't affected by which frame is on top. */
+.screenimg{position:absolute;inset:0;margin:auto;max-width:100%;max-height:58vh;display:block;object-fit:contain;pointer-events:none}
+#screenhit{position:absolute;inset:0;touch-action:none}
+#screenwrap:fullscreen .screenimg,#screenwrap:-webkit-full-screen .screenimg{max-width:100vw;max-height:100vh;width:100vw;height:100vh}
 .tag{position:absolute;top:10px;left:10px;padding:6px 11px;border-radius:999px;color:var(--fg);font-size:12px;font-weight:760;background:rgba(0,0,0,.46);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .toolbar{position:absolute;top:9px;right:9px;display:flex;gap:6px}.toolbar button{background:rgba(0,0,0,.44);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .pane{padding:12px}.lbl{color:var(--faint);font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.08em;margin:10px 4px 7px}
@@ -312,6 +318,7 @@ button.small{flex:0 0 auto;width:auto;padding:8px 12px;font-size:12px;border-rad
 #pad,#bigpad{border:1px dashed rgba(255,255,255,.28);border-radius:24px;color:var(--mut);display:flex;align-items:center;justify-content:center;text-align:center;touch-action:none;min-height:148px;margin-bottom:10px}
 #bigpad{height:calc(100vh - 262px);min-height:330px;font-size:15px}
 #kb{display:flex;gap:8px;margin-bottom:14px}#kb input,#chatInput,#livekb{width:100%;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.11);color:var(--fg);padding:14px;font-size:16px;outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.15)}
+#kb button{flex:0 0 auto;width:auto;white-space:nowrap}
 #livekb{min-height:120px;resize:none}.foot{height:26px}
 #chatPane{display:none;height:calc(100vh - 74px);padding:12px;grid-template-rows:minmax(0,1fr) auto;gap:10px}
 #chatLog{overflow:auto;border-radius:26px;padding:12px;display:flex;flex-direction:column;gap:9px}
@@ -324,7 +331,7 @@ button.small{flex:0 0 auto;width:auto;padding:8px 12px;font-size:12px;border-rad
 #fsexit{display:none}
 body.fakefs{overflow:hidden}
 body.fakefs #screenwrap{position:fixed;top:50%;left:50%;width:100vh;height:100vw;max-height:none;min-height:0;transform:translate(-50%,-50%) rotate(90deg);transform-origin:center center;background:#000;z-index:60;border:0}
-body.fakefs #screen{max-width:100%;max-height:100%;width:auto;height:auto}
+body.fakefs .screenimg{max-width:100%;max-height:100%;width:auto;height:auto}
 body.fakefs .toolbar,body.fakefs .tag,body.fakefs .top{display:none}
 body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;transform:translateY(-50%) rotate(90deg);transform-origin:center center;background:rgba(0,0,0,.55);font-size:13px;padding:8px 13px;border-radius:14px;flex:0 0 auto;width:auto}
 @media(max-width:410px){button{font-size:13px;padding:12px 8px}.top{gap:5px}.toolbar{left:10px;right:auto;top:auto;bottom:10px}.tag{top:10px}}
@@ -338,7 +345,7 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
   button.small{font-size:13px;padding:9px 14px}
   #fsbtn{width:56px;font-size:20px}
   #screenwrap{max-height:72vh}
-  #screen{max-height:72vh}
+  .screenimg{max-height:72vh}
   .pane{padding:18px;max-width:760px;margin:0 auto}
   .grid4,.grid3,.grid2{gap:12px}
   #bigpad{min-height:420px}
@@ -364,7 +371,9 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
 <button id=fsexit onclick="toggleFS()">✕ Exit fullscreen</button>
 
 <div id=screenwrap class=modepane data-mode=full>
-  <img id=screen decoding=async>
+  <img id=screenA class=screenimg decoding=async>
+  <img id=screenB class=screenimg decoding=async style="display:none">
+  <div id=screenhit></div>
   <div class=tag id=tag>live</div>
   <div class=toolbar>
     <button class=small id=qbtn onclick="cycleQuality()">Balanced</button>
@@ -387,13 +396,13 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
 
   <div class=lbl>Quick actions</div>
   <div class=grid3>
-    <button onpointerdown="macro('lock')">🔒 Lock PC</button>
-    <button onpointerdown="macro('mute_mic')">🎙️ Mic Off</button>
-    <button onpointerdown="macro('sleep_display')">🌙 Sleep</button>
+    <button onpointerdown="macro('lock')">Lock PC</button>
+    <button onpointerdown="macro('mute_mic')">Mic Off</button>
+    <button onpointerdown="macro('sleep_display')">Sleep</button>
   </div>
   <div class=grid2>
-    <button onpointerdown="macro('mute')">🔇 Mute</button>
-    <button onpointerdown="macro('unmute')">🔊 Unmute</button>
+    <button onpointerdown="macro('mute')">Mute</button>
+    <button onpointerdown="macro('unmute')">Unmute</button>
   </div>
   <div id=kb><input id=cmdx placeholder="run a command, e.g. open -a Safari"><button onclick="runcmd()" style="max-width:90px">Run</button></div>
 
@@ -479,7 +488,8 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
 </section>
 
 <script>
-let PIN=localStorage.getItem("ember_pin")||"",TOK=localStorage.getItem("ember_tok")||"",SW=0,SH=0,MODE="full",img=document.getElementById("screen"),lastUrl="",fetching=false,dragLock=false,chatLoop=false,FAKEFS=false;
+let PIN=localStorage.getItem("ember_pin")||"",TOK=localStorage.getItem("ember_tok")||"",SW=0,SH=0,MODE="full",lastUrl="",fetching=false,dragLock=false,chatLoop=false,FAKEFS=false;
+let front=document.getElementById("screenA"),back=document.getElementById("screenB"),hit=document.getElementById("screenhit");
 let QUAL=[{label:"Speed",maxw:1100,q:62,hd:0},{label:"Balanced",maxw:1500,q:78,hd:1},{label:"Sharp",maxw:1920,q:86,hd:1}],QI=1;
 let SPEEDS=[90,160,300,650],SLABEL=["Ultra","Fast","Smooth","Lite"],SPI=1,SPEED=SPEEDS[SPI];
 async function post(o){o.pin=PIN;o.tok=TOK;try{return (await fetch("/api/event",{method:"POST",body:JSON.stringify(o)})).ok}catch(e){return false}}
@@ -490,18 +500,25 @@ async function connect(){PIN=document.getElementById("pin").value.trim();let r=a
 async function tryAuto(){if(!TOK&&!PIN)return false;try{let r=await fetch(screenUrl(),{cache:"no-store"});if(r.ok){SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");go();return true;}}catch(e){}return false;}
 async function loop(){if(MODE!=="full"||document.hidden){setTimeout(loop,450);return}if(fetching){setTimeout(loop,70);return}fetching=true;let start=performance.now();
  try{let r=await fetch(screenUrl(),{cache:"no-store"});if(r.ok){let b=await r.blob();let url=URL.createObjectURL(b);
-  // Double-buffer: decode the new frame OFF-screen first, then swap. Without this the <img>
-  // briefly clears to black between frames on slow e-ink WebKit (the Kindle "flashing" bug).
-  await new Promise(res=>{let im=new Image();im.onload=res;im.onerror=res;im.src=url});
-  let old=lastUrl;lastUrl=url;img.src=url;if(old)URL.revokeObjectURL(old);SW=+r.headers.get("X-Screen-W")||SW;SH=+r.headers.get("X-Screen-H")||SH;document.getElementById("tag").textContent=`live · ${Math.round(b.size/1024)} KB`}}catch(e){document.getElementById("tag").textContent="reconnecting"}finally{fetching=false;setTimeout(loop,Math.max(35,SPEED-(performance.now()-start)))}}
-function pxy(e){let b=img.getBoundingClientRect();let rx=(e.clientX-b.left)/b.width,ry=(e.clientY-b.top)/b.height;let x,y;
+  // Load the new frame into the HIDDEN image and wait until it's fully decoded (not just
+  // downloaded - decode() guarantees paint-ready, unlike onload on old WebKit) before swapping
+  // visibility. The VISIBLE image's src is never touched, so it can't flash blank mid-frame
+  // (the Kindle e-ink flicker bug).
+  back.src=url;
+  try{if(back.decode)await back.decode();else await new Promise(res=>{back.onload=res;back.onerror=res;});}
+  catch(e){await new Promise(res=>{back.onload=res;back.onerror=res;});}
+  front.style.display="none";back.style.display="block";
+  let oldFront=front,oldUrl=lastUrl;front=back;back=oldFront;lastUrl=url;
+  if(oldUrl)URL.revokeObjectURL(oldUrl);
+  SW=+r.headers.get("X-Screen-W")||SW;SH=+r.headers.get("X-Screen-H")||SH;document.getElementById("tag").textContent=`live · ${Math.round(b.size/1024)} KB`}}catch(e){document.getElementById("tag").textContent="reconnecting"}finally{fetching=false;setTimeout(loop,Math.max(35,SPEED-(performance.now()-start)))}}
+function pxy(e){let b=hit.getBoundingClientRect();let rx=(e.clientX-b.left)/b.width,ry=(e.clientY-b.top)/b.height;let x,y;
  if(FAKEFS){x=ry;y=1-rx;}else{x=rx;y=ry;}   // landscape fake-fullscreen rotates the mirror 90° CW
  if(x<0||x>1||y<0||y>1)return null;return{x:Math.round(x*SW),y:Math.round(y*SH),cx:e.clientX,cy:e.clientY}}
 let sd=null,screenDrag=false,lastDrag=0;
-img.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefault();img.setPointerCapture&&img.setPointerCapture(e.pointerId);sd=p;screenDrag=dragLock;if(dragLock)post({t:"dragstart",x:p.x,y:p.y});});
-img.addEventListener("pointermove",e=>{if(!sd)return;let p=pxy(e);if(!p)return;e.preventDefault();let moved=Math.abs(p.cx-sd.cx)+Math.abs(p.cy-sd.cy);if(!screenDrag&&moved>9){screenDrag=true;post({t:"dragstart",x:sd.x,y:sd.y});document.getElementById("tag").textContent="dragging"}if(screenDrag&&performance.now()-lastDrag>16){post({t:"dragto",x:p.x,y:p.y});lastDrag=performance.now()}});
+hit.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefault();hit.setPointerCapture&&hit.setPointerCapture(e.pointerId);sd=p;screenDrag=dragLock;if(dragLock)post({t:"dragstart",x:p.x,y:p.y});});
+hit.addEventListener("pointermove",e=>{if(!sd)return;let p=pxy(e);if(!p)return;e.preventDefault();let moved=Math.abs(p.cx-sd.cx)+Math.abs(p.cy-sd.cy);if(!screenDrag&&moved>9){screenDrag=true;post({t:"dragstart",x:sd.x,y:sd.y});document.getElementById("tag").textContent="dragging"}if(screenDrag&&performance.now()-lastDrag>16){post({t:"dragto",x:p.x,y:p.y});lastDrag=performance.now()}});
 function screenEnd(e){if(!sd)return;let p=pxy(e)||sd;e.preventDefault();if(screenDrag){post({t:"dragend",x:p.x,y:p.y});document.getElementById("tag").textContent="dropped"}else{post({t:"moveto",x:p.x,y:p.y});post({t:"click"});document.getElementById("tag").textContent="clicked"}sd=null;screenDrag=false;setTimeout(()=>document.getElementById("tag").textContent="live",450)}
-img.addEventListener("pointerup",screenEnd);img.addEventListener("pointercancel",screenEnd);
+hit.addEventListener("pointerup",screenEnd);hit.addEventListener("pointercancel",screenEnd);
 function attachPad(pad){if(!pad)return;let lx=0,ly=0,moving=false,moved=0,ax=0,ay=0,last=0,held=false;
  pad.addEventListener("pointerdown",e=>{e.preventDefault();moving=true;moved=0;ax=ay=0;lx=e.clientX;ly=e.clientY;pad.classList.add("dragOn");pad.setPointerCapture&&pad.setPointerCapture(e.pointerId);if(dragLock){held=true;post({t:"down"})}});
  pad.addEventListener("pointermove",e=>{if(!moving)return;e.preventDefault();let dx=e.clientX-lx,dy=e.clientY-ly;lx=e.clientX;ly=e.clientY;moved+=Math.abs(dx)+Math.abs(dy);ax+=dx;ay+=dy;let now=performance.now();if(now-last>16){post({t:"move",dx:Math.round(ax*1.55),dy:Math.round(ay*1.55)});ax=ay=0;last=now}});
@@ -514,11 +531,17 @@ function macro(n){post({t:"macro",name:n});flash(n.replace(/_/g," ")+" ✓")}
 function runcmd(){let i=document.getElementById("cmdx");if(i&&i.value){post({t:"macro_cmd",cmd:i.value});flash("ran ✓");i.value=""}}
 function sendtext(){let i=document.getElementById("tx");if(i.value){post({t:"type",text:i.value});i.value=""}}
 function setMode(m){MODE=m;document.querySelectorAll(".modepane").forEach(el=>{el.style.display=el.dataset.mode===m?(m==="chat"?"grid":""):"none"});["full","mouse","kb","chat"].forEach(x=>document.getElementById("m_"+x).classList.toggle("on",x===m));if(m==="kb")setTimeout(()=>document.getElementById("livekb").focus(),60);if(m==="chat")pollChat()}
-function fsSupported(){let d=document.getElementById("screenwrap");return !!((d.requestFullscreen||d.webkitRequestFullscreen)&&(document.fullscreenEnabled||document.webkitFullscreenEnabled))}
-function toggleFS(){let d=document.getElementById("screenwrap");
- if(fsSupported()){if(!document.fullscreenElement&&!document.webkitFullscreenElement)(d.requestFullscreen||d.webkitRequestFullscreen).call(d);else(document.exitFullscreen||document.webkitExitFullscreen).call(document);return}
- // No Fullscreen API (e.g. Kindle): rotate the mirror to landscape and fill the screen instead.
- FAKEFS=!FAKEFS;document.body.classList.toggle("fakefs",FAKEFS);flash(FAKEFS?"landscape":"live")}
+function fakeFS(on){FAKEFS=on;document.body.classList.toggle("fakefs",FAKEFS);flash(FAKEFS?"landscape":"live")}
+function toggleFS(){
+ if(FAKEFS){fakeFS(false);return}   // exit button / re-tap while already in fake-fullscreen
+ if(document.fullscreenElement||document.webkitFullscreenElement){(document.exitFullscreen||document.webkitExitFullscreen).call(document);return}
+ let d=document.getElementById("screenwrap"),req=d.requestFullscreen||d.webkitRequestFullscreen;
+ if(!req){fakeFS(true);return}
+ // Some WebKit builds (Kindle Silk) expose requestFullscreen but never actually enter it - no
+ // event, no rejection, just silent no-op. Don't trust feature-detection: try it, then verify
+ // shortly after and fall back to rotating the mirror ourselves if nothing actually happened.
+ try{let p=req.call(d);if(p&&p.catch)p.catch(()=>fakeFS(true))}catch(e){fakeFS(true);return}
+ setTimeout(()=>{if(!document.fullscreenElement&&!document.webkitFullscreenElement&&!FAKEFS)fakeFS(true)},350);}
 function cycleQuality(){QI=(QI+1)%QUAL.length;document.getElementById("qbtn").textContent=QUAL[QI].label}
 function cycleSpeed(){SPI=(SPI+1)%SPEEDS.length;SPEED=SPEEDS[SPI];document.getElementById("spdbtn").textContent=SLABEL[SPI]}
 function toggleDragLock(){dragLock=!dragLock;["dragBtn","dragBtn2"].forEach(id=>{let b=document.getElementById(id);if(b){b.classList.toggle("dragOn",dragLock);b.textContent=dragLock?"Dragging On":"Drag Lock"}});if(!dragLock)post({t:"up"})}
@@ -769,11 +792,11 @@ _MACRO_HOOKS: dict = {}
 
 # internal name -> phone button label
 MACROS = [
-    ("lock", "🔒 Lock PC"),
-    ("mute", "🔇 Mute"),
-    ("unmute", "🔊 Unmute"),
-    ("mute_mic", "🎙️ Mic Off"),
-    ("sleep_display", "🌙 Sleep Screen"),
+    ("lock", "Lock PC"),
+    ("mute", "Mute"),
+    ("unmute", "Unmute"),
+    ("mute_mic", "Mic Off"),
+    ("sleep_display", "Sleep Screen"),
 ]
 MACRO_NAMES = frozenset(n for n, _ in MACROS)
 

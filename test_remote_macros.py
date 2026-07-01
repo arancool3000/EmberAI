@@ -112,11 +112,37 @@ def test_phone_page_button_and_fullscreen_fixes():
     page = rs.PAGE
     # toolbar buttons (Balanced/Fast) must size to content so the label can't overflow
     assert "button.small{flex:0 0 auto" in page and "white-space:nowrap" in page
-    # double-buffered frame swap (kills the Kindle black-flash between frames)
-    assert "new Image()" in page
-    # landscape fake-fullscreen for devices without the Fullscreen API + tap remap
-    assert "body.fakefs" in page and "function fsSupported(" in page
+    # #kb buttons (Run/Send) must not shrink below their text either
+    assert "#kb button{flex:0 0 auto" in page
+    # ping-pong double-buffer: the frame loads into the hidden image and only swaps visibility
+    # once fully decoded, so the VISIBLE image's src is never reassigned (kills the Kindle
+    # black-flash - a preload-then-swap-src approach still flashed on old WebKit).
+    assert 'id=screenA class=screenimg' in page and 'id=screenB class=screenimg' in page
+    assert "id=screenhit" in page
+    assert "back.decode" in page and "front.style.display" in page
+    # landscape fake-fullscreen for devices without (or that lie about) the Fullscreen API
+    assert "body.fakefs" in page and "function fakeFS(" in page
     assert "x=ry;y=1-rx" in page and "id=fsexit" in page
+    # toggleFS must self-verify real fullscreen actually engaged, not just feature-detect it
+    # (Kindle Silk exposes requestFullscreen but silently no-ops it)
+    fs_fn = page.split("function toggleFS(){", 1)[1].split("\nfunction ", 1)[0]
+    assert "setTimeout(()=>" in fs_fn and "fakeFS(true)" in fs_fn
+
+
+def test_phone_page_has_no_decorative_emoji_on_macro_buttons():
+    page = rs.PAGE
+    # quick-action buttons must be plain text (matches every other button label in the app -
+    # Copy/Paste/Cut/Undo/etc. are all plain text already; the macro buttons used to be the
+    # only ones with colourful emoji, which render poorly on Kindle e-ink)
+    for bad in ("🔒", "🔇", "🔊", "🎙", "🌙"):
+        assert bad not in page, f"unexpected decorative emoji {bad!r} still in the phone page"
+    assert ">Lock PC<" in page and ">Mic Off<" in page and ">Sleep<" in page
+    assert ">Mute<" in page and ">Unmute<" in page
+
+
+def test_macros_table_labels_are_plain_text():
+    for _name, label in rs.MACROS:
+        assert all(ord(c) < 0x2000 for c in label), f"MACROS label {label!r} has a non-plain-text char"
 
 
 def test_phone_page_is_installable_pwa():

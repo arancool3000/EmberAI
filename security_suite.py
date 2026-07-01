@@ -175,7 +175,12 @@ def compute_dashboard(signals: dict) -> dict:
     recs.sort(key=lambda r: r["weight"], reverse=True)
     return {"ok": True, "score": score, "grade": grade, "rating": rating,
             "components": components,
-            "recommendations": [r["fix"] for r in recs]}
+            "recommendations": [r["fix"] for r in recs],
+            # Same recommendations, but with the component "key" kept alongside the fix text
+            # (recommendations above stays plain strings for existing callers) — this is what
+            # lets the UI put a real per-item action button next to each one instead of a
+            # static list nobody can act on directly.
+            "recommendation_items": [{"key": r["key"], "fix": r["fix"]} for r in recs]}
 
 
 def _collect_signals(update_total: int | None = None) -> dict:

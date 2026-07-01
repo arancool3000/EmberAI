@@ -28,6 +28,18 @@ def test_compute_dashboard_partial_and_priority():
     assert "update" in d["recommendations"][0].lower()
 
 
+def test_recommendation_items_keep_the_component_key_for_resolve_buttons():
+    signals = {k: False for k in ss._WEIGHTS}
+    signals["realtime_protection"] = True
+    d = ss.compute_dashboard(signals)
+    items = d["recommendation_items"]
+    assert len(items) == len(d["recommendations"])
+    assert items[0]["key"] == "updates_current"       # same priority order as recommendations
+    assert items[0]["fix"] == d["recommendations"][0]
+    assert all(set(i.keys()) == {"key", "fix"} for i in items)
+    assert all(i["key"] in ss._WEIGHTS for i in items)
+
+
 def test_weights_sum_to_100():
     assert sum(ss._WEIGHTS.values()) == 100
 

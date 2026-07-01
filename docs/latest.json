@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.9.1",
   "pub_date": "2026-07-01",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.9.0 — Ember Link: connect from anywhere\n\n• Ember Link can now be reached from OUTSIDE your Wi-Fi. Pair a device on your Wi-Fi once (enter the PIN as usual) and it's silently upgraded to a long-lived pairing token — after that, the same device reconnects from any network (cellular, another Wi-Fi, anywhere) via a public link.\n• Uses an outbound Cloudflare Tunnel (free, no account, nothing opened on your router). Enable it from the Ember Link panel's new 'Connect from anywhere' toggle.\n• Security: the short PIN is LAN-only by design — it is never accepted over the public tunnel, only from a real local-network address, so there is nothing for the internet to brute-force. Revoke every paired device any time from the same panel.\n\nBuilds on 1.8.x's in-app Terminal + Parallel Agent Tasks + iPad app, the 1.7.x voice/shortcut fixes, and 1.6.0's smarter local Ollama."
+  "notes": "Ember 1.9.1 — Ember Link fixes + security dashboard actions\n\n• Kindle/e-ink: the live screen feed no longer flashes black between frames — the view now holds the last frame until the new one is fully decoded, then swaps.\n• Kindle: the Fullscreen button now works even when the browser silently ignores the real Fullscreen API — it falls back to a rotated, filled 'landscape' view automatically.\n• Fixed the Run/Send button text overflowing its box on the phone remote.\n• Removed decorative emoji from the phone remote's quick-action buttons in favor of plain text (Kindle e-ink friendly).\n• The 'Connect from anywhere' panel now clearly labels the tunnel link and adds a Copy button.\n• Security dashboard recommendations each get a Fix button that resolves the item directly instead of just describing it.\n• Fixed Ember Browser failing to load for some users — pinned PyQt6/PyQt6-WebEngine to matching versions.\n\nBuilds on 1.9.0's Ember Link connect-from-anywhere and 1.8.x's in-app Terminal + Parallel Agent Tasks."
 }
