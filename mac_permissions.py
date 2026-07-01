@@ -78,3 +78,84 @@ def open_accessibility_settings():
         )
     except Exception:
         pass
+
+
+def has_screen_recording(prompt: bool = False) -> bool:
+    """True if Ember has macOS Screen Recording access (needed for Ember Link's mirror and the
+    AI's screenshot tool). macOS is SUPPOSED to auto-prompt the first time a screen-capture API
+    is used, but that quietly fails to fire for a lot of unsigned/ad-hoc-signed PyInstaller
+    builds - the capture call just returns black/empty frames instead, which looks like the app
+    never asked. CGRequestScreenCaptureAccess() forces the same registration/prompt explicitly
+    instead of hoping an incidental screenshot call triggers it. Returns True off macOS / when
+    pyobjc-Quartz is unavailable (can't check, so don't hard-block)."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        import Quartz
+    except Exception:
+        return True
+    try:
+        if prompt and hasattr(Quartz, "CGRequestScreenCaptureAccess"):
+            try:
+                Quartz.CGRequestScreenCaptureAccess()
+            except Exception:
+                pass
+        if hasattr(Quartz, "CGPreflightScreenCaptureAccess"):
+            return bool(Quartz.CGPreflightScreenCaptureAccess())
+        return True   # older macOS without the preflight API
+    except Exception:
+        return True
+
+
+def open_screen_recording_settings():
+    """Open System Settings directly at Privacy -> Screen Recording."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"],
+            capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def has_microphone(prompt: bool = False) -> bool:
+    """True if Ember has macOS Microphone access (needed for push-to-talk / voice chat). Same
+    story as Screen Recording: the OS prompt is supposed to fire on first use, but a mic-open
+    call buried inside a broad try/except elsewhere in the app can silently eat the resulting
+    PermissionError/OSError before the user ever notices a prompt appeared. This asks explicitly
+    and up front instead. Returns True off macOS / when pyobjc-AVFoundation is unavailable."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        import AVFoundation
+    except Exception:
+        return True
+    try:
+        status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(
+            AVFoundation.AVMediaTypeAudio)
+        if status == 3:   # AVAuthorizationStatusAuthorized
+            return True
+        if prompt and status == 0:   # AVAuthorizationStatusNotDetermined
+            try:
+                AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                    AVFoundation.AVMediaTypeAudio, lambda granted: None)
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return True
+
+
+def open_microphone_settings():
+    """Open System Settings directly at Privacy -> Microphone."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"],
+            capture_output=True, timeout=10)
+    except Exception:
+        pass

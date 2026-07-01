@@ -1,5 +1,5 @@
 {
-  "version": "1.9.2",
+  "version": "1.9.3",
   "pub_date": "2026-07-01",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.9.2 — Stable PIN fix, two-finger scroll, stronger ad blocking\n\n• Ember Link's PIN could occasionally regenerate itself after a close+reopen (a partial write to its save file could look 'corrupt' on the next launch) — the PIN is now written atomically so it can never be silently swapped out from under a paired phone.\n• Two-finger scroll on a trackpad/mouse now works over the phone remote's touchpad and live screen mirror (it only sent clicks/drags before — a physical scroll gesture did nothing).\n• Ember Browser's ad/tracker blocking now shares Ember's system-wide Ad Blocker list instead of a separate, much smaller hardcoded one — turning on a bigger list (or adding a custom domain) there now also strengthens in-browser blocking.\n• Fixed a silent-failure bug in the Features directory: a broken feature used to just close the dialog and do nothing, with no error shown — failures now surface properly.\n\nBuilds on 1.9.1's Kindle Ember Link fixes and 1.9.0's Ember Link connect-from-anywhere."
+  "notes": "Ember 1.9.3 — Fixed Sandbox/Scan-folder buttons, Ember Link tablet mode, permission prompts\n\n• Fixed 'Sandbox' and 'Scan a folder' in the Command Center showing 'not available in this build' — they were wired to methods that lived on the wrong dialog class.\n• Ember Link's non-fullscreen mirror was rendering at a fraction of its intended size (a layout regression) — fixed.\n• Fullscreen mirror now reserves a small control bar at the bottom with a mouse pad, click buttons, and a keyboard toggle, so it works like a tablet instead of needing an exit-fullscreen round trip to click or type.\n• Ember Link now defaults to its lightest quality tier for a snappier first impression on weaker devices (you can still switch to Balanced/Sharp).\n• Ember now explicitly asks for Screen Recording and Microphone access shortly after launch instead of relying on an incidental first use to trigger the OS prompt, which wasn't reliably happening.\n• Fixed a silent-failure bug in the Features directory (a broken feature used to just close the dialog with no error shown).\n\nBuilds on 1.9.2's PIN-stability fix, two-finger scroll, and stronger ad blocking."
 }

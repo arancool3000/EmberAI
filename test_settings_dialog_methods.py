@@ -72,6 +72,31 @@ def test_features_dialog_calls_are_defined():
     _assert_self_calls_defined("FeaturesDialog")
 
 
+def test_emberwindow_calls_are_defined():
+    _assert_self_calls_defined("EmberWindow")
+
+
+def test_run_slash_feature_methods_resolve_on_emberwindow():
+    """Regression guard: _run_slash's feature_methods dict resolves handlers dynamically via
+    getattr(self, name), so a plain self._name() scan (the checks above) can't catch a broken
+    entry - the string just has to spell a real EmberWindow method. __sandbox__ and
+    __scan_folder__ both used to point at a same-named method that only existed on
+    SettingsDialog/AntivirusDialog, so every Command Center click on them silently showed
+    'That feature isn't available in this build' even though the method existed elsewhere."""
+    tree = ast.parse(open(_UI, encoding="utf-8").read())
+    ew = _class_node(tree, "EmberWindow")
+    defined = _defined_names(ew)
+    run_slash = next(n for n in ast.walk(ew)
+                      if isinstance(n, ast.FunctionDef) and n.name == "_run_slash")
+    dict_node = next(n.value for n in ast.walk(run_slash)
+                      if isinstance(n, ast.Assign) and len(n.targets) == 1
+                      and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "feature_methods")
+    missing = [(k.value, v.value) for k, v in zip(dict_node.keys, dict_node.values)
+               if v.value not in defined]
+    assert not missing, (
+        f"feature_methods entries point at methods EmberWindow doesn't define: {missing}")
+
+
 def test_features_dialog_do_surfaces_errors_instead_of_swallowing_them():
     """Regression guard: FeaturesDialog._do() used to `except Exception: pass`, so a broken
     feature just closed the directory and did nothing else - indistinguishable from a dead

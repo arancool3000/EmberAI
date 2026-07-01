@@ -38,3 +38,6 @@ pycaw>=20240210; platform_system == "Windows"
 # --- macOS-only (Apple Vision OCR for precise on-screen text targeting) ---
 pyobjc-framework-Vision>=10.0; platform_system == "Darwin"
 pyobjc-framework-Quartz>=10.0; platform_system == "Darwin"
+# Explicit Microphone permission priming (mac_permissions.has_microphone) - relying on an
+# incidental mic-open call to trigger the OS prompt wasn't reliable.
+pyobjc-framework-AVFoundation>=10.0; platform_system == "Darwin"

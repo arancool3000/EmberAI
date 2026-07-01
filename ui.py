@@ -4561,6 +4561,10 @@ class EmberWindow(QWidget):
         # macOS never auto-prompts for Accessibility — explicitly request it shortly after launch.
         if not _SAFE_MODE:
             QTimer.singleShot(900, self._check_accessibility)
+            # Screen Recording / Microphone are "supposed" to auto-prompt on first use, but that
+            # quietly fails to fire for a lot of unsigned/ad-hoc-signed builds — ask explicitly
+            # too, staggered after Accessibility so macOS doesn't stack multiple system prompts.
+            QTimer.singleShot(1500, self._check_screen_and_mic_permissions)
         self._listening = False
         self._voice_chat_enabled = False
         self._voice_waiting_for_reply = False
@@ -7244,6 +7248,56 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         except Exception as e:
             self._add_bubble("error", f"Could not open Ember Browser: {e}")
 
+    def _scan_folder(self):
+        """Scan a folder for malware (Command Center -> Scan a folder). The Settings -> Security
+        tab and the Antivirus app have their own copies of this same action for when they're
+        already open; this one lets the Command Center token reach it directly."""
+        import antivirus
+        from PyQt6.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
+        if not folder:
+            return
+        self._set_status("Scanning…")
+        r = antivirus.scan_directory(folder, deep=False)
+        self._set_status("Ready")
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Scan", r.get("error", "scan failed"))
+            return
+        flagged = r.get("flagged", [])
+        detail = "\n".join(f"{f['verdict']}: {f['path']}" for f in flagged[:20]) or "Nothing suspicious found."
+        QMessageBox.information(
+            self, "Scan complete",
+            f"Scanned {r.get('scanned', 0)} files — flagged {r.get('flagged_count', 0)}.\n\n{detail}")
+
+    def _run_in_sandbox_ui(self):
+        """Run a chosen file/app inside the strongest available sandbox (Command Center ->
+        Sandbox). Mirrors the copy of this action inside Settings -> Security for when that
+        dialog is already open."""
+        import antivirus
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file/app to run safely in the sandbox")
+        if not path:
+            return
+        self._set_status("Running in sandbox…")
+        r = antivirus.run_in_sandbox(path)
+        self._set_status("Ready")
+        if r.get("refused"):
+            QMessageBox.warning(self, "Sandbox", r.get("message", "Refused: file is malicious."))
+            return
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Sandbox", r.get("error", "Could not run in the sandbox."))
+            return
+        parts = [f"Ran via: {r.get('method', 'sandbox')}",
+                 f"Result: {r.get('verdict_hint', '?')}",
+                 f"Exit code: {r.get('exit_code')}"]
+        out = (r.get("stdout") or "").strip()
+        err = (r.get("stderr") or "").strip()
+        if out:
+            parts.append("\nOutput:\n" + out[:800])
+        if err:
+            parts.append("\nErrors:\n" + err[:400])
+        QMessageBox.information(self, "Sandbox result", "\n".join(parts))
+
     def _start_remote_control(self):
         """Start Ember Link (phone control) and open its panel (local URL/PIN + optional
         connect-from-anywhere tunnel)."""
@@ -8220,6 +8274,32 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 "Security → Accessibility, then quit and reopen Ember.",
             )
             mac_permissions.open_accessibility_settings()
+        except Exception:
+            pass
+
+    def _check_screen_and_mic_permissions(self):
+        """Explicitly trigger the macOS Screen Recording + Microphone prompts shortly after
+        launch, instead of hoping the first incidental screenshot/mic-open call surfaces them —
+        that quietly doesn't happen for a lot of unsigned/ad-hoc-signed builds, which is why
+        Ember could go most sessions without ever asking for either."""
+        if sys.platform != "darwin":
+            return
+        try:
+            import mac_permissions
+            missing = []
+            if not mac_permissions.has_screen_recording(prompt=True):
+                missing.append("Screen Recording")
+                mac_permissions.open_screen_recording_settings()
+            if not mac_permissions.has_microphone(prompt=True):
+                missing.append("Microphone")
+                mac_permissions.open_microphone_settings()
+            if missing:
+                self._add_bubble(
+                    "system",
+                    f"⚠️ Ember needs **{' and '.join(missing)}** access for the screen mirror / "
+                    "voice features to work.\nI've opened the request — enable **Ember** under "
+                    "System Settings → Privacy & Security, then quit and reopen Ember.",
+                )
         except Exception:
             pass
 

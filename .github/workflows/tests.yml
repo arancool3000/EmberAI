@@ -78,7 +78,8 @@ jobs:
             test_tools_linux.py \
             test_version.py \
             test_remote_pin.py \
-            test_ember_browser_adblock.py; do
+            test_ember_browser_adblock.py \
+            test_mac_permissions.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

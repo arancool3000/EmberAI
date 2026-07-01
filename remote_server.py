@@ -300,19 +300,34 @@ button.small{flex:0 0 auto;width:auto;padding:8px 12px;font-size:12px;border-rad
 #gate h1{margin:0;font-size:38px;letter-spacing:-.4px}#gate h1 span{font-weight:850}#gate h1 b{font-weight:500;color:rgba(255,255,255,.58)}
 #pin{font-size:32px;text-align:center;width:210px;letter-spacing:8px;padding:15px;border-radius:20px;border:1px solid var(--line2);background:rgba(255,255,255,.1);color:var(--fg);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
 .hint{color:var(--mut);font-size:12px;text-align:center}.err{color:var(--err)}
-#screenwrap{position:sticky;top:58px;z-index:20;background:#000;min-height:180px;max-height:58vh;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.12)}
-#screenwrap:fullscreen{height:100vh;max-height:100vh;width:100vw;background:#000}
-#screenwrap:-webkit-full-screen{height:100vh;max-height:100vh;width:100vw;background:#000}
+/* height (not just max-height) is required: every child below is position:absolute, so with
+   no height set the box has no in-flow content to size itself from and collapses to
+   min-height - that collapse is what made the non-fullscreen mirror look "cut in half". */
+#screenwrap{position:sticky;top:58px;z-index:20;background:#000;min-height:180px;height:58vh;max-height:58vh;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.12)}
+#screenwrap:fullscreen,#screenwrap:-webkit-full-screen{height:100vh;max-height:100vh;width:100vw;background:#000}
 /* Two stacked frames (only one ever visible) instead of one <img> whose src keeps changing -
    swapping src on a live element flashes it blank on slow e-ink WebKit (Kindle) while the new
    frame decodes. Each new frame loads into the HIDDEN one and only swaps visibility once fully
    decoded, so the visible frame never blanks. #screenhit is a separate, never-swapped element
-   that owns all tap/drag handling so touch input isn't affected by which frame is on top. */
+   that owns all tap/drag handling so touch input isn't affected by which frame is on top, and
+   sits above .tag/.toolbar (explicit z-index) so nothing can steal a tap meant for the mirror. */
 .screenimg{position:absolute;inset:0;margin:auto;max-width:100%;max-height:58vh;display:block;object-fit:contain;pointer-events:none}
-#screenhit{position:absolute;inset:0;touch-action:none}
-#screenwrap:fullscreen .screenimg,#screenwrap:-webkit-full-screen .screenimg{max-width:100vw;max-height:100vh;width:100vw;height:100vh}
+#screenhit{position:absolute;inset:0;touch-action:none;z-index:5}
+/* Real fullscreen reserves a strip at the bottom for #fscontrols (mouse pad + keys) so a phone
+   used fullscreen works like a tablet - mirror on top, controls always reachable below - instead
+   of the mirror eating the whole screen with no way to tap/type without leaving fullscreen. */
+#screenwrap:fullscreen .screenimg,#screenwrap:-webkit-full-screen .screenimg{max-width:100vw;max-height:calc(100vh - 84px);width:100vw;height:calc(100vh - 84px);bottom:84px}
+#screenwrap:fullscreen #screenhit,#screenwrap:-webkit-full-screen #screenhit{bottom:84px}
 .tag{position:absolute;top:10px;left:10px;padding:6px 11px;border-radius:999px;color:var(--fg);font-size:12px;font-weight:760;background:rgba(0,0,0,.46);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .toolbar{position:absolute;top:9px;right:9px;display:flex;gap:6px}.toolbar button{background:rgba(0,0,0,.44);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+#fscontrols{display:none;position:absolute;left:0;right:0;bottom:0;height:84px;padding:8px 10px;gap:8px;align-items:center;background:rgba(9,9,11,.88);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);z-index:15;box-sizing:border-box}
+#screenwrap:fullscreen #fscontrols,#screenwrap:-webkit-full-screen #fscontrols{display:flex}
+#fsPad{flex:1;height:100%;border-radius:16px;border:1px dashed rgba(255,255,255,.3);touch-action:none}
+#fscontrols button{width:52px;height:100%;flex:0 0 auto;font-size:15px}
+#fsKbRow{display:none;position:absolute;left:0;right:0;bottom:84px;padding:8px 10px;gap:8px;background:rgba(9,9,11,.88);backdrop-filter:blur(20px);z-index:15;box-sizing:border-box}
+#screenwrap.fskb #fsKbRow{display:flex}
+#fsKbRow input{flex:1;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.11);color:var(--fg);padding:12px;font-size:16px;outline:none}
+#fsKbRow button{width:70px;flex:0 0 auto}
 .pane{padding:12px}.lbl{color:var(--faint);font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.08em;margin:10px 4px 7px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:9px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:9px}.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:9px}
 #pad,#bigpad{border:1px dashed rgba(255,255,255,.28);border-radius:24px;color:var(--mut);display:flex;align-items:center;justify-content:center;text-align:center;touch-action:none;min-height:148px;margin-bottom:10px}
@@ -344,7 +359,7 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
   button{font-size:16px;padding:16px 12px;border-radius:20px}
   button.small{font-size:13px;padding:9px 14px}
   #fsbtn{width:56px;font-size:20px}
-  #screenwrap{max-height:72vh}
+  #screenwrap{height:72vh;max-height:72vh}
   .screenimg{max-height:72vh}
   .pane{padding:18px;max-width:760px;margin:0 auto}
   .grid4,.grid3,.grid2{gap:12px}
@@ -376,8 +391,15 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
   <div id=screenhit></div>
   <div class=tag id=tag>live</div>
   <div class=toolbar>
-    <button class=small id=qbtn onclick="cycleQuality()">Balanced</button>
+    <button class=small id=qbtn onclick="cycleQuality()">Speed</button>
     <button class=small id=spdbtn onclick="cycleSpeed()">Fast</button>
+  </div>
+  <div id=fsKbRow><input id=fsKbInput placeholder="Type, then Send"><button onclick="sendFsText()">Send</button></div>
+  <div id=fscontrols>
+    <div id=fsPad></div>
+    <button onpointerdown="ev('click')">L</button>
+    <button onpointerdown="ev('rclick')">R</button>
+    <button onclick="toggleFsKb()">⌨</button>
   </div>
 </div>
 
@@ -490,7 +512,10 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
 <script>
 let PIN=localStorage.getItem("ember_pin")||"",TOK=localStorage.getItem("ember_tok")||"",SW=0,SH=0,MODE="full",lastUrl="",fetching=false,dragLock=false,chatLoop=false,FAKEFS=false;
 let front=document.getElementById("screenA"),back=document.getElementById("screenB"),hit=document.getElementById("screenhit");
-let QUAL=[{label:"Speed",maxw:1100,q:62,hd:0},{label:"Balanced",maxw:1500,q:78,hd:1},{label:"Sharp",maxw:1920,q:86,hd:1}],QI=1;
+// Default to the lightest tier - a big JPEG's decode() alone (needed to kill the Kindle
+// black-flash) is real work on weak/e-ink hardware, so "Balanced" as the default made the very
+// first impression laggy. Power users can still bump it up with the quality toggle.
+let QUAL=[{label:"Speed",maxw:1100,q:62,hd:0},{label:"Balanced",maxw:1500,q:78,hd:1},{label:"Sharp",maxw:1920,q:86,hd:1}],QI=0;
 let SPEEDS=[90,160,300,650],SLABEL=["Ultra","Fast","Smooth","Lite"],SPI=1,SPEED=SPEEDS[SPI];
 async function post(o){o.pin=PIN;o.tok=TOK;try{return (await fetch("/api/event",{method:"POST",body:JSON.stringify(o)})).ok}catch(e){return false}}
 function screenUrl(){let q=QUAL[QI];return `/api/screen?pin=${encodeURIComponent(PIN)}&tok=${encodeURIComponent(TOK)}&hd=${q.hd}&maxw=${q.maxw}&q=${q.q}&t=${Date.now()}`}
@@ -532,11 +557,17 @@ function attachPad(pad){if(!pad)return;let lx=0,ly=0,moving=false,moved=0,ax=0,a
  attachWheelScroll(pad);}
 attachPad(document.getElementById("pad"));attachPad(document.getElementById("bigpad"));
 attachWheelScroll(hit);   // two-finger scroll over the live screen mirror also scrolls the desktop
+// The fullscreen bottom bar's own mini trackpad - reuses the exact same drag/tap/scroll code as
+// the Mouse tab's trackpad, so fullscreen works like a tablet (mirror + touch controls always
+// reachable together) instead of forcing an exit-fullscreen round trip to move the mouse.
+attachPad(document.getElementById("fsPad"));attachWheelScroll(document.getElementById("fsPad"));
 function ev(k){post({t:k})}function scroll(a){post({t:"scroll",a:a})}function key(k){post({t:"key",k:k})}
 function flash(m){let t=document.getElementById("tag");if(t){t.textContent=m;setTimeout(()=>{t.textContent="live"},900)}}
 function macro(n){post({t:"macro",name:n});flash(n.replace(/_/g," ")+" ✓")}
 function runcmd(){let i=document.getElementById("cmdx");if(i&&i.value){post({t:"macro_cmd",cmd:i.value});flash("ran ✓");i.value=""}}
 function sendtext(){let i=document.getElementById("tx");if(i.value){post({t:"type",text:i.value});i.value=""}}
+function toggleFsKb(){let on=document.getElementById("screenwrap").classList.toggle("fskb");if(on)setTimeout(()=>document.getElementById("fsKbInput").focus(),60)}
+function sendFsText(){let i=document.getElementById("fsKbInput");if(i.value){post({t:"type",text:i.value});i.value=""}}
 function setMode(m){MODE=m;document.querySelectorAll(".modepane").forEach(el=>{el.style.display=el.dataset.mode===m?(m==="chat"?"grid":""):"none"});["full","mouse","kb","chat"].forEach(x=>document.getElementById("m_"+x).classList.toggle("on",x===m));if(m==="kb")setTimeout(()=>document.getElementById("livekb").focus(),60);if(m==="chat")pollChat()}
 function fakeFS(on){FAKEFS=on;document.body.classList.toggle("fakefs",FAKEFS);flash(FAKEFS?"landscape":"live")}
 function toggleFS(){

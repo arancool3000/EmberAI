@@ -152,6 +152,35 @@ def test_phone_page_supports_two_finger_scroll_gesture():
     assert 't:"scroll"' in page
 
 
+def test_screenwrap_has_explicit_height_not_just_max_height():
+    # #screenwrap's children (.screenimg x2, #screenhit) are all position:absolute, so with only
+    # min/max-height set (no height) the box has no in-flow content to size itself from and
+    # collapses to min-height - that's the "mirror view is cut in half" regression.
+    page = rs.PAGE
+    assert "#screenwrap{position:sticky;top:58px;z-index:20;background:#000;min-height:180px;height:58vh;max-height:58vh" in page
+
+
+def test_fullscreen_reserves_room_for_a_persistent_control_bar():
+    # Real fullscreen should feel like a tablet: mirror on top, a mouse pad + L/R/keyboard
+    # controls always reachable below, not the mirror eating 100% of the screen with no way to
+    # tap or type without leaving fullscreen.
+    page = rs.PAGE
+    assert "id=fscontrols" in page and "id=fsPad" in page and "id=fsKbRow" in page
+    assert 'attachPad(document.getElementById("fsPad"))' in page
+    assert "function toggleFsKb(" in page and "function sendFsText(" in page
+    assert "bottom:84px" in page   # the mirror image/hit area leave room for the bar below
+
+
+def test_default_quality_is_the_lightest_tier_and_button_label_matches():
+    # Defaulting to a lighter/faster tier (rather than "Balanced") makes the very first
+    # impression of the mirror snappier, especially on weak/e-ink hardware where decode() of a
+    # bigger JPEG is real, visible work. The button's initial label must match QI's default or
+    # the toolbar shows a tier the app isn't actually using.
+    page = rs.PAGE
+    assert "],QI=0;" in page
+    assert '<button class=small id=qbtn onclick="cycleQuality()">Speed</button>' in page
+
+
 def test_macros_table_labels_are_plain_text():
     for _name, label in rs.MACROS:
         assert all(ord(c) < 0x2000 for c in label), f"MACROS label {label!r} has a non-plain-text char"
