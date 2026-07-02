@@ -82,7 +82,8 @@ jobs:
             test_mac_permissions.py \
             test_ember_spec.py \
             test_more_tools.py \
-            test_workflow_recorder.py; do
+            test_workflow_recorder.py \
+            test_release_workflow.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

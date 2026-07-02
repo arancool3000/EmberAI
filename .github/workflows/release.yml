@@ -132,7 +132,11 @@ jobs:
           chmod +x appimagetool
           # --appimage-extract-and-run: CI containers usually lack a usable FUSE mount, which a
           # plain `./appimagetool` invocation needs; this flag makes it self-extract instead.
-          ./appimagetool --appimage-extract-and-run "$APPDIR" Ember-Linux.AppImage
+          # ARCH=x86_64: appimagetool's auto-detection can find more than one architecture
+          # signature in the PyInstaller-produced AppDir (bundled Qt plugins etc. confuse it)
+          # and then refuses to build at all ("A valid architecture with the ARCH environmental
+          # variable should be provided") - this build only ever targets x86_64 (ubuntu-latest).
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" Ember-Linux.AppImage
       - name: Verify the AppImage was produced
         run: |
           test -s Ember-Linux.AppImage
@@ -144,6 +148,17 @@ jobs:
 
   release:
     needs: [build-macos, build-windows, build-linux]
+    # GitHub Actions skips a job entirely if ANY of its `needs` fails - so a Linux packaging
+    # hiccup (e.g. the appimagetool ARCH issue this line was added for) silently threw away
+    # already-successful macOS + Windows builds too, and NOTHING got published: every release
+    # from 1.9.2 through 1.9.6 failed this way with no visible error to the user, who stayed
+    # stuck on 1.9.1. Only macOS + Windows are load-bearing here; if build-linux fails, the
+    # asset-collection step below already omits it gracefully (`cp ... || true`) - a missing
+    # Linux build should never again block delivering the fixes everyone else already has.
+    if: |
+      always() &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
