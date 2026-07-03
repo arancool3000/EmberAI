@@ -168,6 +168,33 @@ def test_citation_out_of_range_is_left_alone():
     assert "[5]" in out and "class=cite" in out        # [1] linkified, [5] left as plain text
 
 
+def test_polish_slash_focus_reduced_motion_and_privacy():
+    # "/" focuses the search box (a search convention) — in the SHARED head JS so it works on
+    # both the home and results pages.
+    head = _module_str_const("_SEARCH_HEAD_JS")
+    assert "keydown" in head and "input[name=q]" in head and "'/'" in head
+    # respect prefers-reduced-motion (accessibility): the skeleton shimmer must be tamed
+    assert "prefers-reduced-motion" in _SRC
+    # favicons must not leak the referrer to the icon host (privacy) and load lazily
+    assert "referrerpolicy=no-referrer" in _module_str_const("_HOME_JS")
+
+    f = _bind_builders()
+    out = f._search_results_html("q", "a", [("A", "https://a.com")], None)
+    assert "referrerpolicy=no-referrer" in out and "loading=lazy" in out
+
+
+def test_customise_panel_has_backdrop_and_keyboard_affordances():
+    home = _module_str_const("_HOME_JS")
+    # click-away backdrop + Escape both close the panel; Enter in a shortcut field adds it
+    assert "backdrop" in home and "Escape" in home
+    assert "addShortcut" in home and "'Enter'" in home
+    # the backdrop element and the panel are both emitted by the home page
+    cls = _class("EmberBrowser")
+    fn = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == "_home_html")
+    src = ast.get_source_segment(_SRC, fn)
+    assert "id=backdrop" in src and "aria-label" in src
+
+
 def test_every_self_method_call_in_emberbrowser_resolves():
     cls = _class("EmberBrowser")
     defined = _methods(cls)
