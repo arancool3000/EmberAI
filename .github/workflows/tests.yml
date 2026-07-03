@@ -83,7 +83,8 @@ jobs:
             test_ember_spec.py \
             test_more_tools.py \
             test_workflow_recorder.py \
-            test_release_workflow.py; do
+            test_release_workflow.py \
+            test_key_vault_recovery.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

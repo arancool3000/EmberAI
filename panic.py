@@ -77,16 +77,62 @@ def _default_lock_screen() -> dict:
     return {"ok": ok, "detail": d or "session locked"}
 
 
+def _network_services(want_disabled: bool) -> list:
+    """macOS network SERVICE names (Wi-Fi, Ethernet, Thunderbolt Bridge, …). `want_disabled`
+    filters to services currently disabled (True) or enabled (False) - a leading '*' in
+    `networksetup -listallnetworkservices` marks a disabled one."""
+    ok, out = _run(["networksetup", "-listallnetworkservices"])
+    if not ok:
+        return []
+    svcs = []
+    for line in out.splitlines():
+        s = line.strip()
+        if not s or s.lower().startswith("an asterisk"):
+            continue
+        is_disabled = s.startswith("*")
+        name = s.lstrip("*").strip()
+        if name and (is_disabled == want_disabled):
+            svcs.append(name)
+    return svcs
+
+
+def _win_interfaces() -> list:
+    """All non-loopback Windows network interface names, so a panic cut disables EVERY adapter,
+    not just one hardcoded 'Wi-Fi' (which is also wrong on non-English Windows)."""
+    ok, out = _run(["netsh", "interface", "show", "interface"])
+    if not ok:
+        return ["Wi-Fi"]
+    names = []
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4 and parts[0] in ("Enabled", "Disabled") and \
+                parts[2] in ("Dedicated", "Internal"):
+            name = parts[3].strip()
+            if name and "loopback" not in name.lower():
+                names.append(name)
+    return names or ["Wi-Fi"]
+
+
 def _set_network(enable: bool) -> dict:
     state = "on" if enable else "off"
     if sys.platform == "darwin":
+        # A panic 'cut' that only kills Wi-Fi leaves Ethernet/Thunderbolt (and a live C2 channel)
+        # fully up while reporting success. Power Wi-Fi off (fast, no admin) AND enable/disable
+        # every WIRED service too.
         results = [_run(["networksetup", "-setairportpower", dev, state]) for dev in _wifi_devices()]
+        for svc in _network_services(want_disabled=enable):  # cut: disable currently-enabled; restore: enable disabled
+            results.append(_run(["networksetup", "-setnetworkserviceenabled", svc, state]))
         ok = any(r[0] for r in results)
-        return {"ok": ok, "detail": f"Wi-Fi {state}" if ok else "; ".join(r[1] for r in results)[:200]}
+        return {"ok": ok, "detail": (f"all network interfaces {state}" if ok
+                                     else "; ".join(r[1] for r in results)[:200])}
     if sys.platform.startswith("win"):
         admin = "enable" if enable else "disable"
-        ok, d = _run(["netsh", "interface", "set", "interface", "Wi-Fi", f"admin={admin}"])
-        return {"ok": ok, "detail": d or f"Wi-Fi {admin} (needs admin)"}
+        results = [_run(["netsh", "interface", "set", "interface", name, f"admin={admin}"])
+                   for name in _win_interfaces()]
+        ok = any(r[0] for r in results)
+        detail = (f"all interfaces {admin}" if ok
+                  else ("; ".join(r[1] for r in results)[:180] + " (needs admin)"))
+        return {"ok": ok, "detail": detail}
     ok, d = _run(["nmcli", "networking", "on" if enable else "off"])
     return {"ok": ok, "detail": d or f"networking {state}"}
 

@@ -97,7 +97,13 @@ def _fernet() -> Fernet:
     return Fernet(key)
 
 
-def _read_file_vault() -> dict:
+class VaultDecryptError(Exception):
+    """The vault file exists but can't be decrypted (corrupt/truncated ciphertext, or the master
+    key file was lost/replaced). Distinguished from 'no vault yet' so a write never treats an
+    unreadable vault as empty and overwrites every secret."""
+
+
+def _read_file_vault(strict: bool = False) -> dict:
     vf = Path(VAULT_FILE)
     if not vf.exists():
         return {}
@@ -105,8 +111,28 @@ def _read_file_vault() -> dict:
         raw = _fernet().decrypt(vf.read_bytes())
         data = json.loads(raw.decode("utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as e:
+        # A read (get/list) can safely fall back to "empty" — worst case a secret reads as
+        # missing. A WRITE must not: see strict=True in set_key.
+        if strict:
+            raise VaultDecryptError(str(e))
         return {}
+
+
+def _backup_corrupt_vault() -> Path | None:
+    """Preserve an undecryptable vault.enc as vault.enc.corrupt so a later key-file recovery can
+    still get the secrets back, instead of them being silently overwritten. Returns the backup
+    path (or None). Won't clobber an existing backup."""
+    vf = Path(VAULT_FILE)
+    try:
+        if not vf.exists():
+            return None
+        bak = vf.with_suffix(vf.suffix + ".corrupt")
+        if not bak.exists():
+            bak.write_bytes(vf.read_bytes())
+        return bak
+    except OSError:
+        return None
 
 
 def _write_file_vault(data: dict) -> None:
@@ -155,7 +181,14 @@ def set_key(name: str, value: str) -> bool:
                 idx.append(name)
                 _kr_index_save(kr, idx)
             return True
-        data = _read_file_vault()
+        # strict: if the existing vault can't be decrypted, DO NOT proceed — writing here would
+        # re-encrypt a dict containing only this one key and destroy every other stored secret.
+        # Back the ciphertext up and refuse, so the user (or a restored key file) can recover.
+        try:
+            data = _read_file_vault(strict=True)
+        except VaultDecryptError:
+            _backup_corrupt_vault()
+            return False
         data[name] = value
         _write_file_vault(data)
         return True

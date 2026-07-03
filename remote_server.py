@@ -519,10 +519,11 @@ let front=document.getElementById("screenA"),back=document.getElementById("scree
 let QUAL=[{label:"Speed",maxw:1100,q:62,hd:0},{label:"Balanced",maxw:1500,q:78,hd:1},{label:"Sharp",maxw:1920,q:86,hd:1}],QI=0;
 let SPEEDS=[90,160,300,650],SLABEL=["Ultra","Fast","Smooth","Lite"],SPI=1,SPEED=SPEEDS[SPI];
 async function post(o){o.pin=PIN;o.tok=TOK;try{return (await fetch("/api/event",{method:"POST",body:JSON.stringify(o)})).ok}catch(e){return false}}
+async function postR(o){o.pin=PIN;o.tok=TOK;try{let r=await fetch("/api/event",{method:"POST",body:JSON.stringify(o)});if(!r.ok)return{ok:false};try{return await r.json();}catch(e){return{ok:true};}}catch(e){return{ok:false,detail:"can't reach Ember"};}}
 function screenUrl(){let q=QUAL[QI];return `/api/screen?pin=${encodeURIComponent(PIN)}&tok=${encodeURIComponent(TOK)}&hd=${q.hd}&maxw=${q.maxw}&q=${q.q}&t=${Date.now()}`}
 async function pair(){try{let r=await fetch("/api/pair",{method:"POST",body:JSON.stringify({pin:PIN,tok:TOK})});if(r.ok){let j=await r.json();if(j&&j.token){TOK=j.token;localStorage.setItem("ember_tok",TOK);}}}catch(e){}}
 function go(){document.getElementById("gate").style.display="none";loop();pollChat()}
-async function connect(){PIN=document.getElementById("pin").value.trim();let r=await fetch(screenUrl(),{cache:"no-store"});if(!r.ok){document.getElementById("err").textContent="Wrong PIN";return}SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");localStorage.setItem("ember_pin",PIN);await pair();go()}
+async function connect(){PIN=document.getElementById("pin").value.trim();let e=document.getElementById("err");e.textContent="";try{let r=await fetch(screenUrl(),{cache:"no-store"});if(!r.ok){e.textContent="Wrong PIN";return}SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");localStorage.setItem("ember_pin",PIN);await pair();go()}catch(err){e.textContent="Can't reach Ember - check you're on the same Wi-Fi and that Ember Link is running."}}
 async function tryAuto(){if(!TOK&&!PIN)return false;try{let r=await fetch(screenUrl(),{cache:"no-store"});if(r.ok){SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");go();return true;}}catch(e){}return false;}
 async function loop(){if(MODE!=="full"||document.hidden){setTimeout(loop,450);return}if(fetching){setTimeout(loop,70);return}fetching=true;let start=performance.now();
  try{let r=await fetch(screenUrl(),{cache:"no-store"});if(r.ok){let b=await r.blob();let url=URL.createObjectURL(b);
@@ -531,19 +532,33 @@ async function loop(){if(MODE!=="full"||document.hidden){setTimeout(loop,450);re
   // visibility. The VISIBLE image's src is never touched, so it can't flash blank mid-frame
   // (the Kindle e-ink flicker bug).
   back.src=url;
-  try{if(back.decode)await back.decode();else await new Promise(res=>{back.onload=res;back.onerror=res;});}
-  catch(e){await new Promise(res=>{back.onload=res;back.onerror=res;});}
+  // Wait for the frame to be paint-ready, but NEVER hang the loop: if decode() rejects on a
+  // truncated frame the error event has usually already fired, so a bare onload/onerror Promise
+  // would never settle and freeze the whole mirror. Guard with back.complete + a timeout.
+  let settle=()=>new Promise(res=>{if(back.complete){res();return}back.onload=res;back.onerror=res;setTimeout(res,400);});
+  try{if(back.decode)await back.decode();else await settle();}
+  catch(e){await settle();}
   front.style.display="none";back.style.display="block";
   let oldFront=front,oldUrl=lastUrl;front=back;back=oldFront;lastUrl=url;
   if(oldUrl)URL.revokeObjectURL(oldUrl);
   SW=+r.headers.get("X-Screen-W")||SW;SH=+r.headers.get("X-Screen-H")||SH;document.getElementById("tag").textContent=`live · ${Math.round(b.size/1024)} KB`}}catch(e){document.getElementById("tag").textContent="reconnecting"}finally{fetching=false;setTimeout(loop,Math.max(35,SPEED-(performance.now()-start)))}}
-function pxy(e){let b=hit.getBoundingClientRect();let rx=(e.clientX-b.left)/b.width,ry=(e.clientY-b.top)/b.height;let x,y;
+function imgRect(){
+ // Map taps to the ACTUAL rendered mirror image, not the full #screenhit box. The image is
+ // letterboxed (object-fit:contain) inside a fixed-height wrap, so on a portrait phone against a
+ // wide desktop the image fills only part of the box - measuring the box would send every tap to
+ // the wrong desktop coordinate. Derive the contained image rect from its natural size.
+ let el=front,b=el.getBoundingClientRect();
+ let nw=el.naturalWidth||SW||b.width,nh=el.naturalHeight||SH||b.height;
+ if(!nw||!nh||!b.width||!b.height)return b;
+ let scale=Math.min(b.width/nw,b.height/nh),w=nw*scale,h=nh*scale;
+ return {left:b.left+(b.width-w)/2,top:b.top+(b.height-h)/2,width:w,height:h};}
+function pxy(e){let b=imgRect();let rx=(e.clientX-b.left)/b.width,ry=(e.clientY-b.top)/b.height;let x,y;
  if(FAKEFS){x=ry;y=1-rx;}else{x=rx;y=ry;}   // landscape fake-fullscreen rotates the mirror 90° CW
  if(x<0||x>1||y<0||y>1)return null;return{x:Math.round(x*SW),y:Math.round(y*SH),cx:e.clientX,cy:e.clientY}}
 let sd=null,screenDrag=false,lastDrag=0;
 hit.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefault();hit.setPointerCapture&&hit.setPointerCapture(e.pointerId);sd=p;screenDrag=dragLock;if(dragLock)post({t:"dragstart",x:p.x,y:p.y});});
 hit.addEventListener("pointermove",e=>{if(!sd)return;let p=pxy(e);if(!p)return;e.preventDefault();let moved=Math.abs(p.cx-sd.cx)+Math.abs(p.cy-sd.cy);if(!screenDrag&&moved>9){screenDrag=true;post({t:"dragstart",x:sd.x,y:sd.y});document.getElementById("tag").textContent="dragging"}if(screenDrag&&performance.now()-lastDrag>16){post({t:"dragto",x:p.x,y:p.y});lastDrag=performance.now()}});
-function screenEnd(e){if(!sd)return;let p=pxy(e)||sd;e.preventDefault();if(screenDrag){post({t:"dragend",x:p.x,y:p.y});document.getElementById("tag").textContent="dropped"}else{post({t:"moveto",x:p.x,y:p.y});post({t:"click"});document.getElementById("tag").textContent="clicked"}sd=null;screenDrag=false;setTimeout(()=>document.getElementById("tag").textContent="live",450)}
+function screenEnd(e){if(!sd)return;let p=pxy(e)||sd;e.preventDefault();if(screenDrag){post({t:"dragend",x:p.x,y:p.y});document.getElementById("tag").textContent="dropped"}else{post({t:"clickat",x:p.x,y:p.y});document.getElementById("tag").textContent="clicked"}sd=null;screenDrag=false;setTimeout(()=>document.getElementById("tag").textContent="live",450)}
 hit.addEventListener("pointerup",screenEnd);hit.addEventListener("pointercancel",screenEnd);
 function attachWheelScroll(el){if(!el)return;let accum=0,last=0;
  el.addEventListener("wheel",e=>{e.preventDefault();accum-=e.deltaY;let now=performance.now();if(now-last>16){post({t:"scroll",a:Math.max(-8,Math.min(8,Math.round(accum/30)))});accum=0;last=now}},{passive:false});}
@@ -564,8 +579,8 @@ attachWheelScroll(hit);   // two-finger scroll over the live screen mirror also 
 attachPad(document.getElementById("fsPad"));attachWheelScroll(document.getElementById("fsPad"));
 function ev(k){post({t:k})}function scroll(a){post({t:"scroll",a:a})}function key(k){post({t:"key",k:k})}
 function flash(m){let t=document.getElementById("tag");if(t){t.textContent=m;setTimeout(()=>{t.textContent="live"},900)}}
-function macro(n){post({t:"macro",name:n});flash(n.replace(/_/g," ")+" ✓")}
-function runcmd(){let i=document.getElementById("cmdx");if(i&&i.value){post({t:"macro_cmd",cmd:i.value});flash("ran ✓");i.value=""}}
+async function macro(n){let label=n.replace(/_/g," ");let r=await postR({t:"macro",name:n});if(r&&r.ok!==false){flash(label+" ✓")}else{flash("✗ "+((r&&r.detail)||label+" failed"))}}
+async function runcmd(){let i=document.getElementById("cmdx");if(!i||!i.value)return;let cmd=i.value;i.value="";let r=await postR({t:"macro_cmd",cmd:cmd});if(r&&r.ok!==false){flash("ran ✓")}else{flash("✗ "+((r&&r.detail)||"command failed"))}}
 function sendtext(){let i=document.getElementById("tx");if(i.value){post({t:"type",text:i.value});i.value=""}}
 function toggleFsKb(){let on=document.getElementById("screenwrap").classList.toggle("fskb");if(on)setTimeout(()=>document.getElementById("fsKbInput").focus(),60)}
 function sendFsText(){let i=document.getElementById("fsKbInput");if(i.value){post({t:"type",text:i.value});i.value=""}}
@@ -592,6 +607,12 @@ async function chatTick(){if(!PIN&&!TOK){chatLoop=false;return}try{let r=await f
 async function sendChat(){let i=document.getElementById("chatInput"),text=i.value.trim();if(!text)return;i.value="";await fetch("/api/chat",{method:"POST",body:JSON.stringify({pin:PIN,tok:TOK,text})});pollChat()}
 document.querySelectorAll("[data-chat]").forEach(b=>b.addEventListener("click",()=>{document.getElementById("chatInput").value=b.dataset.chat;sendChat()}));
 document.getElementById("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChat()}});
+// A magic-link fragment (#tok=…) carries the pairing token to THIS origin. localStorage is
+// per-ORIGIN, so a phone that paired on the LAN origin (http://192.168.x.x:8765) has NO token on
+// the public tunnel origin (https://…trycloudflare.com) - "open the link from anywhere" could
+// never authenticate. Read the token out of the URL, persist it for this origin, then strip it
+// from the address bar so it isn't left in history or a screenshot.
+(function(){try{let m=(location.hash||"").match(/tok=([^&]+)/);if(m&&m[1]){TOK=decodeURIComponent(m[1]);localStorage.setItem("ember_tok",TOK);history.replaceState(null,"",location.pathname+location.search);}}catch(e){}})();
 // Already paired on this device? Reconnect automatically (works from any network via the token).
 tryAuto();
 </script></body></html>"""
@@ -640,18 +661,25 @@ class _Handler(BaseHTTPRequestHandler):
         The PIN is deliberately rejected for non-LAN-looking source addresses - see _is_lan_ip -
         so a public tunnel can never be brute-forced with the 6-digit PIN, only a real token."""
         ip = self.client_address[0] if self.client_address else "?"
+        # A valid 32-byte pairing token is NOT brute-forceable and must be honoured BEFORE the
+        # PIN lockout is consulted. Every tunnel-relayed request shares ip 127.0.0.1, so if the
+        # lockout gated token auth too, anyone who found the public URL could send 5 junk PINs
+        # and lock out every legitimately-paired device (persistent remote-access DoS). The
+        # lockout therefore only ever throttles PIN attempts.
+        if _token_valid(tok):
+            _STATE["last_active"] = time.time()  # refresh the idle-timeout watchdog
+            return True
         if _auth_locked(ip):
             time.sleep(1.0)  # slow even the rejection while locked out
             return False
         pin_ok = (bool(_STATE["pin"]) and _is_lan_ip(ip)
                   and secrets.compare_digest(str(pin or ""), str(_STATE["pin"])))
-        ok = pin_ok or _token_valid(tok)
-        if ok:
+        if pin_ok:
             _STATE["last_active"] = time.time()  # refresh the idle-timeout watchdog
         else:
             time.sleep(0.3)  # cap brute-force throughput
-        _auth_record(ip, ok)
-        return ok
+        _auth_record(ip, pin_ok)
+        return pin_ok
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/index"):
@@ -775,8 +803,20 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._auth(o.get("pin"), o.get("tok")):
             self.send_response(403); self.end_headers(); return
         try:
-            _apply(o)
-            self.send_response(204); self.end_headers()
+            result = _apply(o)
+            if isinstance(result, dict):
+                # Macros (Lock PC / Mic Off / run-command) return a real {ok, detail}; hand it
+                # back so the phone can flash the ACTUAL outcome instead of always claiming "✓"
+                # even when the action failed (e.g. mic mute unsupported on this OS).
+                body = json.dumps(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(204); self.end_headers()
         except Exception:
             self.send_response(500); self.end_headers()
 
@@ -805,6 +845,12 @@ def _apply_locked(o: dict):
         pyautogui.moveTo(int(o.get("x", 0)), int(o.get("y", 0)), duration=0)
         pyautogui.mouseUp()
     elif t == "click":
+        pyautogui.click()
+    elif t == "clickat":
+        # Move + click as ONE locked operation. Sending them as two separate POSTs let the
+        # click race ahead of the move on a different server thread and land at the old cursor
+        # position ("tapped the wrong thing" bugs the user couldn't reproduce).
+        pyautogui.moveTo(int(o.get("x", 0)), int(o.get("y", 0)), duration=0)
         pyautogui.click()
     elif t == "dclick":
         pyautogui.doubleClick()
@@ -1024,13 +1070,14 @@ def start(port: int = 8765, pin: str | None = None, idle_timeout: float = 1800.0
 
 
 # Remote-access (beyond-Wi-Fi) tunnel — OFF by default; the user opts in via enable_remote().
-_REMOTE = {"tunnel": None}
+_REMOTE = {"tunnel": None, "link": ""}
 
 
 def enable_remote(port: int | None = None) -> dict:
     """Open a public tunnel so Ember Link is reachable from outside the Wi-Fi. The server must be
-    running. Remote connections still require a pairing token (issued on the LAN), so the short
-    PIN is never exposed to the internet. Returns {ok, url} (the anywhere-URL) or an error+hint."""
+    running. The returned `link` embeds a fresh pairing token in its #fragment so opening it on a
+    phone signs in automatically from ANY network - the short PIN is never exposed to the internet
+    (the tunnel origin only ever accepts the token). Returns {ok, url, link, pin} or an error."""
     if not _STATE.get("server"):
         return {"ok": False, "error": "start Ember Link first"}
     try:
@@ -1045,12 +1092,21 @@ def enable_remote(port: int | None = None) -> dict:
     if res.get("ok"):
         _STATE["last_active"] = time.time()
         res["pin"] = _STATE.get("pin")
-        res["hint"] = ("On your phone (on the same Wi-Fi first) open the LOCAL link and enter the "
-                       "PIN once to pair, then this link works from anywhere: " + res["url"])
+        # Bake a pairing token into the shareable link so roaming actually works (a phone can't
+        # carry the token it earned on the LAN origin over to the tunnel origin - separate
+        # localStorage). The link is unguessable (43-char token), so it's the credential; the
+        # page reads it out of the #fragment and stores it for the tunnel origin.
+        base = (res.get("url") or "").rstrip("/")
+        link = f"{base}/#tok={issue_pair_token()}" if base else ""
+        _REMOTE["link"] = link
+        res["link"] = link
+        res["hint"] = ("Open this link on your phone from any network - it signs in "
+                       "automatically: " + (link or res.get("url", "")))
     return res
 
 
 def disable_remote() -> dict:
+    _REMOTE["link"] = ""
     tm = _REMOTE.get("tunnel")
     if tm is None:
         return {"ok": True, "stopped": False}
@@ -1061,6 +1117,11 @@ def disable_remote() -> dict:
 def remote_url() -> str:
     tm = _REMOTE.get("tunnel")
     return (tm.status().get("url") if tm else "") or ""
+
+
+def remote_link() -> str:
+    """The full shareable magic link (tunnel URL + embedded token), or '' if remote is off."""
+    return _REMOTE.get("link") or ""
 
 
 def stop() -> dict:
@@ -1083,4 +1144,5 @@ def stop() -> dict:
 def status() -> dict:
     return {"ok": True, "running": bool(_STATE.get("server")),
             "url": _STATE.get("url"), "pin": _STATE.get("pin"),
-            "remote_url": remote_url(), "paired": paired_count()}
+            "remote_url": remote_url(), "remote_link": remote_link(),
+            "paired": paired_count()}

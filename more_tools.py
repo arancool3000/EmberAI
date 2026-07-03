@@ -470,7 +470,12 @@ def power_action(action: str, force: bool = False) -> dict:
         return {"ok": False, "error": "Windows only"}
     cmds = {
         "lock": "rundll32.exe user32.dll,LockWorkStation",
-        "sleep": "rundll32.exe powrprof.dll,SetSuspendState 0,1,0",
+        # The old rundll32 powrprof SetSuspendState call doesn't pass its numeric args as the
+        # function's params, so with hibernation enabled it HIBERNATES (full power-off, drops the
+        # network) instead of sleeping. The .NET API takes an explicit PowerState, so 'Suspend'
+        # reliably requests sleep (S3), not hibernate.
+        "sleep": ("powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; "
+                  "[System.Windows.Forms.Application]::SetSuspendState('Suspend',$false,$false)\""),
         "hibernate": "shutdown /h",
         "restart": f"shutdown /r /t 0{' /f' if force else ''}",
         "shutdown": f"shutdown /s /t 0{' /f' if force else ''}",
@@ -751,10 +756,21 @@ def git_diff(repo: str = ".", staged: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 # Calendar (.ics file output - works with any calendar app)
 # ---------------------------------------------------------------------------
+def _ics_dt(dt: datetime) -> str:
+    """RFC 5545 date-time value. A timezone-AWARE datetime is emitted in UTC with a trailing 'Z';
+    a NAIVE one stays floating local time (bare). Emitting a bare value for an aware input would
+    silently drop the offset, so a '15:00Z' meeting would import as 15:00 LOCAL — an hour (or
+    more) wrong for every non-UTC user."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return dt.strftime("%Y%m%dT%H%M%S")
+
+
 def create_calendar_event(title: str, start: str, end: str | None = None,
                            description: str = "", location: str = "",
                            destination: str | None = None) -> dict:
-    """Build an .ics calendar event file. start/end ISO 8601 e.g. 2026-06-01T15:00:00."""
+    """Build an .ics calendar event file. start/end ISO 8601 e.g. 2026-06-01T15:00:00 (naive =
+    local time) or 2026-06-01T15:00:00Z / +01:00 (timezone-aware, written as UTC)."""
     try:
         s = datetime.fromisoformat(start.replace("Z", "+00:00"))
         e = datetime.fromisoformat(end.replace("Z", "+00:00")) if end else s + timedelta(hours=1)
@@ -762,9 +778,9 @@ def create_calendar_event(title: str, start: str, end: str | None = None,
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Ember//EN\r\n"
             "BEGIN:VEVENT\r\n"
             f"UID:{uuid.uuid4()}@ember\r\n"
-            f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}\r\n"
-            f"DTSTART:{s.strftime('%Y%m%dT%H%M%S')}\r\n"
-            f"DTEND:{e.strftime('%Y%m%dT%H%M%S')}\r\n"
+            f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}\r\n"
+            f"DTSTART:{_ics_dt(s)}\r\n"
+            f"DTEND:{_ics_dt(e)}\r\n"
             f"SUMMARY:{title}\r\n"
             f"DESCRIPTION:{description}\r\n"
             f"LOCATION:{location}\r\n"

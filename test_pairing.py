@@ -141,6 +141,57 @@ def test_token_still_works_from_loopback_ie_through_the_tunnel():
     assert h._auth("", tok) is True
 
 
+def test_valid_token_bypasses_the_pin_lockout_dos():
+    # Every tunnel request shares ip 127.0.0.1. An attacker who finds the public URL can spray
+    # junk PINs to lock out 127.0.0.1 - but that must NEVER lock out legitimately-paired devices,
+    # which ALSO arrive as 127.0.0.1. A valid token has to authenticate even while that IP is
+    # locked for PIN attempts, or remote access is a one-request DoS.
+    orig_sleep = rs.time.sleep
+    rs.time.sleep = lambda *a, **k: None  # don't actually wait out the throttle in the test
+    try:
+        tok = rs.issue_pair_token()
+        attacker = _Fake(ip="127.0.0.1")
+        for _ in range(rs._AUTH_MAX_FAILS + 2):
+            attacker._auth("000000")                 # burst of wrong PINs from the tunnel IP
+        assert rs._auth_locked("127.0.0.1") is True  # that IP is now locked for PIN attempts
+        legit = _Fake(ip="127.0.0.1")
+        assert legit._auth("", tok) is True          # ...but the paired device's TOKEN still works
+    finally:
+        rs.time.sleep = orig_sleep
+
+
+def test_enable_remote_bakes_a_working_token_into_the_magic_link():
+    # localStorage is per-origin, so a phone can't carry its LAN-earned token to the tunnel
+    # origin. enable_remote must therefore embed a real pairing token in the shareable link so
+    # "open the link from anywhere" actually signs in.
+    class _TM:
+        def start(self, port, **k):
+            return {"ok": True, "url": "https://abc-def-ghi.trycloudflare.com"}
+        def stop(self):
+            return {"ok": True, "stopped": True}
+        def status(self):
+            return {"url": "https://abc-def-ghi.trycloudflare.com", "running": True}
+    rs._STATE["server"] = object()   # pretend Ember Link is running
+    rs._STATE["port"] = 8765
+    rs._REMOTE["tunnel"] = _TM()
+    rs._REMOTE["link"] = ""
+    try:
+        res = rs.enable_remote()
+        assert res["ok"] is True
+        assert res["link"].startswith("https://abc-def-ghi.trycloudflare.com/#tok=")
+        tok = res["link"].split("#tok=", 1)[1]
+        assert len(tok) >= 20
+        # the embedded token authenticates through the tunnel (loopback), exactly like a phone
+        # that opened the magic link would.
+        assert _Fake(ip="127.0.0.1")._auth("", tok) is True
+        assert rs.remote_link() == res["link"]
+        assert rs.status().get("remote_link") == res["link"]
+    finally:
+        rs._STATE["server"] = None
+        rs._REMOTE["tunnel"] = None
+        rs._REMOTE["link"] = ""
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

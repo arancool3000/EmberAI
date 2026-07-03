@@ -1016,9 +1016,19 @@ def scan_file(path: str, deep: bool = True) -> dict:
             reasons.append("matches a known-malicious file hash")
 
         # 3) Platform antivirus (definitive).
+        scan_errored = False
         for backend in (_scan_windows_defender, _scan_clamav):
             res = backend(p)
             if res is None:
+                continue
+            if res.get("scan_error"):
+                # A backend that ERRORED (encrypted/corrupt archive, engine failure) has NOT
+                # cleared the file. Don't list it as a passed engine and remember the failure, so
+                # a "clean" verdict is never reported on the strength of a scan that didn't run.
+                scan_errored = True
+                engines.append(f"{res['engine']} (scan error)")
+                reasons.append(f"{res['engine']} could not scan this file: "
+                               f"{res.get('error', 'scan error')}")
                 continue
             engines.append(res["engine"])
             if res.get("malicious"):
@@ -1049,7 +1059,7 @@ def scan_file(path: str, deep: bool = True) -> dict:
 
         return {"ok": True, "path": str(p), "sha256": sha, "verdict": verdict,
                 "score": score, "reasons": reasons or ["no indicators found"],
-                "engines": engines, "size": size}
+                "engines": engines, "size": size, "scan_error": scan_errored}
     except Exception as e:
         return {"ok": False, "error": f"scan failed: {e}", "verdict": "unknown"}
 
@@ -1374,6 +1384,24 @@ def gate_open(path: str) -> dict:
         result["allowed"] = False
         result["handled"] = _handle_malicious(str(p), scan)
         result["message"] = "Blocked: this file is malicious and has been quarantined."
+        return result
+
+    # A backend couldn't finish scanning (encrypted/corrupt archive, engine error): the "clean"
+    # verdict below was never actually earned by any engine. Fail CLOSED - hold for review - just
+    # like a file we couldn't scan at all, instead of trusting an incomplete scan.
+    if scan.get("scan_error") and cfg.get("block_on_scan_error", True):
+        ai = ai_assess_file(str(p)) if use_ai else {"available": False, "verdict": "unknown"}
+        result["ai_verdict"] = ai.get("verdict")
+        if ai.get("verdict") == "malicious":
+            result["allowed"] = False
+            result["handled"] = _handle_malicious(str(p), scan)
+            result["message"] = "Blocked: an AI review flagged this partly-unscannable file as malicious."
+            return result
+        result["allowed"] = False
+        result["blocked"] = True
+        result["needs_confirmation"] = True
+        result["message"] = ("Held for review: part of this file couldn't be scanned "
+                             "(e.g. an encrypted or corrupt archive). Confirm it's safe to open it.")
         return result
 
     # Decide whether this UNCONFIRMED file needs holding: heuristically suspicious, or an

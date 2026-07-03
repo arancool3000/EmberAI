@@ -62,6 +62,48 @@ def test_scan_network_flags_backdoor_and_shell():
     _reset()
 
 
+def test_jupyter_on_loopback_is_not_flagged_as_a_backdoor():
+    # A developer running a notebook (or any local dev server) on 127.0.0.1 must NOT be reported
+    # as a backdoor - it isn't reachable from the network, and 8888/5555/1234/9001/9999 are dev
+    # tools far more often than malware. This was recurring, alert-spamming false positive #1.
+    _reset()
+    sc._NET_ENUM = lambda: [
+        {"pid": 20, "name": "python3", "laddr": "127.0.0.1:8888", "raddr": "",
+         "lport": 8888, "rport": None, "status": "LISTEN"},          # Jupyter
+        {"pid": 21, "name": "node", "laddr": "127.0.0.1:1234", "raddr": "",
+         "lport": 1234, "rport": None, "status": "LISTEN"},          # dev server
+        {"pid": 22, "name": "adb", "laddr": "127.0.0.1:5555", "raddr": "",
+         "lport": 5555, "rport": None, "status": "LISTEN"},          # android debug bridge
+    ]
+    r = sc.scan_network()
+    assert r["ok"] and r["flagged_count"] == 0, r
+    _reset()
+
+
+def test_real_backdoor_listener_still_flagged_even_after_dev_port_cleanup():
+    _reset()
+    sc._NET_ENUM = lambda: [
+        # network-reachable listener on a malware port -> still suspicious
+        {"pid": 30, "name": "svchost", "laddr": "0.0.0.0:4444", "raddr": "",
+         "lport": 4444, "rport": None, "status": "LISTEN"},
+        # a shell listening even on loopback is the reverse-shell pattern -> still suspicious
+        {"pid": 31, "name": "nc", "laddr": "127.0.0.1:6667", "raddr": "",
+         "lport": 6667, "rport": None, "status": "LISTEN"},
+    ]
+    r = sc.scan_network()
+    assert r["flagged_count"] == 2, r
+    _reset()
+
+
+def test_laddr_is_loopback_classifier():
+    assert sc._laddr_is_loopback("127.0.0.1:8888") is True
+    assert sc._laddr_is_loopback("[::1]:8888") is True
+    assert sc._laddr_is_loopback("localhost:8888") is True
+    assert sc._laddr_is_loopback("0.0.0.0:4444") is False
+    assert sc._laddr_is_loopback("*:4444") is False
+    assert sc._laddr_is_loopback("10.0.0.2:4444") is False
+
+
 def test_scan_network_known_bad_ip_is_malicious():
     _reset()
     sig = Path(_TMP) / "signatures.json"

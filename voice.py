@@ -179,21 +179,59 @@ def _system_tts(text: str):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _play_audio_file(path: str):
-    """Play an audio file via the OS player, tracked in _say_proc so stop_speaking() can cut it."""
+def _audio_player_cmd(path: str):
+    """Pick a player that can ACTUALLY decode this file's format. Returns a command list, or None
+    if no suitable player is installed. The neural engines (edge/soundtools) emit MP3, and the
+    old players (Windows System.Media.SoundPlayer, Linux `aplay`) are PCM-WAV-ONLY — they throw on
+    MP3 with stderr swallowed, so Ember went silently mute on Windows/Linux for the recommended
+    free 'edge' voice. This routes MP3 to an MP3-capable player instead."""
+    import shutil
+    ext = Path(path).suffix.lower()
+    if sys.platform == "darwin":
+        return ["afplay", path]   # afplay handles wav + mp3 natively
+    if sys.platform.startswith("win"):
+        # System.Windows.Media.MediaPlayer decodes BOTH wav and mp3 (SoundPlayer only wav). Open,
+        # play, then block for the clip's duration so the process doesn't exit mid-speech.
+        uri = path.replace("'", "''")
+        ps = ("Add-Type -AssemblyName presentationCore;"
+              "$p=New-Object System.Windows.Media.MediaPlayer;"
+              f"$p.Open([uri]'{uri}');"
+              "$n=0; while(-not $p.NaturalDuration.HasTimeSpan -and $n -lt 50){Start-Sleep -Milliseconds 100; $n++};"
+              "$p.Play();"
+              "if($p.NaturalDuration.HasTimeSpan){Start-Sleep -Seconds ([math]::Ceiling($p.NaturalDuration.TimeSpan.TotalSeconds)+1)}else{Start-Sleep -Seconds 10};"
+              "$p.Stop(); $p.Close()")
+        return ["powershell", "-NoProfile", "-c", ps]
+    # Linux: prefer MP3-capable players for .mp3; any of these handle wav too.
+    if ext == ".mp3":
+        candidates = [["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+                      ["mpg123", "-q", path],
+                      ["mpv", "--no-video", "--really-quiet", path],
+                      ["cvlc", "--play-and-exit", "--quiet", path]]
+    else:
+        candidates = [["aplay", "-q", path], ["paplay", path],
+                      ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+                      ["mpv", "--no-video", "--really-quiet", path]]
+    for cmd in candidates:
+        if shutil.which(cmd[0]):
+            return cmd
+    return None
+
+
+def _play_audio_file(path: str) -> bool:
+    """Play an audio file via a format-appropriate OS player, tracked in _say_proc so
+    stop_speaking() can cut it. Returns True if a player was launched, False if none could handle
+    the file — so the caller (edge/gemini/soundtools TTS) can fall back to the system voice
+    instead of going silently mute."""
     global _say_proc
     stop_speaking()
+    cmd = _audio_player_cmd(path)
+    if cmd is None:
+        return False
     try:
-        if sys.platform == "darwin":
-            cmd = ["afplay", path]
-        elif sys.platform.startswith("win"):
-            cmd = ["powershell", "-NoProfile", "-c",
-                   f"(New-Object Media.SoundPlayer '{path}').PlaySync()"]
-        else:
-            cmd = ["aplay", path]
         _say_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _pcm_to_wav(pcm: bytes, path: str, rate: int = 24000):
@@ -228,8 +266,7 @@ def _gemini_tts(text: str) -> bool:
         import tempfile
         out = str(Path(tempfile.gettempdir()) / f"ember_tts_{int(time.time() * 1000)}.wav")
         _pcm_to_wav(pcm, out)
-        _play_audio_file(out)
-        return True
+        return _play_audio_file(out)
     except Exception:
         return False
 
@@ -250,8 +287,7 @@ def _edge_tts(text: str) -> bool:
         asyncio.run(_synth())
         if not Path(out).exists() or Path(out).stat().st_size == 0:
             return False
-        _play_audio_file(out)
-        return True
+        return _play_audio_file(out)
     except Exception:
         return False
 
@@ -289,8 +325,7 @@ def _soundtools_tts(text: str) -> bool:
         ext = ".mp3" if "mpeg" in (ctype or r.headers.get("Content-Type", "")) else ".wav"
         out = str(Path(tempfile.gettempdir()) / f"ember_tts_{int(time.time() * 1000)}{ext}")
         Path(out).write_bytes(r.content)
-        _play_audio_file(out)
-        return True
+        return _play_audio_file(out)
     except Exception:
         return False
 

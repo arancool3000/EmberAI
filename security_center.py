@@ -47,9 +47,13 @@ _SUPERVISE_TICK = 2.0          # how often the supervisor wakes to check schedul
 _EVENTS_MAXLEN = 400           # bounded aggregated threat feed
 _FIRST_SWEEP_DELAY = 45        # delay the first (heavier) file sweep after launch
 
-# Ports a backdoor / reverse shell commonly listens on.
-_BACKDOOR_PORTS = {1337, 1234, 2323, 4321, 4444, 4445, 5554, 5555, 6666, 6667,
-                   7777, 8888, 9001, 9002, 9999, 12345, 12346, 31337, 54321}
+# Ports a backdoor / reverse shell commonly listens on. Deliberately EXCLUDES ports that are
+# far more often legitimate dev tools than malware (1234, 5555 = adb, 8888 = Jupyter, 9001,
+# 9999) - flagging those turned every developer running a notebook into a recurring "backdoor"
+# alert. What's left is dominated by malware families (31337/1337 elite, 4444/4445 Metasploit,
+# 6666/6667 IRC bots, 12345/12346 NetBus, 5554 Sasser, 2323 Mirai-telnet, 54321).
+_BACKDOOR_PORTS = {1337, 2323, 4321, 4444, 4445, 5554, 6666, 6667,
+                   7777, 9002, 12345, 12346, 31337, 54321}
 # Ports commonly used by crypto-mining pools.
 _MINER_PORTS = {3032, 3333, 3357, 4444, 5555, 7777, 8333, 14444, 45560, 45700}
 # Interpreters/tools that should rarely hold their own network connections.
@@ -293,6 +297,15 @@ def _own_pids() -> set:
     return pids
 
 
+def _laddr_is_loopback(laddr: str) -> bool:
+    """True if a local listen address binds only loopback (127.x / ::1 / localhost), i.e. it is
+    NOT reachable from the network. '*', '0.0.0.0' and '::' are network-reachable -> False."""
+    ip = (laddr or "").rsplit(":", 1)[0].strip().strip("[]")
+    if ip in ("*", "0.0.0.0", "::", ""):
+        return False
+    return ip == "localhost" or ip == "::1" or ip.startswith("127.")
+
+
 def _evaluate_connection(c: dict, bad_ips: set) -> tuple[str, str]:
     """Return (severity, detail). severity in clean|suspicious|malicious."""
     status = (c.get("status") or "").upper()
@@ -304,7 +317,12 @@ def _evaluate_connection(c: dict, bad_ips: set) -> tuple[str, str]:
     if rip and rip in bad_ips:
         return "malicious", f"connection to known-malicious host {raddr} ({name or 'unknown'})"
     if "LISTEN" in status and lport in _BACKDOOR_PORTS:
-        return "suspicious", f"process is listening on backdoor port {lport} ({name or 'unknown'})"
+        # A loopback-only listener (127.0.0.1 / ::1) isn't reachable from the network, so it can't
+        # be a remotely-usable backdoor - it's a local dev tool. Only flag a backdoor-port listen
+        # when it's network-reachable, OR when the listener is itself a shell/interpreter (the
+        # actual reverse-shell pattern), which keeps genuine threats caught without nagging devs.
+        if (not _laddr_is_loopback(c.get("laddr") or "")) or (name in _NET_SHELLS):
+            return "suspicious", f"process is listening on backdoor port {lport} ({name or 'unknown'})"
     if status.startswith("ESTAB"):
         # Don't flag Ember's OWN python (it talks to the Gemini/Claude API) as a reverse shell.
         if name in _NET_SHELLS and c.get("pid") not in _own_pids():

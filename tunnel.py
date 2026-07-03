@@ -65,15 +65,23 @@ class TunnelManager:
     def _read(self, proc):
         try:
             for line in (proc.stdout or []):
-                if self._url:
-                    break
                 u = parse_tunnel_url(line if isinstance(line, str) else str(line))
-                if u:
-                    with self._lock:
+                with self._lock:
+                    # A reader draining an OLD process's buffered stdout (after stop()+start())
+                    # must never clobber the NEW tunnel's URL - otherwise toggling remote access
+                    # off/on can leave the dialog showing/copying a dead tunnel URL. Bail the
+                    # moment this isn't the current process, and only ever set a URL once.
+                    if self._proc is not proc:
+                        return
+                    if self._url:
+                        return
+                    if u:
                         self._url = u
-                    break
+                        return
         except Exception as e:
-            self._error = str(e)
+            with self._lock:
+                if self._proc is proc:
+                    self._error = str(e)
 
     def start(self, port: int, wait: float = 12.0) -> dict:
         """Start the tunnel and wait up to `wait` seconds for it to report a public URL."""
@@ -114,6 +122,16 @@ class TunnelManager:
         if proc is not None:
             try:
                 proc.terminate()
+                # Reap the child so a terminated cloudflared doesn't linger as a zombie; escalate
+                # to kill() if it ignores SIGTERM.
+                if hasattr(proc, "wait"):
+                    try:
+                        proc.wait(timeout=3)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
             except Exception:
                 pass
         return {"ok": True, "stopped": bool(proc)}
