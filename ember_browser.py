@@ -436,6 +436,20 @@ if WEBENGINE_OK:
                 return False
             return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
+        def createWindow(self, _type):
+            """Links with target="_blank", window.open(), and ctrl/middle-click "open in new
+            tab" all ask the PAGE to make a new window. QtWebEngine calls this to get one; the
+            default returns None, so those links get silently DROPPED — which is exactly why they
+            "don't open in a new tab or open at all". Route them to a real new Ember tab and hand
+            back its page for the engine to load the target URL into."""
+            browser = getattr(self, "_browser", None)
+            if browser is not None:
+                try:
+                    return browser._new_tab_page()
+                except Exception:
+                    pass
+            return super().createWindow(_type)
+
 
 def _ddg(query: str):
     """Fetch a few organic web results from DuckDuckGo's HTML endpoint."""
@@ -721,9 +735,12 @@ class EmberBrowser(QWidget):
             self.showNormal()
 
     # ---- tabs ----
-    def _new_tab(self, url: str | None = None):
+    def _new_tab(self, url: str | None = None, *, blank: bool = False):
         view = QWebEngineView()
         page = _Page(self._profile, view)
+        # Back-reference so the page's createWindow() can open target=_blank / window.open links
+        # as real Ember tabs instead of dropping them.
+        page._browser = self
         # Queued, NOT direct: _ember_search calls setHtml, and doing that synchronously from
         # inside acceptNavigationRequest re-enters QtWebEngine and crashes. Defer to the loop.
         page.searchRequested.connect(self._ember_search, Qt.ConnectionType.QueuedConnection)
@@ -731,7 +748,9 @@ class EmberBrowser(QWidget):
         view.setPage(page)
         s = view.settings()
         try:
-            s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
+            # True (with createWindow above) so window.open() opens a new TAB; without it, JS-
+            # opened links do nothing. Anchor target=_blank works regardless via createWindow.
+            s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
             s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, False)
             s.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, False)
             s.setAttribute(QWebEngineSettings.WebAttribute.ScreenCaptureEnabled, False)
@@ -755,9 +774,16 @@ class EmberBrowser(QWidget):
         self.tabs.setCurrentIndex(idx)
         if url:
             self._navigate(url, view)
-        else:
+        elif not blank:
             view.setHtml(self._home_html(), QUrl(f"https://{SEARCH_HOST}/"))
+        # blank=True: leave the page empty — createWindow returns it and the engine loads the
+        # target URL into it (loading home first would just be overwritten).
         return view
+
+    def _new_tab_page(self):
+        """Open a blank foreground tab and return its page — used by _Page.createWindow so
+        new-tab / target=_blank / window.open links open in a real Ember tab."""
+        return self._new_tab(blank=True).page()
 
     def _close_tab(self, index: int):
         if index < 0:
