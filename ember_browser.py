@@ -164,6 +164,8 @@ a:hover{text-decoration:underline}
   border-left:1px solid var(--line);box-shadow:-14px 0 40px rgba(0,0,0,.34);padding:20px;overflow-y:auto;
   transform:translateX(102%);transition:transform .22s ease;z-index:20}
 .panel.open{transform:translateX(0)}
+.backdrop{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.34);opacity:0;visibility:hidden;transition:opacity .22s ease;z-index:19}
+.backdrop.on{opacity:1;visibility:visible}
 .panel h2{margin:0 0 2px;font-size:18px}
 .panel .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
 .panel .grp{margin:18px 0}
@@ -218,6 +220,10 @@ a:hover{text-decoration:underline}
 .empty{color:var(--muted);text-align:center;padding:26px;font-size:14px}
 .skl{height:14px;border-radius:7px;background:linear-gradient(90deg,var(--card),var(--line),var(--card));background-size:200% 100%;animation:sh 1.2s infinite}
 @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  .tile:hover{transform:none}
+}
 """
 
 # Sets the theme CSS variables from EMBER_CFG BEFORE first paint (runs in <head>), so no flash.
@@ -236,6 +242,15 @@ _SEARCH_HEAD_JS = r"""
     r.style.setProperty('--accent-rgb',rgb(a[0])); r.style.setProperty('--accent2-rgb',rgb(a[1]));
   };
   window.__emberApply(C);
+  // "/" focuses the search box from anywhere (a search-engine convention), unless you're
+  // already typing in a field.
+  document.addEventListener('keydown',function(e){
+    if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&
+       !/^(INPUT|TEXTAREA|SELECT)$/.test((e.target&&e.target.tagName)||'')){
+      var q=document.querySelector('input[name=q]');
+      if(q){e.preventDefault();q.focus();if(q.select)q.select();}
+    }
+  });
 })();
 """
 
@@ -265,7 +280,7 @@ _HOME_JS = r"""
     var html='';
     C.shortcuts.forEach(function(s,i){
       var f=fav(s.url),lt=esc((s.label||host(s.url)||'?').charAt(0).toUpperCase());
-      var ic=f?('<img src="'+esc(f)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><span class=ltr style="display:none">'+lt+'</span>'):('<span class=ltr>'+lt+'</span>');
+      var ic=f?('<img src="'+esc(f)+'" referrerpolicy=no-referrer loading=lazy onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><span class=ltr style="display:none">'+lt+'</span>'):('<span class=ltr>'+lt+'</span>');
       html+='<a class=tile href="'+esc(s.url)+'"><button class=rm data-i="'+i+'" title="Remove">&times;</button>'
         +'<span class=ic>'+ic+'</span><span class=lb>'+esc(s.label||host(s.url))+'</span></a>';
     });
@@ -284,8 +299,10 @@ _HOME_JS = r"""
     var ac=document.getElementById('accIn'); if(ac&&C.preset==='custom')ac.value=C.accent||'#e8632e';
   }
   function apply(){window.__emberApply(C);paintPanel();}
-  function openPanel(){var p=document.getElementById('panel');if(p)p.classList.add('open');}
-  function closePanel(){var p=document.getElementById('panel');if(p)p.classList.remove('open');editing=false;renderTiles();}
+  function setBackdrop(on){var b=document.getElementById('backdrop');if(b)b.classList.toggle('on',on);}
+  function panelOpen(){var p=document.getElementById('panel');return !!(p&&p.classList.contains('open'));}
+  function openPanel(){var p=document.getElementById('panel');if(p)p.classList.add('open');setBackdrop(true);}
+  function closePanel(){var p=document.getElementById('panel');if(p)p.classList.remove('open');setBackdrop(false);editing=false;renderTiles();}
   function save(){
     // round-trip to Python to persist to disk; navigation is blocked (no reload) by the handler.
     try{location.href='https://ember.search/?embercfg='+encodeURIComponent(JSON.stringify(C));}catch(e){}
@@ -293,8 +310,10 @@ _HOME_JS = r"""
 
   document.addEventListener('DOMContentLoaded',function(){
     greet(); setInterval(greet,15000); renderTiles(); paintPanel();
-    var g=document.getElementById('gear'); if(g)g.addEventListener('click',function(){var p=document.getElementById('panel');if(p)p.classList.toggle('open');});
+    var g=document.getElementById('gear'); if(g)g.addEventListener('click',function(){panelOpen()?closePanel():openPanel();});
     var cl=document.getElementById('closePanel'); if(cl)cl.addEventListener('click',closePanel);
+    var bd=document.getElementById('backdrop'); if(bd)bd.addEventListener('click',closePanel);
+    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&panelOpen())closePanel();});
     var sw=document.getElementById('swatches');
     if(sw)Array.prototype.forEach.call(sw.children,function(el){el.addEventListener('click',function(){C.preset=el.getAttribute('data-p');apply();});});
     var ac=document.getElementById('accIn');
@@ -302,12 +321,18 @@ _HOME_JS = r"""
     var seg=document.getElementById('modeSeg');
     if(seg)Array.prototype.forEach.call(seg.children,function(b){b.addEventListener('click',function(){C.mode=b.getAttribute('data-m');apply();});});
     var cs=document.getElementById('clkSwitch'); if(cs)cs.addEventListener('click',function(){C.clock=!C.clock;cs.classList.toggle('on',C.clock);greet();});
-    var addBtn=document.getElementById('scAdd');
-    if(addBtn)addBtn.addEventListener('click',function(){
+    function addShortcut(){
       var l=document.getElementById('scLabel'),u=document.getElementById('scUrl');
       var url=(u.value||'').trim(); if(!url)return;
       if(!/^https?:\/\//i.test(url))url='https://'+url;
-      C.shortcuts.push({label:(l.value||host(url)).trim(),url:url}); l.value='';u.value='';renderTiles();
+      C.shortcuts.push({label:(l.value||host(url)).trim(),url:url}); l.value='';u.value='';renderTiles();u.focus();
+    }
+    var addBtn=document.getElementById('scAdd');
+    if(addBtn)addBtn.addEventListener('click',addShortcut);
+    // Enter in either shortcut field adds it — no need to reach for the button.
+    ['scLabel','scUrl'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el)el.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addShortcut();}});
     });
     var ed=document.getElementById('editBtn'); if(ed)ed.addEventListener('click',function(){editing=!editing;ed.textContent=editing?'Done editing':'Edit shortcuts';renderTiles();});
     var sv=document.getElementById('saveBtn'); if(sv)sv.addEventListener('click',function(){save();closePanel();});
@@ -1174,7 +1199,8 @@ class EmberBrowser(QWidget):
     def _results_header(self, query: str) -> str:
         return ("<div class=rhead><span class=mark>Ember</span>"
                 f"<form class=searchbox action='https://{SEARCH_HOST}/' method=get>{self._SEARCH_SVG}"
-                f"<input name=q autocomplete=off value=\"{_html.escape(query)}\">"
+                "<input name=q autocomplete=off spellcheck=false autocapitalize=off "
+                f"aria-label='Search the web' value=\"{_html.escape(query)}\">"
                 "<button type=submit>Search</button></form></div>")
 
     def _home_html(self) -> str:
@@ -1206,12 +1232,15 @@ class EmberBrowser(QWidget):
             "<button class='pbtn ghost' id=resetBtn style='margin-top:8px'>Reset to default</button></div>"
             "</div>")
         body = (
-            "<button class=gear id=gear title='Customise Ember Search'>&#9881;</button>" + panel +
+            "<div class=backdrop id=backdrop></div>"
+            "<button class=gear id=gear title='Customise Ember Search' "
+            "aria-label='Customise Ember Search'>&#9881;</button>" + panel +
             "<div class=wrap><div class=hero>"
             "<div class=logo>Ember<span class=spark>Search</span></div>"
             "<div class=greet id=greet></div>"
             f"<form class=searchbox action='https://{SEARCH_HOST}/' method=get>{self._SEARCH_SVG}"
-            "<input name=q autofocus autocomplete=off placeholder='Search the web, or ask Ember anything…'>"
+            "<input name=q autofocus autocomplete=off spellcheck=false autocapitalize=off "
+            "aria-label='Search the web' placeholder='Search the web, or ask Ember anything…'>"
             "<button type=submit>Search</button></form>"
             "<div class=tiles id=tiles></div>"
             "</div></div>")
@@ -1287,7 +1316,8 @@ class EmberBrowser(QWidget):
             lt = _html.escape((dom[:1] or "?").upper())
             if dom:
                 fav = _html.escape(f"https://icons.duckduckgo.com/ip3/{dom}.ico")
-                ic = (f"<img src='{fav}' onerror=\"this.style.display='none';"
+                ic = (f"<img src='{fav}' referrerpolicy=no-referrer loading=lazy "
+                      "onerror=\"this.style.display='none';"
                       "this.nextElementSibling.style.display='flex'\">"
                       f"<span class=ltr style='display:none'>{lt}</span>")
             else:

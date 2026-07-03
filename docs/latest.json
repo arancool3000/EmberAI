@@ -1,5 +1,5 @@
 {
-  "version": "1.10.2",
+  "version": "1.10.3",
   "pub_date": "2026-07-03",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.10.2 \u2014 A brand-new Ember Search\n\n\u2022 Ember Browser's built-in search has been completely redesigned \u2014 a polished, colourful start page with a gradient logo, a time-aware greeting, and quick-link tiles with real site icons.\n\u2022 Make it yours: click the gear to open Customise \u2014 pick from 6 colour themes (Ember, Ocean, Forest, Grape, Rose, Slate) or set any custom accent, switch between Dark and Light, toggle the greeting/clock, and add or remove your own shortcut tiles. Your choices are saved and re-tint the whole browser to match.\n\u2022 Redesigned results: instant-answer chips for maths, an AI answer card with one-tap Copy and clickable inline source citations, clean result cards with site icons, and quick links to search the same query on DuckDuckGo, Brave, Google, Startpage or Wikipedia.\n\nBuilds on 1.10.1's Ember Browser fullscreen fix."
+  "notes": "Ember 1.10.3 \u2014 Ember Search polish\n\n\u2022 Press / anywhere on the search or results page to jump straight to the search box.\n\u2022 The Customise panel now dims the page behind it and closes when you click away or press Esc; press Enter in a shortcut field to add it without reaching for the button.\n\u2022 Site icons no longer send a referrer to the icon service (more private) and load lazily.\n\u2022 Respects your system's \"reduce motion\" setting \u2014 the loading shimmer and hover effects calm down.\n\u2022 Small accessibility touches: proper labels on the search box and the Customise button.\n\nBuilds on 1.10.2's brand-new Ember Search."
 }
