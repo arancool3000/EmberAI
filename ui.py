@@ -4396,10 +4396,9 @@ class RemoteLinkDialog(QDialog):
         v.addWidget(self.local_info)
 
         v.addWidget(self._hint(
-            "1. Connect your phone to the SAME Wi-Fi as this computer.\n"
-            "2. Open the address above in the phone browser and enter the PIN.\n"
-            "That pairs the device — after this, 'Connect from anywhere' below will work on that "
-            "same phone even off this Wi-Fi, without re-entering the PIN."))
+            "On the same Wi-Fi: open the address above in your phone browser and enter the PIN.\n"
+            "From anywhere else: turn on 'Connect from anywhere' below and open the private link "
+            "it gives you — no PIN needed on that link."))
 
         line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); v.addWidget(line)
 
@@ -4421,8 +4420,9 @@ class RemoteLinkDialog(QDialog):
 
         v.addWidget(self._hint(
             "Uses an outbound Cloudflare Tunnel (free, no account) — nothing is opened on your "
-            "router. Remote connections need a paired device's token, never the short PIN, so "
-            "pairing on Wi-Fi first is required and safe."))
+            "router. The link carries a long, unguessable token instead of the short PIN, so the "
+            "PIN is never exposed to the internet. Treat the link like a password; 'Revoke all "
+            "pairings' below invalidates every issued link instantly."))
 
         self.paired_label = QLabel("")
         self.paired_label.setStyleSheet("color:#565f89;font-size:11px;")
@@ -4446,17 +4446,22 @@ class RemoteLinkDialog(QDialog):
         lab.setStyleSheet("color:#565f89;font-size:11px;")
         return lab
 
-    def _set_remote_url_display(self, remote_url: str):
-        """The tunnel URL is DELIBERATELY a long, random-looking subdomain — that randomness is
-        what makes it safe to expose (nothing to guess), not a bug. Label it plainly so it isn't
-        mistaken for something wrong."""
-        self._remote_url = remote_url
-        if remote_url:
+    def _set_remote_url_display(self, link: str):
+        """`link` is the FULL magic link (tunnel URL + an embedded #tok= pairing token). The token
+        is what makes it work from a phone that never paired on this exact origin AND what keeps it
+        safe (43 random chars, unguessable), so it belongs on the clipboard via Copy rather than
+        being read or typed off the screen."""
+        self._remote_url = link  # what the Copy button puts on the clipboard (full link)
+        if link:
+            base = link.split("#", 1)[0]
             self.remote_info.setText(
-                f"<b>Your public link</b> (open this on your phone from any network):<br>{remote_url}")
+                "<b>Your private link is ready.</b> Tap <b>Copy</b>, then open it on your phone "
+                "from any network — it signs in automatically, no PIN needed. Keep it secret: "
+                "anyone with this link can control this computer.<br>"
+                f"<span style='color:#8a8f98'>{base}#…</span>")
         else:
             self.remote_info.setText("")
-        self.copy_link_btn.setVisible(bool(remote_url))
+        self.copy_link_btn.setVisible(bool(link))
 
     def _refresh(self):
         st = self._rs.status()
@@ -4465,11 +4470,12 @@ class RemoteLinkDialog(QDialog):
                 f"<b>{st.get('url','')}</b>  ·  PIN <b>{st.get('pin','')}</b>")
         else:
             self.local_info.setText("Ember Link is not running.")
-        remote_url = st.get("remote_url") or ""
+        link = st.get("remote_link") or ""
+        remote_on = bool(link or st.get("remote_url"))
         self.remote_check.blockSignals(True)
-        self.remote_check.setChecked(bool(remote_url))
+        self.remote_check.setChecked(remote_on)
         self.remote_check.blockSignals(False)
-        self._set_remote_url_display(remote_url)
+        self._set_remote_url_display(link)
         n = st.get("paired", 0)
         self.paired_label.setText(f"{n} device(s) paired for remote access." if n
                                   else "No devices paired yet.")
@@ -4504,10 +4510,10 @@ class RemoteLinkDialog(QDialog):
             hint = res.get("install") or ""
             QMessageBox.warning(self, "Couldn't enable remote access",
                                 (res.get("error") or "Unknown error") + (f"\n\n{hint}" if hint else ""))
-        elif res.get("_enabling") and res.get("ok") and res.get("url"):
-            # Trust the just-returned URL for the immediate UI update rather than depending on a
+        elif res.get("_enabling") and res.get("ok") and (res.get("link") or res.get("url")):
+            # Trust the just-returned link for the immediate UI update rather than depending on a
             # second status() round-trip landing before _refresh() below reads it.
-            self._set_remote_url_display(res["url"])
+            self._set_remote_url_display(res.get("link") or res.get("url"))
         self._refresh()
 
     def _copy_remote_url(self):

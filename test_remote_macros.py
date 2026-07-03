@@ -12,6 +12,15 @@ if "pyautogui" not in sys.modules:
     pg.FAILSAFE = False
     pg.PAUSE = 0
     pg.size = lambda: (1920, 1080)
+    _calls = []
+    pg._calls = _calls
+    pg.moveTo = lambda *a, **k: _calls.append(("moveTo", a, k))
+    pg.moveRel = lambda *a, **k: _calls.append(("moveRel", a, k))
+    pg.click = lambda *a, **k: _calls.append(("click", a, k))
+    pg.doubleClick = lambda *a, **k: _calls.append(("doubleClick", a, k))
+    pg.mouseDown = lambda *a, **k: _calls.append(("mouseDown", a, k))
+    pg.mouseUp = lambda *a, **k: _calls.append(("mouseUp", a, k))
+    pg.scroll = lambda *a, **k: _calls.append(("scroll", a, k))
     sys.modules["pyautogui"] = pg
 if "tools" not in sys.modules:
     t = types.ModuleType("tools")
@@ -159,7 +168,69 @@ def test_phone_page_exposes_macro_buttons():
     page = rs.PAGE
     assert "macro('lock')" in page and "macro('mute_mic')" in page
     assert "function macro(" in page and "function runcmd(" in page
-    assert 'post({t:"macro"' in page and 'post({t:"macro_cmd"' in page
+    # macros go through postR (which reads the JSON result) so the phone can flash the REAL
+    # outcome, not always "✓" (a plain post() only returns the HTTP ok flag).
+    assert 'postR({t:"macro"' in page and 'postR({t:"macro_cmd"' in page
+
+
+def test_phone_page_reflects_real_macro_outcome():
+    page = rs.PAGE
+    # postR parses the macro's {ok, detail} and macro() flashes "✗ ..." on failure
+    assert "async function postR(" in page
+    assert 'r.ok!==false' in page and '"✗ "' in page
+
+
+def test_server_returns_macro_result_json():
+    # the /api/event handler must hand macro results back as JSON (200), not swallow them (204),
+    # or the phone can never learn a macro failed.
+    src = open(rs.__file__, encoding="utf-8").read()
+    assert "result = _apply(o)" in src
+    assert "isinstance(result, dict)" in src
+
+
+def test_clickat_is_a_single_atomic_move_plus_click():
+    # A tap must be ONE locked op (move then click) so the click can't race ahead of the move
+    # on a different server thread and land at the stale cursor position.
+    import pyautogui as _pg
+    _pg._calls.clear()
+    rs._apply({"t": "clickat", "x": 640, "y": 400})
+    kinds = [c[0] for c in _pg._calls]
+    assert kinds == ["moveTo", "click"]
+    assert _pg._calls[0][1][:2] == (640, 400)
+
+
+def test_phone_page_taps_use_clickat_not_separate_move_and_click():
+    page = rs.PAGE
+    # the screen-tap path sends the combined event, not two independent posts
+    assert 't:"clickat"' in page
+    assert 'post({t:"moveto",x:p.x,y:p.y});post({t:"click"})' not in page
+
+
+def test_phone_page_maps_taps_to_the_rendered_image_rect():
+    page = rs.PAGE
+    # taps map to the letterboxed image, not the full hit box (object-fit:contain)
+    assert "function imgRect(" in page and "naturalWidth" in page
+    assert "let b=imgRect()" in page
+
+
+def test_phone_page_connect_handles_unreachable_server():
+    page = rs.PAGE
+    fn = page.split("async function connect(){", 1)[1].split("\nasync function", 1)[0]
+    assert "try{" in fn and "catch(err)" in fn and "Can't reach Ember" in fn
+
+
+def test_phone_page_decode_wait_cannot_freeze_the_loop():
+    page = rs.PAGE
+    # a rejected decode() must never leave the frame loop hung forever
+    assert "back.complete" in page and "setTimeout(res,400)" in page
+
+
+def test_phone_page_reads_magic_link_token_from_hash():
+    page = rs.PAGE
+    # the tunnel-origin page must pull the pairing token out of #tok= and persist it, else the
+    # "open the link from anywhere" flow can never authenticate (cross-origin localStorage).
+    assert "location.hash" in page and 'localStorage.setItem("ember_tok"' in page
+    assert "replaceState" in page   # strip the token from the address bar afterwards
 
 
 def test_phone_page_button_and_fullscreen_fixes():

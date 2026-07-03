@@ -59,6 +59,40 @@ def test_manager_start_failure_when_spawn_raises():
     assert res["ok"] is False and "no binary" in res["error"]
 
 
+def test_stale_reader_cannot_overwrite_a_newer_tunnels_url():
+    # After stop()+start(), a reader draining the OLD (dead) process's buffered stdout must never
+    # clobber the NEW tunnel's URL - otherwise the dialog shows/copies a URL that no longer routes.
+    tm = tunnel.TunnelManager(spawn=lambda port: None)
+    new_proc = object()
+    tm._proc = new_proc                                      # a NEW tunnel is current
+    tm._url = "https://new-one.trycloudflare.com"
+    old_proc = _FakeProc(["INF https://old-dead.trycloudflare.com\n"])
+    tm._read(old_proc)                                        # reader for the OLD process
+    assert tm._url == "https://new-one.trycloudflare.com"     # unchanged
+
+
+def test_stale_reader_does_not_set_url_for_a_different_process():
+    tm = tunnel.TunnelManager(spawn=lambda port: None)
+    tm._proc = object()          # some new process, no URL yet
+    tm._url = ""
+    old_proc = _FakeProc(["INF https://old-dead.trycloudflare.com\n"])
+    tm._read(old_proc)
+    assert tm._url == ""          # the old process must not populate the new one's URL
+
+
+def test_stop_reaps_the_child_process():
+    calls = {}
+    class _WaitProc(_FakeProc):
+        def wait(self, timeout=None):
+            calls["timeout"] = timeout
+            self._alive = False
+    proc = _WaitProc(["INF https://a-b-c.trycloudflare.com\n"])
+    tm = tunnel.TunnelManager(spawn=lambda port: proc)
+    tm.start(8765, wait=3)
+    tm.stop()
+    assert proc.terminated is True and "timeout" in calls   # terminate() + wait() both called
+
+
 def test_default_spawn_reports_missing_cloudflared():
     # With the default spawn and cloudflared not installed (CI), start() must fail gracefully.
     if tunnel.cloudflared_available():
