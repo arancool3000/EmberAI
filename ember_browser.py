@@ -57,24 +57,263 @@ _TRACKERS = {
     "newrelic.com", "nr-data.net", "fullstory.com", "amplitude.com", "sentry.io",
 }
 
-_CSS = """
-  body{margin:0;background:#0e0f13;color:#e9eaf0;font:15px -apple-system,Segoe UI,sans-serif}
-  .wrap{max-width:760px;margin:0 auto;padding:48px 24px}
-  .logo{font-size:40px;font-weight:800;text-align:center;
-        background:linear-gradient(90deg,#f0a13c,#e2562a);-webkit-background-clip:text;
-        -webkit-text-fill-color:transparent;margin:10vh 0 22px}
-  form{display:flex;gap:8px}
-  input{flex:1;padding:14px 18px;border-radius:26px;border:1px solid #2a2d39;background:#181a22;
-        color:#fff;font-size:16px;outline:none}
-  button{padding:0 22px;border-radius:26px;border:none;background:#e2562a;color:#fff;
-         font-weight:700;cursor:pointer}
-  .ans{background:#181a22;border:1px solid #2a2d39;border-radius:14px;padding:18px 20px;margin:18px 0}
-  .ans h3{margin:0 0 8px;color:#f0a13c;font-size:13px;text-transform:uppercase;letter-spacing:.5px}
-  .res{margin:14px 0}
-  .res a{color:#7aa2ff;font-size:17px;text-decoration:none}
-  .res a:hover{text-decoration:underline}
-  .res .u{color:#5b8a4f;font-size:12px}
-  .hint{color:#8a8f98;text-align:center;font-size:13px;margin-top:14px}
+# ---------------------------------------------------------------------------
+# Ember Search — a polished, colourful, customisable search experience.
+# The look is driven entirely by CSS custom properties that a tiny inline script sets from
+# EMBER_CFG (injected per-page) BEFORE first paint, so themes never flash. Colour presets +
+# a custom accent + light/dark + quick-link tiles + a live customise panel all persist to
+# browser_theme.json (see _load_theme/_save_theme), applied server-side on every render.
+# ---------------------------------------------------------------------------
+
+# Colourful built-in themes: (accent, secondary-accent). 'custom' uses the user's own accent.
+_SEARCH_PRESETS = {
+    "ember":  ("#e8632e", "#f0a13c"),
+    "ocean":  ("#2b8cff", "#22d3ee"),
+    "forest": ("#2fb46a", "#8ae06a"),
+    "grape":  ("#8b5cf6", "#d946ef"),
+    "rose":   ("#f43f6a", "#fb923c"),
+    "slate":  ("#5b6b86", "#93a3bd"),
+}
+
+_DEFAULT_SHORTCUTS = [
+    {"label": "YouTube",   "url": "https://www.youtube.com"},
+    {"label": "Wikipedia", "url": "https://www.wikipedia.org"},
+    {"label": "GitHub",    "url": "https://github.com"},
+    {"label": "Reddit",    "url": "https://www.reddit.com"},
+    {"label": "Maps",      "url": "https://www.openstreetmap.org"},
+    {"label": "News",      "url": "https://news.google.com"},
+]
+
+_DEFAULT_THEME = {
+    "preset": "ember",       # one of _SEARCH_PRESETS or "custom"
+    "accent": "#e8632e",     # used when preset == "custom"
+    "accent2": "#f0a13c",
+    "mode": "dark",          # "dark" | "light"
+    "clock": True,
+    "shortcuts": _DEFAULT_SHORTCUTS,
+}
+
+_SEARCH_CSS = r"""
+:root{
+  --accent:#e8632e; --accent-rgb:232,99,46; --accent2:#f0a13c; --accent2-rgb:240,161,60;
+  --bg:#0e0f13; --bg2:#15171e; --card:#181a22; --line:#262a36; --line2:#333849;
+  --fg:#e9eaf0; --muted:#9198a6; --faint:#6b7280; --link:#8ab0ff; --good:#6cc07a;
+  --radius:18px; --shadow:0 10px 34px rgba(0,0,0,.38);
+}
+:root.light{
+  --bg:#f4f6fb; --bg2:#ffffff; --card:#ffffff; --line:#e7eaf1; --line2:#dfe3ec;
+  --fg:#191c24; --muted:#5b6472; --faint:#8b93a3; --link:#2860df; --good:#0f9d58;
+  --shadow:0 12px 34px rgba(25,30,50,.10);
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  background:
+    radial-gradient(1200px 640px at 8% -10%, rgba(var(--accent-rgb),.20), transparent 60%),
+    radial-gradient(1000px 560px at 105% -6%, rgba(var(--accent2-rgb),.16), transparent 55%),
+    var(--bg);
+  color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:720px;margin:0 auto;padding:26px 22px 72px}
+
+/* ---- home hero ---- */
+.hero{display:flex;flex-direction:column;align-items:center;padding-top:min(14vh,120px)}
+.logo{font-size:clamp(40px,8vw,60px);font-weight:850;letter-spacing:-1.5px;line-height:1;
+  background:linear-gradient(100deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+  background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+.logo .spark{-webkit-text-fill-color:initial;color:var(--accent2)}
+.tag{color:var(--muted);margin-top:10px;font-size:14px}
+.greet{color:var(--muted);font-size:13px;margin-top:4px;height:16px}
+
+/* ---- search box (shared) ---- */
+.searchbox{display:flex;align-items:center;gap:10px;width:100%;margin-top:26px;
+  background:var(--card);border:1px solid var(--line);border-radius:30px;padding:6px 6px 6px 18px;
+  box-shadow:var(--shadow);transition:border-color .15s,box-shadow .15s}
+.searchbox:focus-within{border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.16),var(--shadow)}
+.searchbox svg{flex:0 0 auto;opacity:.7}
+.searchbox input{flex:1;border:0;background:transparent;color:var(--fg);font-size:16.5px;outline:none;padding:12px 0}
+.searchbox input::placeholder{color:var(--faint)}
+.searchbox button{flex:0 0 auto;border:0;cursor:pointer;font-weight:750;font-size:15px;color:#fff;
+  padding:12px 22px;border-radius:24px;background:linear-gradient(100deg,var(--accent),var(--accent2))}
+.searchbox button:hover{filter:brightness(1.07)}
+
+/* ---- quick-link tiles ---- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:12px;margin-top:30px;width:100%}
+.tile{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px;border-radius:16px;
+  background:var(--card);border:1px solid var(--line);color:var(--fg);text-align:center;transition:transform .12s,border-color .12s,background .12s;position:relative}
+.tile:hover{transform:translateY(-3px);border-color:var(--accent);text-decoration:none}
+.tile .ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  background:rgba(var(--accent-rgb),.14);overflow:hidden}
+.tile .ic img{width:26px;height:26px}
+.tile .ic .ltr{font-weight:800;color:var(--accent);font-size:19px}
+.tile .lb{font-size:12px;color:var(--muted);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile.add .ic{background:transparent;border:1.5px dashed var(--line2)}
+.tile.add .ic .ltr{color:var(--faint)}
+.tile .rm{position:absolute;top:3px;right:5px;width:18px;height:18px;border-radius:9px;border:0;cursor:pointer;
+  background:var(--line2);color:var(--fg);font-size:12px;line-height:16px;display:none;padding:0}
+.tiles.editing .tile:not(.add):hover .rm{display:block}
+
+/* ---- customise button + panel ---- */
+.gear{position:fixed;top:14px;right:16px;width:40px;height:40px;border-radius:12px;border:1px solid var(--line);
+  background:var(--card);color:var(--muted);cursor:pointer;font-size:17px;box-shadow:var(--shadow)}
+.gear:hover{color:var(--accent);border-color:var(--accent)}
+.panel{position:fixed;top:0;right:0;bottom:0;width:min(340px,88vw);background:var(--bg2);
+  border-left:1px solid var(--line);box-shadow:-14px 0 40px rgba(0,0,0,.34);padding:20px;overflow-y:auto;
+  transform:translateX(102%);transition:transform .22s ease;z-index:20}
+.panel.open{transform:translateX(0)}
+.panel h2{margin:0 0 2px;font-size:18px}
+.panel .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+.panel .grp{margin:18px 0}
+.panel .grp>label{display:block;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px}
+.swatches{display:flex;gap:10px;flex-wrap:wrap}
+.sw{width:34px;height:34px;border-radius:11px;cursor:pointer;border:2px solid transparent;position:relative}
+.sw.on{border-color:var(--fg)}
+.sw.on::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:800;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.seg button{flex:1;border:0;background:transparent;color:var(--muted);padding:9px;cursor:pointer;font-weight:650;font-size:13px}
+.seg button.on{background:linear-gradient(100deg,var(--accent),var(--accent2));color:#fff}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mini{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:10px;padding:8px 10px;font-size:14px;outline:none}
+.mini:focus{border-color:var(--accent)}
+.pbtn{width:100%;margin-top:8px;border:0;cursor:pointer;font-weight:750;color:#fff;padding:11px;border-radius:12px;
+  background:linear-gradient(100deg,var(--accent),var(--accent2))}
+.pbtn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:600}
+.switch{position:relative;width:44px;height:26px;border-radius:14px;background:var(--line2);cursor:pointer;transition:background .15s;flex:0 0 auto}
+.switch.on{background:var(--accent)}
+.switch i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s}
+.switch.on i{left:21px}
+.acc-in{width:34px;height:34px;padding:0;border:1px solid var(--line);border-radius:9px;background:none;cursor:pointer}
+
+/* ---- results ---- */
+.rhead{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:12px 22px;margin:0 -22px 6px;
+  background:color-mix(in srgb,var(--bg) 86%, transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.rhead .mark{font-weight:850;font-size:18px;letter-spacing:-.5px;background:linear-gradient(100deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.rhead .searchbox{margin:0;flex:1;box-shadow:none;padding:3px 4px 3px 14px}
+.rhead .searchbox input{font-size:15px;padding:9px 0}
+.rhead .searchbox button{padding:9px 16px;font-size:13.5px}
+.answer{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin:18px 0;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.answer::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(var(--accent),var(--accent2))}
+.answer h3{margin:0 0 10px;font-size:12.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--accent2);display:flex;align-items:center;gap:7px}
+.answer .body{font-size:15px;line-height:1.62}
+.answer .cite{color:var(--accent);font-weight:700;text-decoration:none;padding:0 2px}
+.copy{position:absolute;top:14px;right:14px;border:1px solid var(--line);background:var(--bg2);color:var(--muted);border-radius:9px;font-size:12px;padding:5px 10px;cursor:pointer}
+.copy:hover{color:var(--accent);border-color:var(--accent)}
+.calc{display:inline-flex;align-items:center;gap:8px;background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.3);border-radius:12px;padding:8px 14px;font-size:20px;font-weight:750;margin:6px 0 14px}
+.reslist{margin-top:8px}
+.card{display:flex;gap:13px;align-items:flex-start;padding:13px 15px;border-radius:14px;border:1px solid transparent;transition:background .12s,border-color .12s}
+.card:hover{background:var(--card);border-color:var(--line)}
+.card .fav{width:30px;height:30px;border-radius:8px;flex:0 0 auto;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;margin-top:2px}
+.card .fav img{width:20px;height:20px}
+.card .fav .ltr{font-weight:800;color:var(--accent);font-size:15px;align-items:center;justify-content:center}
+.card .txt{min-width:0}
+.card .ti{color:var(--link);font-size:17px;font-weight:600;display:block;line-height:1.3}
+.card .dom{color:var(--good);font-size:12.5px;margin-top:2px}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px;align-items:center}
+.pills .lbl{color:var(--faint);font-size:12.5px;margin-right:2px}
+.pill{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:20px;padding:6px 13px;font-size:13px}
+.pill:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.empty{color:var(--muted);text-align:center;padding:26px;font-size:14px}
+.skl{height:14px;border-radius:7px;background:linear-gradient(90deg,var(--card),var(--line),var(--card));background-size:200% 100%;animation:sh 1.2s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+"""
+
+# Sets the theme CSS variables from EMBER_CFG BEFORE first paint (runs in <head>), so no flash.
+_SEARCH_HEAD_JS = r"""
+(function(){
+  var C=window.EMBER_CFG||{};
+  var P={"ember":["#e8632e","#f0a13c"],"ocean":["#2b8cff","#22d3ee"],"forest":["#2fb46a","#8ae06a"],
+         "grape":["#8b5cf6","#d946ef"],"rose":["#f43f6a","#fb923c"],"slate":["#5b6b86","#93a3bd"]};
+  function rgb(h){h=(h||"").replace('#','');if(h.length===3)h=h.split('').map(function(x){return x+x}).join('');
+    var n=parseInt(h||"e8632e",16);return ((n>>16)&255)+","+((n>>8)&255)+","+(n&255);}
+  window.__emberAcc=function(c){var p=(c.preset&&c.preset!=='custom'&&P[c.preset])?P[c.preset]:[c.accent||'#e8632e',c.accent2||c.accent||'#f0a13c'];return p;};
+  window.__emberApply=function(c){
+    var r=document.documentElement,a=window.__emberAcc(c);
+    r.classList.toggle('light',(c.mode||'dark')==='light');
+    r.style.setProperty('--accent',a[0]); r.style.setProperty('--accent2',a[1]);
+    r.style.setProperty('--accent-rgb',rgb(a[0])); r.style.setProperty('--accent2-rgb',rgb(a[1]));
+  };
+  window.__emberApply(C);
+})();
+"""
+
+# Home-only behaviour: greeting/clock, quick-link tiles (with favicons), and the live
+# customise panel. Live theme changes preview instantly; "Save" round-trips to Python
+# (?embercfg=…) which persists to browser_theme.json so it survives restarts.
+_HOME_JS = r"""
+(function(){
+  var C=window.EMBER_CFG||{}; C.shortcuts=C.shortcuts||[]; if(!C.preset)C.preset='ember'; if(!C.mode)C.mode='dark';
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(m){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]});}
+  function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}}
+  function fav(u){var h=host(u);return h?('https://icons.duckduckgo.com/ip3/'+h+'.ico'):'';}
+  var PRESETS=['ember','ocean','forest','grape','rose','slate'];
+  var editing=false;
+
+  function greet(){
+    var g=document.getElementById('greet'); if(!g)return;
+    if(!C.clock){g.textContent='';return;}
+    var d=new Date(),h=d.getHours();
+    var part=h<5?'Good night':h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+    var t=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    g.textContent=part+' · '+t;
+  }
+  function renderTiles(){
+    var box=document.getElementById('tiles'); if(!box)return;
+    box.classList.toggle('editing',editing);
+    var html='';
+    C.shortcuts.forEach(function(s,i){
+      var f=fav(s.url),lt=esc((s.label||host(s.url)||'?').charAt(0).toUpperCase());
+      var ic=f?('<img src="'+esc(f)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><span class=ltr style="display:none">'+lt+'</span>'):('<span class=ltr>'+lt+'</span>');
+      html+='<a class=tile href="'+esc(s.url)+'"><button class=rm data-i="'+i+'" title="Remove">&times;</button>'
+        +'<span class=ic>'+ic+'</span><span class=lb>'+esc(s.label||host(s.url))+'</span></a>';
+    });
+    html+='<a class="tile add" id=addTile href="javascript:void(0)"><span class=ic><span class=ltr>+</span></span><span class=lb>Add</span></a>';
+    box.innerHTML=html;
+    Array.prototype.forEach.call(box.querySelectorAll('.rm'),function(b){b.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();C.shortcuts.splice(+b.getAttribute('data-i'),1);renderTiles();});});
+    var at=document.getElementById('addTile'); if(at)at.addEventListener('click',function(){openPanel();editing=true;renderTiles();var l=document.getElementById('scLabel');if(l)l.focus();});
+  }
+  function paintPanel(){
+    // reflect current cfg in the panel controls
+    var sw=document.getElementById('swatches');
+    if(sw)Array.prototype.forEach.call(sw.children,function(el){el.classList.toggle('on',el.getAttribute('data-p')===C.preset);});
+    var seg=document.getElementById('modeSeg');
+    if(seg)Array.prototype.forEach.call(seg.children,function(b){b.classList.toggle('on',b.getAttribute('data-m')===C.mode);});
+    var cl=document.getElementById('clkSwitch'); if(cl)cl.classList.toggle('on',!!C.clock);
+    var ac=document.getElementById('accIn'); if(ac&&C.preset==='custom')ac.value=C.accent||'#e8632e';
+  }
+  function apply(){window.__emberApply(C);paintPanel();}
+  function openPanel(){var p=document.getElementById('panel');if(p)p.classList.add('open');}
+  function closePanel(){var p=document.getElementById('panel');if(p)p.classList.remove('open');editing=false;renderTiles();}
+  function save(){
+    // round-trip to Python to persist to disk; navigation is blocked (no reload) by the handler.
+    try{location.href='https://ember.search/?embercfg='+encodeURIComponent(JSON.stringify(C));}catch(e){}
+  }
+
+  document.addEventListener('DOMContentLoaded',function(){
+    greet(); setInterval(greet,15000); renderTiles(); paintPanel();
+    var g=document.getElementById('gear'); if(g)g.addEventListener('click',function(){var p=document.getElementById('panel');if(p)p.classList.toggle('open');});
+    var cl=document.getElementById('closePanel'); if(cl)cl.addEventListener('click',closePanel);
+    var sw=document.getElementById('swatches');
+    if(sw)Array.prototype.forEach.call(sw.children,function(el){el.addEventListener('click',function(){C.preset=el.getAttribute('data-p');apply();});});
+    var ac=document.getElementById('accIn');
+    if(ac)ac.addEventListener('input',function(){C.preset='custom';C.accent=ac.value;C.accent2=ac.value;apply();});
+    var seg=document.getElementById('modeSeg');
+    if(seg)Array.prototype.forEach.call(seg.children,function(b){b.addEventListener('click',function(){C.mode=b.getAttribute('data-m');apply();});});
+    var cs=document.getElementById('clkSwitch'); if(cs)cs.addEventListener('click',function(){C.clock=!C.clock;cs.classList.toggle('on',C.clock);greet();});
+    var addBtn=document.getElementById('scAdd');
+    if(addBtn)addBtn.addEventListener('click',function(){
+      var l=document.getElementById('scLabel'),u=document.getElementById('scUrl');
+      var url=(u.value||'').trim(); if(!url)return;
+      if(!/^https?:\/\//i.test(url))url='https://'+url;
+      C.shortcuts.push({label:(l.value||host(url)).trim(),url:url}); l.value='';u.value='';renderTiles();
+    });
+    var ed=document.getElementById('editBtn'); if(ed)ed.addEventListener('click',function(){editing=!editing;ed.textContent=editing?'Done editing':'Edit shortcuts';renderTiles();});
+    var sv=document.getElementById('saveBtn'); if(sv)sv.addEventListener('click',function(){save();closePanel();});
+    var rs=document.getElementById('resetBtn'); if(rs)rs.addEventListener('click',function(){C.preset='ember';C.mode='dark';C.clock=true;C.accent='#e8632e';C.accent2='#f0a13c';apply();});
+  });
+})();
 """
 
 BROWSER_QSS = """
@@ -156,9 +395,16 @@ if WEBENGINE_OK:
     class _Page(QWebEnginePage):
         """Page that intercepts Ember Search submissions instead of navigating to them."""
         searchRequested = pyqtSignal(str)
+        configRequested = pyqtSignal(str)   # the start page posting a saved customisation
 
         def acceptNavigationRequest(self, url, nav_type, is_main_frame):
             s = url.toString()
+            if SEARCH_HOST in s and "embercfg=" in s:
+                # The customise panel posts its JSON here to persist it. Emit it and BLOCK the
+                # navigation so the live-previewed page isn't reloaded out from under the user.
+                cfg = parse_qs(urlparse(s).query).get("embercfg", [""])[0]
+                self.configRequested.emit(cfg)
+                return False
             if SEARCH_HOST in s and ("?q=" in s or "&q=" in s):
                 q = parse_qs(urlparse(s).query).get("q", [""])[0]
                 self.searchRequested.emit(q)
@@ -227,7 +473,8 @@ class EmberBrowser(QWidget):
         self.setWindowTitle("Ember Browser")
         self.resize(1180, 800)
         self.setMinimumSize(640, 480)
-        self.setStyleSheet(BROWSER_QSS)
+        self._theme = self._load_theme()
+        self.setStyleSheet(self._qss())
         self._ai_result.connect(self._show_ai_result)
         self._search_result.connect(self._load_search_results)
         self._ext_made.connect(self._on_ext_made)
@@ -453,6 +700,7 @@ class EmberBrowser(QWidget):
         # Queued, NOT direct: _ember_search calls setHtml, and doing that synchronously from
         # inside acceptNavigationRequest re-enters QtWebEngine and crashes. Defer to the loop.
         page.searchRequested.connect(self._ember_search, Qt.ConnectionType.QueuedConnection)
+        page.configRequested.connect(self._apply_config, Qt.ConnectionType.QueuedConnection)
         view.setPage(page)
         s = view.settings()
         try:
@@ -847,14 +1095,127 @@ class EmberBrowser(QWidget):
             tb.setTabTextColor(idx, QColor(color))
 
     # ---- Ember Search ----
+    # ---- Ember Search theming / customisation ----
+    def _theme_file(self) -> Path:
+        return self._data_file().with_name("browser_theme.json")
+
+    def _load_theme(self) -> dict:
+        t = {k: (list(v) if isinstance(v, list) else v) for k, v in _DEFAULT_THEME.items()}
+        try:
+            saved = json.loads(self._theme_file().read_text())
+            if isinstance(saved, dict):
+                for k in _DEFAULT_THEME:
+                    if k in saved:
+                        t[k] = saved[k]
+        except Exception:
+            pass
+        if not isinstance(t.get("shortcuts"), list):
+            t["shortcuts"] = [dict(s) for s in _DEFAULT_SHORTCUTS]
+        return t
+
+    def _save_theme(self):
+        try:
+            self._theme_file().write_text(json.dumps(self._theme, indent=2))
+        except Exception:
+            pass
+
+    def _accent_pair(self):
+        t = getattr(self, "_theme", _DEFAULT_THEME)
+        if t.get("preset") in _SEARCH_PRESETS:
+            return _SEARCH_PRESETS[t["preset"]]
+        return (t.get("accent") or "#e8632e", t.get("accent2") or t.get("accent") or "#f0a13c")
+
+    def _qss(self) -> str:
+        """The Qt chrome stylesheet, re-tinted to the user's chosen accent so the whole browser
+        feels cohesive with the search theme."""
+        return BROWSER_QSS.replace("#e2562a", self._accent_pair()[0])
+
+    def _shell(self, body: str, *, home: bool) -> str:
+        """Wrap page body in the shared Ember Search shell: theme CSS + a head script that sets
+        the accent/mode CSS variables from EMBER_CFG before first paint (no theme flash)."""
+        cfg = json.dumps({
+            "preset": self._theme.get("preset", "ember"),
+            "accent": self._theme.get("accent", "#e8632e"),
+            "accent2": self._theme.get("accent2", "#f0a13c"),
+            "mode": self._theme.get("mode", "dark"),
+            "clock": bool(self._theme.get("clock", True)),
+            "shortcuts": self._theme.get("shortcuts", []),
+        })
+        js = _SEARCH_HEAD_JS + (_HOME_JS if home else "")
+        return ("<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<style>{_SEARCH_CSS}</style>"
+                f"<script>window.EMBER_CFG={cfg};</script>"
+                f"<script>{js}</script>"
+                "</head><body>" + body + "</body></html>")
+
+    def _apply_config(self, cfg_json: str):
+        """Persist a customisation change posted from the search page (?embercfg=…) and re-tint
+        the native chrome to match. Runs on the GUI thread (queued from the page signal)."""
+        try:
+            cfg = json.loads(cfg_json)
+        except Exception:
+            return
+        if not isinstance(cfg, dict):
+            return
+        for k in ("preset", "accent", "accent2", "mode", "clock", "shortcuts"):
+            if k in cfg:
+                self._theme[k] = cfg[k]
+        self._save_theme()
+        try:
+            self.setStyleSheet(self._qss())
+        except Exception:
+            pass
+
+    _SEARCH_SVG = ("<svg width=19 height=19 viewBox='0 0 24 24' fill=none stroke='currentColor' "
+                   "stroke-width=2 stroke-linecap=round><circle cx=11 cy=11 r=7></circle>"
+                   "<path d='M21 21l-4.2-4.2'></path></svg>")
+
+    def _results_header(self, query: str) -> str:
+        return ("<div class=rhead><span class=mark>Ember</span>"
+                f"<form class=searchbox action='https://{SEARCH_HOST}/' method=get>{self._SEARCH_SVG}"
+                f"<input name=q autocomplete=off value=\"{_html.escape(query)}\">"
+                "<button type=submit>Search</button></form></div>")
+
     def _home_html(self) -> str:
-        return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
-                f"<body><div class='wrap'><div class='logo'>Ember Search</div>"
-                f"<form action='https://{SEARCH_HOST}/' method='get'>"
-                f"<input name='q' autofocus placeholder='Search the web with AI…'>"
-                f"<button type='submit'>Search</button></form>"
-                f"<div class='hint'>AI answer + private web results · trackers blocked</div>"
-                f"</div></body></html>")
+        swatches = "".join(
+            f"<span class=sw data-p='{name}' title='{name.title()}' "
+            f"style='background:linear-gradient(135deg,{a},{b})'></span>"
+            for name, (a, b) in _SEARCH_PRESETS.items())
+        accent = self._theme.get("accent", "#e8632e") if self._theme.get("preset") == "custom" \
+            else self._accent_pair()[0]
+        panel = (
+            "<div class=panel id=panel>"
+            "<div class=row><h2>Customise</h2>"
+            "<button class='pbtn ghost' id=closePanel style='width:auto;margin:0;padding:6px 12px'>Done</button></div>"
+            "<div class=sub>Make Ember Search yours — saved for next time.</div>"
+            f"<div class=grp><label>Theme</label><div class=swatches id=swatches>{swatches}</div>"
+            "<div class=row style='margin-top:12px'><span style='color:var(--muted);font-size:13px'>Custom accent</span>"
+            f"<input type=color class=acc-in id=accIn value='{accent}'></div></div>"
+            "<div class=grp><label>Appearance</label><div class=seg id=modeSeg>"
+            "<button data-m=dark>Dark</button><button data-m=light>Light</button></div></div>"
+            "<div class=grp><div class=row><label style='margin:0'>Greeting &amp; clock</label>"
+            "<span class=switch id=clkSwitch><i></i></span></div></div>"
+            "<div class=grp><label>Shortcuts</label>"
+            "<div class=row style='gap:8px'>"
+            "<input class=mini id=scLabel placeholder='Name' style='flex:1;min-width:0'>"
+            "<input class=mini id=scUrl placeholder='site.com' style='flex:1.4;min-width:0'></div>"
+            "<button class=pbtn id=scAdd style='margin-top:8px'>Add shortcut</button>"
+            "<button class='pbtn ghost' id=editBtn style='margin-top:8px'>Edit shortcuts</button></div>"
+            "<div class=grp><button class=pbtn id=saveBtn>Save</button>"
+            "<button class='pbtn ghost' id=resetBtn style='margin-top:8px'>Reset to default</button></div>"
+            "</div>")
+        body = (
+            "<button class=gear id=gear title='Customise Ember Search'>&#9881;</button>" + panel +
+            "<div class=wrap><div class=hero>"
+            "<div class=logo>Ember<span class=spark>Search</span></div>"
+            "<div class=greet id=greet></div>"
+            f"<form class=searchbox action='https://{SEARCH_HOST}/' method=get>{self._SEARCH_SVG}"
+            "<input name=q autofocus autocomplete=off placeholder='Search the web, or ask Ember anything…'>"
+            "<button type=submit>Search</button></form>"
+            "<div class=tiles id=tiles></div>"
+            "</div></div>")
+        return self._shell(body, home=True)
 
     def _ember_search(self, query: str):
         query = (query or "").strip()
@@ -862,10 +1223,13 @@ class EmberBrowser(QWidget):
             return
         self.address.setText(query)
         v = self._cur() or self._new_tab()
-        v.setHtml(f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
-                  f"<body><div class='wrap'><div class='logo'>Ember Search</div>"
-                  f"<div class='ans'><h3>Searching…</h3>“{_html.escape(query)}”</div></div></body></html>",
-                  QUrl(f"https://{SEARCH_HOST}/"))
+        body = (f"<div class=wrap>{self._results_header(query)}"
+                "<div class=answer><h3>&#10024; Ember AI answer</h3><div class=body>"
+                "<div class=skl style='width:94%'></div>"
+                "<div class=skl style='width:80%;margin-top:9px'></div>"
+                "<div class=skl style='width:88%;margin-top:9px'></div></div></div>"
+                "<div class=empty>Searching the web&hellip;</div></div>")
+        v.setHtml(self._shell(body, home=False), QUrl(f"https://{SEARCH_HOST}/"))
         threading.Thread(target=self._search_thread, args=(query,), daemon=True).start()
 
     def _grounded_answer(self, query: str, results):
@@ -891,33 +1255,78 @@ class EmberBrowser(QWidget):
         results = _ddg(query)
         answer = self._grounded_answer(query, results)
         inst = _instant_answer(query)
-        if inst:
-            answer = f"{inst}\n\n{answer}"
-        self._search_result.emit(query, self._search_results_html(query, answer, results))
+        self._search_result.emit(query, self._search_results_html(query, answer, results, inst))
 
-    def _search_results_html(self, query, answer, results):
-        rows = ""
+    def _search_results_html(self, query, answer, results, inst=None):
+        import re
+        # Instant answer (arithmetic etc.) gets its own prominent chip, not buried in the prose.
+        calc = ""
+        if inst:
+            calc = ("<div class=calc><span>&#128425;</span>"
+                    f"<span>{_html.escape(str(inst))}</span></div>")
+
+        # AI answer, with inline [n] citations linkified to the matching result.
+        ans = _html.escape(answer or "(no AI answer yet — add an API key in Ember Settings to "
+                                     "get grounded answers. Web results are below.)")
+
+        def _cite(m):
+            n = int(m.group(1))
+            if 1 <= n <= len(results):
+                return f"<a class=cite href='{_html.escape(results[n - 1][1])}'>[{n}]</a>"
+            return m.group(0)
+
+        ans = re.sub(r"\[(\d+)\]", _cite, ans).replace("\n", "<br>")
+        answer_card = ("<div class=answer><button class=copy id=copyBtn>Copy</button>"
+                       "<h3>&#10024; Ember AI answer</h3>"
+                       f"<div class=body id=ansBody>{ans}</div></div>")
+
+        # Result cards, each with a favicon (letter fallback) and a clean domain line.
+        cards = ""
         for title, href in results:
-            dom = urlparse(href).netloc
-            rows += (f"<div class='res'><a href='{_html.escape(href)}'>{_html.escape(title)}</a>"
-                     f"<div class='u'>{_html.escape(dom)}</div></div>")
-        if not rows:
-            rows = ("<div class='hint'>No web results fetched. "
-                    f"<a href='https://duckduckgo.com/?q={quote_plus(query)}'>Open DuckDuckGo</a></div>")
-        ans = _html.escape(answer or "(no AI answer — add an API key in Ember Settings)").replace("\n", "<br>")
+            dom = urlparse(href).netloc.replace("www.", "")
+            lt = _html.escape((dom[:1] or "?").upper())
+            if dom:
+                fav = _html.escape(f"https://icons.duckduckgo.com/ip3/{dom}.ico")
+                ic = (f"<img src='{fav}' onerror=\"this.style.display='none';"
+                      "this.nextElementSibling.style.display='flex'\">"
+                      f"<span class=ltr style='display:none'>{lt}</span>")
+            else:
+                ic = f"<span class=ltr>{lt}</span>"
+            cards += (f"<a class=card href='{_html.escape(href)}'><span class=fav>{ic}</span>"
+                      f"<span class=txt><span class=ti>{_html.escape(title)}</span>"
+                      f"<span class=dom>{_html.escape(dom or href)}</span></span></a>")
+        if cards:
+            cards = f"<div class=reslist>{cards}</div>"
+        else:
+            cards = ("<div class=empty>No web results came back this time. "
+                     f"<a href='https://duckduckgo.com/?q={quote_plus(query)}'>Open DuckDuckGo</a> "
+                     "to search directly.</div>")
+
         q = quote_plus(query)
         engines = [("DuckDuckGo", f"https://duckduckgo.com/?q={q}"),
                    ("Brave", f"https://search.brave.com/search?q={q}"),
                    ("Google", f"https://www.google.com/search?q={q}"),
                    ("Startpage", f"https://www.startpage.com/sp/search?query={q}"),
                    ("Wikipedia", f"https://en.wikipedia.org/w/index.php?search={q}")]
-        more = ("<div class='hint'>Also search on: "
-                + " · ".join(f"<a href='{u}'>{n}</a>" for n, u in engines) + "</div>")
-        return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
-                f"<body><div class='wrap'>"
-                f"<form action='https://{SEARCH_HOST}/' method='get' style='margin-bottom:8px'>"
-                f"<input name='q' value=\"{_html.escape(query)}\"><button type='submit'>Search</button></form>"
-                f"<div class='ans'><h3>✨ Ember AI answer</h3>{ans}</div>{rows}{more}</div></body></html>")
+        pills = ("<div class=pills><span class=lbl>Also search on</span>"
+                 + "".join(f"<a class=pill href='{u}'>{n}</a>" for n, u in engines) + "</div>")
+
+        # Copy button: clipboard API first (ember.search is a secure origin), textarea fallback.
+        copy_js = ("<script>(function(){var b=document.getElementById('copyBtn');if(!b)return;"
+                   "b.addEventListener('click',function(){"
+                   "var t=(document.getElementById('ansBody')||{}).textContent||'';"
+                   "function done(){b.textContent='Copied \\u2713';"
+                   "setTimeout(function(){b.textContent='Copy'},1400);}"
+                   "function fb(){var a=document.createElement('textarea');a.value=t;"
+                   "document.body.appendChild(a);a.select();"
+                   "try{document.execCommand('copy')}catch(e){}document.body.removeChild(a);done();}"
+                   "try{if(navigator.clipboard&&navigator.clipboard.writeText)"
+                   "navigator.clipboard.writeText(t).then(done,fb);else fb();}catch(e){fb();}"
+                   "});})();</script>")
+
+        body = (f"<div class=wrap>{self._results_header(query)}"
+                f"{calc}{answer_card}{cards}{pills}</div>{copy_js}")
+        return self._shell(body, home=False)
 
     def _load_search_results(self, query, html):
         v = self._cur()
