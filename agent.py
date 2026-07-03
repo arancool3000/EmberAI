@@ -61,6 +61,8 @@ import workflow_recorder
 import productivity_tools
 import plugin_system
 import custom_tools
+import self_extend
+import song_id
 import network_adblock
 from claude_bridge import build_handoff_prompt, copy_to_clipboard, try_anthropic_api
 
@@ -2150,11 +2152,17 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security_center,
               agent_profiles, agent_scheduler, integrations,
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
+              self_extend, song_id,
               network_adblock, timers, gmail_tools, bulk_tools, security_suite):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
     TOOL_DISPATCH.update(_feat.TOOL_DISPATCH)
+
+# self_extend's read-only tools (list/read) are genuinely side-effect-free -> classify them safe
+# so they don't prompt. Scoped to this module only (not a blanket reclassification of others).
+safety.SAFE_READONLY |= set(getattr(self_extend, "READONLY_TOOLS", set()))
+safety.SAFE_READONLY |= set(getattr(song_id, "READONLY_TOOLS", set()))
 
 # Tell custom_tools the full live tool registry so create_custom_tool can reject a recipe
 # step that names a tool Ember doesn't actually have. (run_custom_tool is host-executed, so
@@ -2172,6 +2180,49 @@ try:
             TOOL_DISPATCH[_decl["name"]] = _plug["dispatch"][_decl["name"]]
     # Read-only plugin tools get the safe classification; the rest stay medium-risk.
     safety.SAFE_READONLY |= set(_plug.get("read_only_names", set()))
+except Exception:
+    pass
+
+
+# --- Runtime self-extension --------------------------------------------------------------
+# self_extend.create_python_tool lets the AI author a NEW tool mid-conversation. This registrar
+# hot-adds it to the central tables; a monotonic generation counter tells live agents to rebuild
+# their chat (the model's tool schema is frozen at chat-init) so the new tool becomes callable
+# on their next turn.
+_TOOLS_GEN = 0
+
+
+def _register_runtime_tool(declaration: dict, fn, read_only: bool = False) -> None:
+    global _TOOLS_GEN
+    name = declaration["name"]
+    replaced = False
+    for i, d in enumerate(TOOL_DECLARATIONS):
+        if d.get("name") == name:
+            TOOL_DECLARATIONS[i] = declaration
+            replaced = True
+            break
+    if not replaced:
+        TOOL_DECLARATIONS.append(declaration)
+    TOOL_DISPATCH[name] = fn
+    if read_only:
+        safety.SAFE_READONLY.add(name)
+    try:
+        _PARAM_TYPES.update(tool_args.build_param_types([declaration]))
+    except Exception:
+        pass
+    _TOOLS_GEN += 1
+
+
+self_extend.set_registrar(_register_runtime_tool)
+
+# Re-load AI tools authored in previous sessions (user-data ai_tools/), like user plugins.
+try:
+    _ai = self_extend.load_ai_tools()
+    for _decl in _ai.get("declarations", []):
+        if _decl["name"] not in TOOL_DISPATCH:
+            TOOL_DECLARATIONS.append(_decl)
+            TOOL_DISPATCH[_decl["name"]] = _ai["dispatch"][_decl["name"]]
+    safety.SAFE_READONLY |= set(_ai.get("read_only_names", set()))
 except Exception:
     pass
 
@@ -2789,8 +2840,22 @@ class Agent:
                         continue  # still limited -> wait longer and retry
             return _try_fallbacks(reason)
 
+    def _refresh_tools_if_dirty(self):
+        """If the AI authored a new tool at runtime (create_python_tool), rebuild the chat so the
+        model can actually see it — the tool schema is fixed at chat-init. History is preserved,
+        so the in-flight conversation continues. Cheap no-op when nothing changed."""
+        if getattr(self, "_tools_gen_seen", 0) == _TOOLS_GEN:
+            return
+        self._tools_gen_seen = _TOOLS_GEN
+        try:
+            hist = self._capture_history()
+            self._init_chat(model=self.active_model, history=hist)
+        except Exception:
+            pass
+
     def _run_turn(self, user_text: str):
         self._stop_flag.clear()
+        self._refresh_tools_if_dirty()
         self._fail_counts: dict[str, int] = {}  # tool name -> consecutive failures this turn
         self._fail_lock = threading.Lock()
         # Frame the turn with the current run-mode directive so plan/chat/read-only/auto

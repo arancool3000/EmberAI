@@ -1,5 +1,5 @@
 {
-  "version": "1.10.4",
+  "version": "1.11.0",
   "pub_date": "2026-07-03",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.10.4 \u2014 Download protection that actually does something\n\n\u2022 When you download an executable, Ember now jumps to the FRONT of your screen with a review popup instead of a toast you'll miss.\n\u2022 Scan it: one click runs a full scan \u2014 the local engines PLUS an AI second opinion from whatever model you have an API key for (Gemini or Claude). If it's malicious, Ember auto-quarantines it so it can't run.\n\u2022 Block it: Quarantine moves the file out of Downloads so a double-click can't open it; Delete removes it outright.\n\u2022 The AI second opinion is now available everywhere (real-time downloads and the block-before-open guard), not only after you'd opened the Antivirus window once.\n\nBuilds on 1.10.3."
+  "notes": "Ember 1.11.0 \u2014 Ember can hear songs, and can extend itself\n\n\u2022 \"What song is this?\" \u2014 in voice chat, Ember now listens to the music playing and names the track (Shazam-style fingerprint). A plain voice model just talks over the song; Ember actually identifies it.\n\u2022 Ember can write itself new abilities: if it's missing a capability you ask for, it can author a new tool on the spot, and use it in the same conversation. New code is shown to you and approved once, then runs automatically. It can also read and edit its own source (when you run Ember from source).\n\u2022 Download protection popup with one-click AI scan + quarantine (front-and-centre, auto-quarantines malware).\n\u2022 Ember Search shows web results instantly while the AI answer loads.\n\u2022 Ember Browser: links that open in a new tab (target=_blank / window.open) now work \u2014 they were being silently dropped.\n\nSong ID uses the optional voice deps (pip install -r requirements-voice.txt) or an AUDD_API_TOKEN."
 }
