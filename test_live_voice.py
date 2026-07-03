@@ -211,6 +211,18 @@ def test_audio_blob_fallback_without_genai():
     assert blob["mime_type"] == lv.AUDIO_IN_MIME and blob["data"] == b"abc"
 
 
+def test_mic_is_not_orphaned_when_the_player_fails_to_open():
+    # Regression: `mic, player = _PyAudioMic(), _PyAudioPlayer()` opened the mic first, so if the
+    # player raised, the tuple never bound, `mic` stayed None, and the open input stream leaked
+    # (device stays captured until the process exits). The fix constructs them sequentially and
+    # closes the mic on failure.
+    import inspect
+    src = inspect.getsource(lv.LiveVoice._main)
+    assert "mic, player = _PyAudioMic(), _PyAudioPlayer()" not in src   # buggy tuple form gone
+    assert "mic = _PyAudioMic()" in src and "player = _PyAudioPlayer()" in src
+    assert "mic.close()" in src                                          # closed on player failure
+
+
 def test_looks_like_bad_model_detects_model_not_found_style_errors():
     # These are the actual close-reason texts the Live API sends when a dated preview model ID
     # has been retired (retrying the SAME model then just fails identically forever).

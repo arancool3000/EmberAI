@@ -329,8 +329,19 @@ class LiveVoice:
             self._loop_stop = asyncio.Event()
             mic = player = None
             try:
-                mic, player = _PyAudioMic(), _PyAudioPlayer()
+                # Construct SEQUENTIALLY, not as one tuple assignment: a tuple form opens the mic
+                # first, so if the player constructor then raises the binding never happens, `mic`
+                # stays None, and the already-open input stream is orphaned - the device stays
+                # captured (macOS orange dot on, mic busy for wake-word/push-to-talk) until the
+                # process exits. Building them in order lets the except close the mic it opened.
+                mic = _PyAudioMic()
+                player = _PyAudioPlayer()
             except Exception as e:
+                if mic is not None:
+                    try:
+                        mic.close()
+                    except Exception:
+                        pass
                 self._handlers["on_error"](f"microphone/speaker unavailable: {e}")
                 return
             try:

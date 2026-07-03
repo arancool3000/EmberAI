@@ -44,6 +44,49 @@ def test_send_email_does_not_block_a_real_looking_address():
     assert "smtp" in r["error"].lower()
 
 
+def test_calendar_utc_input_is_written_as_utc_not_floating_local():
+    # A timezone-aware "15:00Z" must be emitted as UTC (trailing Z), or non-UTC users get the
+    # event at 15:00 LOCAL — an hour+ wrong.
+    import tempfile
+    from pathlib import Path
+    dst = Path(tempfile.mkdtemp(prefix="ember_ics_")) / "e.ics"
+    r = mt.create_calendar_event("Standup", "2026-06-01T15:00:00Z", destination=str(dst))
+    assert r["ok"] is True
+    ics = dst.read_text()
+    assert "DTSTART:20260601T150000Z" in ics                # UTC form, keeps the Z
+    assert "DTEND:20260601T160000Z" in ics                  # default +1h, also UTC
+
+
+def test_calendar_offset_input_is_converted_to_utc():
+    import tempfile
+    from pathlib import Path
+    dst = Path(tempfile.mkdtemp(prefix="ember_ics_")) / "e.ics"
+    # 15:00 at +01:00 == 14:00 UTC
+    r = mt.create_calendar_event("Sync", "2026-06-01T15:00:00+01:00", destination=str(dst))
+    assert r["ok"] is True
+    assert "DTSTART:20260601T140000Z" in dst.read_text()
+
+
+def test_calendar_naive_input_stays_floating_local():
+    # A naive "3pm" (no offset) means "3pm wherever the user is" -> floating, NO trailing Z.
+    import tempfile
+    from pathlib import Path
+    dst = Path(tempfile.mkdtemp(prefix="ember_ics_")) / "e.ics"
+    r = mt.create_calendar_event("Lunch", "2026-06-01T12:00:00", destination=str(dst))
+    assert r["ok"] is True
+    ics = dst.read_bytes().decode()                         # read_bytes preserves the CRLF
+    assert "DTSTART:20260601T120000\r\n" in ics             # bare, floating (no Z)
+    assert "DTSTART:20260601T120000Z" not in ics
+
+
+def test_power_sleep_uses_setsuspendstate_suspend_not_the_hibernating_rundll32():
+    # The old rundll32 SetSuspendState 0,1,0 hibernates when hibernation is enabled. The fix must
+    # use the .NET SetSuspendState('Suspend', ...) which explicitly requests sleep.
+    src = open(mt.__file__, encoding="utf-8").read()
+    assert "SetSuspendState 0,1,0" not in src
+    assert "SetSuspendState('Suspend'" in src
+
+
 def _run():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

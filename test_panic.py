@@ -148,6 +148,56 @@ def test_default_lock_screen_honestly_reports_failure_instead_of_claiming_locked
         panic.sys.platform, panic._run = _REAL_PLATFORM, _REAL_RUN
 
 
+def test_cut_network_disables_wired_services_not_just_wifi_on_macos():
+    # A panic cut that only kills Wi-Fi leaves Ethernet/Thunderbolt (and a live C2 channel) up
+    # while reporting success. It must disable EVERY network service.
+    panic.sys.platform = "darwin"
+    calls = []
+    def fake_run(cmd, timeout=8.0):
+        calls.append(cmd)
+        if cmd[:2] == ["networksetup", "-listallhardwareports"]:
+            return (True, "Hardware Port: Wi-Fi\nDevice: en0\n")
+        if cmd[:2] == ["networksetup", "-listallnetworkservices"]:
+            return (True, "An asterisk (*) denotes a disabled service.\n"
+                          "Wi-Fi\nEthernet\nThunderbolt Bridge\n")
+        return (True, "")
+    panic._run = fake_run
+    try:
+        r = panic._default_cut_network()
+        assert r["ok"] is True
+        joined = [" ".join(c) for c in calls]
+        assert any("setairportpower en0 off" in j for j in joined)                 # Wi-Fi off
+        assert any("-setnetworkserviceenabled Ethernet off" in j for j in joined)   # wired off too
+        assert any("-setnetworkserviceenabled Thunderbolt Bridge off" in j for j in joined)
+    finally:
+        panic._run, panic.sys.platform = _REAL_RUN, _REAL_PLATFORM
+
+
+def test_cut_network_disables_all_windows_interfaces_not_just_wifi():
+    panic.sys.platform = "win32"
+    calls = []
+    def fake_run(cmd, timeout=8.0):
+        calls.append(cmd)
+        if cmd[:4] == ["netsh", "interface", "show", "interface"]:
+            return (True,
+                    "Admin State    State          Type             Interface Name\n"
+                    "-------------------------------------------------------------\n"
+                    "Enabled        Connected      Dedicated        Ethernet\n"
+                    "Enabled        Connected      Dedicated        Wi-Fi\n"
+                    "Enabled        Connected      Loopback         Loopback Pseudo-Interface 1\n")
+        return (True, "")
+    panic._run = fake_run
+    try:
+        r = panic._default_cut_network()
+        assert r["ok"] is True
+        joined = [" ".join(c) for c in calls]
+        assert any("set interface Ethernet admin=disable" in j for j in joined)
+        assert any("set interface Wi-Fi admin=disable" in j for j in joined)
+        assert not any("Loopback" in j for j in joined)   # loopback is skipped
+    finally:
+        panic._run, panic.sys.platform = _REAL_RUN, _REAL_PLATFORM
+
+
 def test_restore_and_status():
     calls = _install()
     panic.arm_auto(True)

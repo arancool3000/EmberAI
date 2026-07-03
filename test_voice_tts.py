@@ -42,6 +42,47 @@ def test_soundtools_requires_url_not_key():
     assert _route({"tts_engine": "soundtools", "soundtools_url": "https://x/tts"}) == ["soundtools"]
 
 
+def test_audio_player_routes_mp3_away_from_wav_only_players():
+    # The neural engines emit MP3. Routing an MP3 to a WAV-only player (Linux aplay) is silent
+    # failure -> Ember went mute. _audio_player_cmd must refuse aplay for MP3 and pick an
+    # MP3-capable player when one exists.
+    import shutil
+    orig_plat, orig_which = voice.sys.platform, shutil.which
+    try:
+        voice.sys.platform = "linux"
+        shutil.which = lambda name, *a, **k: "/usr/bin/aplay" if name == "aplay" else None
+        assert voice._audio_player_cmd("/tmp/x.mp3") is None          # only wav player -> refuse
+        shutil.which = lambda name, *a, **k: ("/usr/bin/" + name) if name in ("ffplay", "aplay") else None
+        cmd = voice._audio_player_cmd("/tmp/x.mp3")
+        assert cmd and cmd[0] == "ffplay"                             # mp3 -> mp3-capable player
+        cmd = voice._audio_player_cmd("/tmp/x.wav")
+        assert cmd and cmd[0] == "aplay"                             # wav -> aplay is fine
+    finally:
+        voice.sys.platform, shutil.which = orig_plat, orig_which
+
+
+def test_play_audio_file_reports_false_when_no_player_can_handle_it():
+    import shutil
+    orig_plat, orig_which = voice.sys.platform, shutil.which
+    try:
+        voice.sys.platform = "linux"
+        shutil.which = lambda name, *a, **k: None                    # nothing installed
+        assert voice._play_audio_file("/tmp/x.mp3") is False         # -> caller falls back to system voice
+    finally:
+        voice.sys.platform, shutil.which = orig_plat, orig_which
+
+
+def test_windows_player_uses_mediaplayer_not_wav_only_soundplayer():
+    orig_plat = voice.sys.platform
+    try:
+        voice.sys.platform = "win32"
+        cmd = voice._audio_player_cmd(r"C:\Temp\ember_tts.mp3")
+        joined = " ".join(cmd)
+        assert "MediaPlayer" in joined and "SoundPlayer" not in joined
+    finally:
+        voice.sys.platform = orig_plat
+
+
 def test_fix_assistant_name():
     # The headline bug: "ember" heard as "amber".
     assert voice.fix_assistant_name("hey amber what's the time") == "hey Ember what's the time"
