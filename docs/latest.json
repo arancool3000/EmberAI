@@ -1,6 +1,6 @@
 {
-  "version": "1.10.1",
-  "pub_date": "2026-07-01",
+  "version": "1.10.2",
+  "pub_date": "2026-07-03",
   "min_macos": "12.0",
   "min_windows": "10",
   "downloads": {
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.10.1 \u2014 Fullscreen now works in Ember Browser\n\n\u2022 Ember Browser now supports fullscreen: the fullscreen button on a video (YouTube, etc.), and fullscreen presentations/games, now actually fill the screen \u2014 previously clicking it did nothing because the browser never accepted the page's fullscreen request. Press F11 to fullscreen the whole browser window, and Esc to exit.\n\nBuilds on 1.10.0's Ember Link roaming fix and deep bug-fix pass."
+  "notes": "Ember 1.10.2 \u2014 A brand-new Ember Search\n\n\u2022 Ember Browser's built-in search has been completely redesigned \u2014 a polished, colourful start page with a gradient logo, a time-aware greeting, and quick-link tiles with real site icons.\n\u2022 Make it yours: click the gear to open Customise \u2014 pick from 6 colour themes (Ember, Ocean, Forest, Grape, Rose, Slate) or set any custom accent, switch between Dark and Light, toggle the greeting/clock, and add or remove your own shortcut tiles. Your choices are saved and re-tint the whole browser to match.\n\u2022 Redesigned results: instant-answer chips for maths, an AI answer card with one-tap Copy and clickable inline source citations, clean result cards with site icons, and quick links to search the same query on DuckDuckGo, Brave, Google, Startpage or Wikipedia.\n\nBuilds on 1.10.1's Ember Browser fullscreen fix."
 }
