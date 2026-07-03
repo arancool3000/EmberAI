@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html as _html
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -489,6 +490,24 @@ def _fetch_page_text(url: str, limit: int = 3500) -> str:
         return ""
 
 
+def _modern_user_agent() -> str:
+    """A current desktop-Chrome User-Agent for the running OS.
+
+    QtWebEngine's default UA advertises 'QtWebEngine/x.y Chrome/OLD', which sites like BandLab,
+    Google Docs, Figma etc. sniff and reject with 'update your browser / use Chrome'. Presenting
+    a plain, current Chrome UA (no QtWebEngine token) makes those pages treat us as a modern
+    browser. Underlying engine features are unchanged — this only removes the UA-sniff banner."""
+    ver = "131.0.0.0"
+    if sys.platform == "darwin":
+        plat = "Macintosh; Intel Mac OS X 10_15_7"
+    elif sys.platform.startswith("win"):
+        plat = "Windows NT 10.0; Win64; x64"
+    else:
+        plat = "X11; Linux x86_64"
+    return (f"Mozilla/5.0 ({plat}) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{ver} Safari/537.36")
+
+
 def _instant_answer(query: str):
     """Compute a quick local answer for arithmetic queries (e.g. '12*8+3')."""
     import re
@@ -523,6 +542,12 @@ class EmberBrowser(QWidget):
         self._history = self._load_history()
 
         self._profile = QWebEngineProfile(self)
+        # Present as a current Chrome so sites don't refuse us with an "unsupported browser /
+        # update your browser" banner (the default QtWebEngine UA triggers that on BandLab etc.).
+        try:
+            self._profile.setHttpUserAgent(_modern_user_agent())
+        except Exception:
+            pass
         self._guard = _Guard()
         try:
             self._profile.setUrlRequestInterceptor(self._guard)

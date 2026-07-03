@@ -117,6 +117,41 @@ def test_no_speech_returns_error_not_text():
     assert "no speech" in err.lower()
 
 
+def test_silent_mic_points_at_permission():
+    # A dead / permission-denied mic delivers ~silence the whole time. That must read as a
+    # microphone problem, not a bland "no speech" — the #1 cause of "voice doesn't work".
+    frames = [_frame(0)] * 8
+    text, err, _levels, _s = _run(frames)
+    assert text == "" and "no speech" in err.lower()
+    assert "microphone" in err.lower()          # actionable: it's a mic/permission issue
+
+
+def test_quiet_speech_below_threshold_hints_louder():
+    # Real audio that never clears the VAD threshold -> distinct "too quiet" hint (not the
+    # silent-mic message), so the user knows to speak up / raise input gain.
+    frames = [_frame(120)] * 12                  # 120 RMS: above silence, below the 180 floor
+    text, err, _levels, _s = _run(frames)
+    assert text == "" and "no speech" in err.lower()
+    assert "quiet" in err.lower() or "louder" in err.lower()
+    assert "microphone" not in err.lower()       # not misdiagnosed as a dead mic
+
+
+def test_quiet_mic_speech_now_clears_lower_threshold():
+    # The threshold floor dropped 350 -> 180 so quieter mics register. ~250 RMS speech used to
+    # be swallowed ("no speech"); now it's captured and transcribed.
+    frames = [_frame(0)] * 4 + [_frame(250)] * 10 + [_frame(0)] * 20
+    text, err, _levels, _s = _run(frames)
+    assert text == "hello ember" and err == ""
+
+
+def test_loud_blip_during_calibration_does_not_deafen():
+    # Median (not max) calibration: one loud blip while calibrating must NOT inflate the floor and
+    # then swallow the actual speech that follows.
+    frames = [_frame(9000)] + [_frame(0)] * 3 + [_frame(3000)] * 10 + [_frame(0)] * 20
+    text, err, _levels, _s = _run(frames)
+    assert text == "hello ember", (text, err)   # 3000-RMS speech still clears the floor
+
+
 def test_level_inactive_after_capture():
     frames = [_frame(0)] * 4 + [_frame(9000)] * 6 + [_frame(0)] * 20
     _run(frames)

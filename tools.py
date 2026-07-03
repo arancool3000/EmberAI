@@ -76,6 +76,12 @@ def _osa(script: str, timeout: int = 8) -> tuple[bool, str]:
     try:
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout)
         return r.returncode == 0, (r.stdout or r.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        # A clean, actionable message instead of the raw "Command [...] timed out" repr (which
+        # dumps the whole AppleScript at the user). System Events can be slow to enumerate a busy
+        # desktop; the caller can retry or narrow the request.
+        return False, ("the macOS accessibility query took too long to respond — try again, or "
+                       "close some windows/apps first (System Events was slow)")
     except Exception as e:
         return False, str(e)
 
@@ -693,7 +699,9 @@ def list_windows():
     end tell
     return out
     '''
-    ok, output = _osa(script, timeout=8)
+    # Enumerating position+size of every window of every app is O(windows) Apple Events, which
+    # can take well over 8s on a busy desktop (that's the timeout users hit). Give it real room.
+    ok, output = _osa(script, timeout=30)
     if not ok:
         return {"ok": False, "error": output}
     windows = []
