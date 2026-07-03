@@ -357,6 +357,42 @@ def test_ai_clean_still_held_until_user_confirms():
     _reset_gate_state()
 
 
+def test_clamav_scan_error_is_not_reported_as_clean():
+    # A backend that ERRORED (encrypted/corrupt archive, engine failure) must NOT be listed as an
+    # engine that cleared the file, and the result must carry scan_error=True. Previously a
+    # clamscan error (rc 2) was returned as malicious:False and blindly credited, so an
+    # unscannable file was reported "clean" with clamav proudly listed as having passed it.
+    _reset_gate_state()
+    orig = antivirus._scan_clamav
+    antivirus._scan_clamav = lambda p: {"engine": "clamav", "malicious": False,
+                                        "error": "password-protected archive", "scan_error": True}
+    try:
+        p = _write("locked.txt", "ordinary text\n")
+        r = antivirus.scan_file(str(p), deep=False)
+        assert r["scan_error"] is True, r
+        assert "clamav" not in r["engines"]                  # not credited as a passed engine
+        assert "clamav (scan error)" in r["engines"]
+    finally:
+        antivirus._scan_clamav = orig
+
+
+def test_gate_open_holds_a_file_whose_scan_errored():
+    # block_on_scan_error is on by default -> a partly-unscannable file must be HELD for review,
+    # not opened on the strength of a scan that didn't actually complete.
+    _reset_gate_state()
+    antivirus.set_ai_judge(lambda items: [False for _ in items])   # AI finds nothing harmful
+    orig = antivirus._scan_clamav
+    antivirus._scan_clamav = lambda p: {"engine": "clamav", "malicious": False,
+                                        "error": "corrupt archive", "scan_error": True}
+    try:
+        p = _write("report.txt", "just a normal document\n")    # otherwise-clean content
+        g = antivirus.gate_open(str(p))
+        assert g["allowed"] is False and g.get("needs_confirmation") is True, g
+    finally:
+        antivirus._scan_clamav = orig
+        _reset_gate_state()
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())
