@@ -249,7 +249,10 @@ class EmberBrowser(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        bar = QHBoxLayout()
+        # Wrap the toolbar row in a container so it can be hidden as a unit when a page goes
+        # fullscreen (e.g. a fullscreen video), leaving only the web content on screen.
+        self._chrome = QWidget()
+        bar = QHBoxLayout(self._chrome)
         bar.setContentsMargins(8, 6, 8, 6)
         bar.setSpacing(6)
 
@@ -301,7 +304,7 @@ class EmberBrowser(QWidget):
         bar.addWidget(_ibtn("puzzle", "🧩", "Extensions — let Ember's AI build one for you", self._show_extensions_menu))
         bar.addWidget(_ibtn("plus", "+", "New tab", lambda: self._new_tab()))
         bar.addWidget(_ibtn("sparkle", "✨", "AI panel", self._toggle_ai))
-        outer.addLayout(bar)
+        outer.addWidget(self._chrome)
 
         # Slim page-load progress line (animates as pages load, fades out when done).
         self._loadbar = QProgressBar()
@@ -351,15 +354,97 @@ class EmberBrowser(QWidget):
         self._status.setStyleSheet("color:#8a8f98; font-size:11px; padding:2px 10px;")
         outer.addWidget(self._status)
 
+        # Fullscreen state (HTML5 page fullscreen + F11 window fullscreen).
+        self._fs_active = False       # a web PAGE is currently fullscreen (chrome hidden)
+        self._fs_hidden: list = []    # chrome widgets we hid, to restore exactly
+        self._fs_was_max = False
+
         for seq, fn in (("Ctrl+T", lambda: self._new_tab()),
                         ("Ctrl+W", lambda: self._close_tab(self.tabs.currentIndex())),
                         ("Ctrl+L", lambda: (self.address.setFocus(), self.address.selectAll())),
                         ("Ctrl+F", self._toggle_find),
+                        ("F11", self._toggle_window_fullscreen),
+                        ("Escape", self._exit_any_fullscreen),
                         ("Ctrl+=", lambda: self._zoom(0.1)), ("Ctrl++", lambda: self._zoom(0.1)),
                         ("Ctrl+-", lambda: self._zoom(-0.1)), ("Ctrl+0", lambda: self._zoom(0))):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
         self._new_tab()  # opens the Ember Search start page
+
+    # ---- fullscreen (HTML5 video fullscreen + F11 window fullscreen) ----
+    def _on_fullscreen_requested(self, request, _view):
+        """A web page (video player, presentation, game) asked to enter/exit fullscreen. Accept
+        it AND hide the browser chrome so the content actually fills the screen — without both,
+        clicking fullscreen on a YouTube video did nothing."""
+        try:
+            request.accept()
+        except Exception:
+            return
+        try:
+            entering = bool(request.toggleOn())
+        except Exception:
+            entering = not self._fs_active
+        if entering:
+            self._enter_page_fullscreen()
+        else:
+            self._exit_page_fullscreen()
+
+    def _enter_page_fullscreen(self):
+        if self._fs_active:
+            return
+        self._fs_active = True
+        self._fs_was_max = self.isMaximized()
+        # Hide every bit of chrome, remembering exactly what was visible to restore it later.
+        self._fs_hidden = []
+        for w in (getattr(self, "_chrome", None), getattr(self, "_loadbar", None),
+                  getattr(self, "_find_bar", None), getattr(self, "_status", None)):
+            if w is not None and w.isVisible():
+                self._fs_hidden.append(w)
+                w.setVisible(False)
+        try:
+            self.tabs.tabBar().setVisible(False)
+        except Exception:
+            pass
+        self.showFullScreen()
+
+    def _exit_page_fullscreen(self):
+        if not self._fs_active:
+            return
+        self._fs_active = False
+        for w in self._fs_hidden:
+            try:
+                w.setVisible(True)
+            except Exception:
+                pass
+        self._fs_hidden = []
+        try:
+            self.tabs.tabBar().setVisible(True)
+        except Exception:
+            pass
+        self.showMaximized() if self._fs_was_max else self.showNormal()
+
+    def _toggle_window_fullscreen(self):
+        """F11: fullscreen the whole browser window (chrome stays visible), like any browser."""
+        if self.isFullScreen():
+            self._exit_page_fullscreen() if self._fs_active else self.showNormal()
+        else:
+            self._fs_was_max = self.isMaximized()
+            self.showFullScreen()
+
+    def _exit_any_fullscreen(self):
+        """Esc: leave page fullscreen if a page put us there; also un-fullscreen a plain F11
+        window fullscreen. A no-op otherwise (so Esc doesn't disrupt normal browsing)."""
+        if self._fs_active:
+            # Also tell the page to drop its own fullscreen state so its UI stays consistent.
+            try:
+                v = self._cur()
+                if v is not None:
+                    v.triggerPageAction(QWebEnginePage.WebAction.ExitFullScreen)
+            except Exception:
+                pass
+            self._exit_page_fullscreen()
+        elif self.isFullScreen():
+            self.showNormal()
 
     # ---- tabs ----
     def _new_tab(self, url: str | None = None):
@@ -375,6 +460,15 @@ class EmberBrowser(QWidget):
             s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, False)
             s.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, False)
             s.setAttribute(QWebEngineSettings.WebAttribute.ScreenCaptureEnabled, False)
+            # Without this, HTML5 fullscreen (a video's fullscreen button, presentations, games)
+            # is disabled at the engine level and clicking it does nothing.
+            s.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
+        except Exception:
+            pass
+        # A page asking to go fullscreen must be explicitly accepted AND the window made
+        # fullscreen; QtWebEngine won't do either on its own.
+        try:
+            page.fullScreenRequested.connect(lambda req, v=view: self._on_fullscreen_requested(req, v))
         except Exception:
             pass
         view.urlChanged.connect(lambda u, v=view: self._on_url_changed(v, u))
