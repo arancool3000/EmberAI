@@ -79,6 +79,7 @@ jobs:
             test_version.py \
             test_remote_pin.py \
             test_ember_browser_adblock.py \
+            test_ember_browser_fullscreen.py \
             test_mac_permissions.py \
             test_ember_spec.py \
             test_more_tools.py \

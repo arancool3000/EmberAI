@@ -1,5 +1,5 @@
 {
-  "version": "1.10.0",
+  "version": "1.10.1",
   "pub_date": "2026-07-01",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.10.0 \u2014 Connect-from-anywhere finally works, plus a deep bug-fix pass\n\n\u2022 Ember Link \"Connect from anywhere\" now actually works: the private link signs your phone in automatically from any network (it previously could never authenticate off Wi-Fi). Tapping the mirror now clicks the exact right spot even when the image is letterboxed, taps are sent atomically (no more occasional wrong-place clicks), quick-action buttons show the REAL result instead of always a checkmark, and the live view can no longer freeze on a dropped frame.\n\u2022 Security: fixed a key-vault bug that could wipe all your saved API keys if the vault file was damaged (it now backs up and refuses instead of overwriting); an antivirus scan that couldn't read a file is no longer reported as \"clean\"; and the security monitor stopped falsely flagging local dev tools (Jupyter, dev servers) as backdoors.\n\u2022 Voice: the free neural voice no longer goes silently mute on Windows/Linux (it played MP3 through a WAV-only player); it now falls back cleanly if playback can't happen.\n\u2022 \"Sleep\" now really sleeps instead of hibernating; calendar events created from a specific timezone no longer land an hour off; the emergency lockdown now cuts wired connections too, not just Wi-Fi; and a microphone-leak on a failed voice start was fixed.\n\nBuilds on 1.9.7 (which itself finally shipped everything from 1.9.2-1.9.6)."
+  "notes": "Ember 1.10.1 \u2014 Fullscreen now works in Ember Browser\n\n\u2022 Ember Browser now supports fullscreen: the fullscreen button on a video (YouTube, etc.), and fullscreen presentations/games, now actually fill the screen \u2014 previously clicking it did nothing because the browser never accepted the page's fullscreen request. Press F11 to fullscreen the whole browser window, and Esc to exit.\n\nBuilds on 1.10.0's Ember Link roaming fix and deep bug-fix pass."
 }
