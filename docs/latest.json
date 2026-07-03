@@ -1,5 +1,5 @@
 {
-  "version": "1.10.3",
+  "version": "1.10.4",
   "pub_date": "2026-07-03",
   "min_macos": "12.0",
   "min_windows": "10",
@@ -13,5 +13,5 @@
       "sha256": ""
     }
   },
-  "notes": "Ember 1.10.3 \u2014 Ember Search polish\n\n\u2022 Press / anywhere on the search or results page to jump straight to the search box.\n\u2022 The Customise panel now dims the page behind it and closes when you click away or press Esc; press Enter in a shortcut field to add it without reaching for the button.\n\u2022 Site icons no longer send a referrer to the icon service (more private) and load lazily.\n\u2022 Respects your system's \"reduce motion\" setting \u2014 the loading shimmer and hover effects calm down.\n\u2022 Small accessibility touches: proper labels on the search box and the Customise button.\n\nBuilds on 1.10.2's brand-new Ember Search."
+  "notes": "Ember 1.10.4 \u2014 Download protection that actually does something\n\n\u2022 When you download an executable, Ember now jumps to the FRONT of your screen with a review popup instead of a toast you'll miss.\n\u2022 Scan it: one click runs a full scan \u2014 the local engines PLUS an AI second opinion from whatever model you have an API key for (Gemini or Claude). If it's malicious, Ember auto-quarantines it so it can't run.\n\u2022 Block it: Quarantine moves the file out of Downloads so a double-click can't open it; Delete removes it outright.\n\u2022 The AI second opinion is now available everywhere (real-time downloads and the block-before-open guard), not only after you'd opened the Antivirus window once.\n\nBuilds on 1.10.3."
 }

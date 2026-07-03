@@ -3532,31 +3532,11 @@ class AntivirusDialog(QDialog):
                      or "").strip())
 
     def _ai_judge(self, items):
-        """ONE batched model call: which flagged files could cause REAL harm? Returns list[bool]."""
+        """ONE batched model call: which flagged files could cause REAL harm? Returns list[bool].
+        Delegates to the shared ai_detect.judge_harmful so the Antivirus window and the always-on
+        guards use identical logic + the same model."""
         import ai_detect
-        lines = []
-        for i, it in enumerate(items):
-            lines.append(f"[{i}] {it['name']} — flagged for: {', '.join(it.get('reasons', []))}\n"
-                         f"---content excerpt---\n{(it.get('excerpt') or '')[:1500]}\n---end---")
-        prompt = (
-            "You are a malware analyst. Each numbered item below is a file a HEURISTIC scanner "
-            "flagged as 'suspicious' (often a false positive). For EACH, decide if the file could "
-            "ACTUALLY cause real harm if opened or run. Source code, test files, documentation, "
-            "config, and normal app installers (.dmg/.pkg) are NOT harmful. Real malware "
-            "(reverse shells, ransomware, credential stealers, obfuscated droppers actually wired "
-            "to run) IS harmful. Reply with ONLY a JSON array of booleans in order "
-            "(true = could cause real harm), e.g. [false,true,false].\n\n" + "\n\n".join(lines))
-        raw = ai_detect._ask_model(prompt, self._settings)
-        import re as _re
-        m = _re.search(r"\[[^\]]*\]", raw or "")
-        if not m:
-            return [True] * len(items)   # uncertain -> keep flagged (safe)
-        try:
-            arr = json.loads(m.group(0))
-            out = [bool(x) for x in arr]
-            return out + [True] * (len(items) - len(out))
-        except Exception:
-            return [True] * len(items)
+        return ai_detect.judge_harmful(items, self._settings)
 
     def _on_reviewed(self, kept, cleared):
         """AI review came back: drop cleared (false-positive) rows + un-quarantine any that were
@@ -4535,6 +4515,182 @@ class RemoteLinkDialog(QDialog):
         QMessageBox.information(self, "Ember Link", f"Revoked {r.get('revoked', 0)} paired device(s). "
                                 "They'll need to re-pair on your Wi-Fi.")
         self._refresh()
+
+
+class DownloadGuardDialog(QDialog):
+    """Front-and-centre review popup for a freshly-downloaded executable/threat.
+
+    A downloaded executable is a real risk, so instead of a passive toast Ember pops this
+    dialog OVER the current screen (the caller surfaces the window first) and holds the user's
+    attention with clear actions:
+      * Scan with AI  — a deep scan (static engines + an AI second opinion from whatever model
+        the user has a key for) run OFF the UI thread; the verdict updates the dialog and, if
+        malicious, the file is auto-quarantined so it can't be opened.
+      * Quarantine    — move it out of Downloads so a double-click can't run it (the 'block'.)
+      * Delete        — remove it.
+      * Keep          — dismiss and leave it in place.
+    """
+    _scan_done = pyqtSignal(dict)
+
+    def __init__(self, parent=None, *, name="", detail="", level="caution", path="", settings=None):
+        super().__init__(parent)
+        self._path = path
+        self._name = name or (Path(path).name if path else "a file")
+        self._settings = settings or {}
+        self._scanning = False
+        self._scan_done.connect(self._on_scan_done)
+        # Sit above other windows so it's genuinely in front of whatever the user was doing.
+        try:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        except Exception:
+            pass
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowTitle("⚠ Download protection")
+        self.setMinimumWidth(460)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 18, 20, 16)
+        v.setSpacing(12)
+
+        head = QLabel(("⚠ Threat in your download" if level == "threat"
+                       else "⚠ You just downloaded an executable"))
+        head.setStyleSheet("font-size:16px; font-weight:700; color:#ff8a5c;")
+        v.addWidget(head)
+
+        import html as _html
+        info = QLabel(f"<b>{_html.escape(self._name)}</b><br>"
+                      f"<span style='color:#9aa0b5'>{_html.escape(detail)}</span>")
+        info.setWordWrap(True)
+        v.addWidget(info)
+
+        self._status = QLabel("Don't open it unless you trust the source. "
+                              "Run a scan to be sure.")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet("color:#c0c6dc; font-size:12.5px;")
+        v.addWidget(self._status)
+
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 0)      # indeterminate
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(6)
+        self._bar.setVisible(False)
+        v.addWidget(self._bar)
+
+        row = QHBoxLayout()
+        self._scan_btn = QPushButton("🔍  Scan with AI")
+        try:
+            self._scan_btn.setObjectName("send")   # primary styling if the theme defines it
+        except Exception:
+            pass
+        self._scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scan_btn.clicked.connect(self._start_scan)
+        self._quar_btn = QPushButton("🔒  Quarantine")
+        self._quar_btn.clicked.connect(self._quarantine)
+        self._del_btn = QPushButton("🗑  Delete")
+        self._del_btn.clicked.connect(self._delete)
+        self._keep_btn = QPushButton("Keep")
+        self._keep_btn.clicked.connect(self.reject)
+        for b in (self._scan_btn, self._quar_btn, self._del_btn, self._keep_btn):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            row.addWidget(b)
+        v.addLayout(row)
+
+        # No key configured -> tell the user the scan will only use local engines.
+        try:
+            import ai_detect
+            if not ai_detect.ai_available(self._settings):
+                self._scan_btn.setText("🔍  Scan")
+                self._scan_btn.setToolTip("Add a Gemini or Claude API key in Settings for an AI "
+                                          "second opinion. Scans use local engines meanwhile.")
+        except Exception:
+            pass
+
+    # -- scan (off the UI thread) --
+    def _start_scan(self):
+        if self._scanning:
+            return
+        self._scanning = True
+        self._scan_btn.setEnabled(False)
+        self._status.setText("Scanning… (static engines + AI second opinion)")
+        self._bar.setVisible(True)
+        path = self._path
+
+        def work():
+            out = {}
+            try:
+                import antivirus
+                scan = antivirus.scan_file(path, deep=False)
+                out["scan"] = scan
+                reasons = scan.get("reasons") if isinstance(scan, dict) else None
+                out["ai"] = antivirus.ai_assess_file(path, reasons)
+            except Exception as e:
+                out["error"] = str(e)
+            self._scan_done.emit(out)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_scan_done(self, out: dict):
+        self._scanning = False
+        self._bar.setVisible(False)
+        self._scan_btn.setEnabled(True)
+        if out.get("error"):
+            self._status.setText(f"Scan failed: {out['error']}")
+            return
+        scan = out.get("scan") or {}
+        ai = out.get("ai") or {}
+        verdict = scan.get("verdict", "unknown")
+        ai_verdict = ai.get("verdict", "unknown")
+        reasons = scan.get("reasons") or []
+        # Malicious by either the engines or the AI -> quarantine immediately.
+        if verdict == "malicious" or ai_verdict == "malicious":
+            src = "the engines" if verdict == "malicious" else "an AI review"
+            done = self._do_quarantine(reason=f"malicious ({src})")
+            self._status.setText(
+                f"<span style='color:#ff6b6b'><b>Malicious</b> — flagged by {src}. "
+                + ("Quarantined so it can't run." if done else "Please delete it.") + "</span>")
+            self._quar_btn.setEnabled(not done)
+            self._keep_btn.setText("Close")
+            return
+        if verdict == "suspicious":
+            extra = ("; ".join(str(r) for r in reasons[:3])) if reasons else "heuristics"
+            note = (" AI didn't find anything malicious, but " if ai.get("available") else " ")
+            self._status.setText(
+                f"<span style='color:#e0af68'><b>Suspicious</b> ({extra}).</span>{note}"
+                "Only keep it if you trust the source.")
+            return
+        # Clean.
+        if ai.get("available"):
+            self._status.setText("<span style='color:#6cc07a'>Clean — the engines and an AI "
+                                 "review found nothing malicious.</span> Still, only open files "
+                                 "you trust.")
+        else:
+            self._status.setText("<span style='color:#6cc07a'>No threats found by the local "
+                                 "engines.</span> Add an API key in Settings for an AI second "
+                                 "opinion. Only open files you trust.")
+
+    # -- actions --
+    def _do_quarantine(self, reason="user quarantined a download") -> bool:
+        try:
+            import antivirus
+            return bool(antivirus.quarantine_file(self._path, reasons=[reason]).get("ok"))
+        except Exception:
+            return False
+
+    def _quarantine(self):
+        if self._do_quarantine():
+            QMessageBox.information(self, "Quarantined",
+                                    f"'{self._name}' was moved to quarantine — it can't be opened "
+                                    "from Downloads now.")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Quarantine", "Could not quarantine the file.")
+
+    def _delete(self):
+        try:
+            Path(self._path).unlink()
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
 
 
 class EmberWindow(QWidget):
@@ -7339,6 +7495,10 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         background. Best-effort and failure-silent so it never blocks the app."""
         try:
             import download_guard
+            # Register the AI second-opinion judge app-wide so the download guard AND the
+            # block-on-open gate can AI-scan a file even if the Antivirus window was never opened
+            # (previously the judge was only wired inside AntivirusDialog).
+            self._register_av_ai_judge()
             # Surface threats/cautionary downloads (the watcher used to only log them silently).
             download_guard.set_on_threat(lambda evt: self._bridge.download_alert.emit(evt))
             r = download_guard.start()
@@ -7349,13 +7509,41 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         except Exception as e:
             print(f"[Download protection autostart failed: {e}]")
 
+    def _register_av_ai_judge(self):
+        """Register the AI malware second-opinion judge on the antivirus module, using the app's
+        configured model/keys, so download-scan and block-on-open can AI-scan any file."""
+        try:
+            import antivirus, ai_detect
+            antivirus.set_ai_judge(lambda items: ai_detect.judge_harmful(items, self.settings))
+        except Exception:
+            pass
+
+    def _surface_window(self):
+        """Bring the Ember window to the FRONT, over whatever the user is looking at — so a
+        download alert is impossible to miss (it used to appear behind other apps)."""
+        try:
+            if self.isMinimized():
+                self.showNormal()
+            self.show()
+            st = self.windowState()
+            self.setWindowState((st & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+            self.raise_()
+            self.activateWindow()
+            wh = self.windowHandle()
+            if wh is not None:
+                wh.requestActivate()
+        except Exception:
+            pass
+
     def _on_download_alert(self, evt: dict):
-        """A downloaded file was flagged (or is a cautionary executable). Toast + offer to
-        quarantine/delete — runs on the UI thread (marshalled via the bridge)."""
+        """A downloaded file was flagged (or is a cautionary executable). Bring Ember to the
+        front and pop a blocking review dialog — Scan with AI / Quarantine / Delete / Keep — so
+        it can't be silently ignored. Runs on the UI thread (marshalled via the bridge)."""
         try:
             name = evt.get("name", "a file")
             detail = evt.get("detail", "")
             level = evt.get("level", "caution")
+            path = evt.get("path")
             tray = getattr(self, "_tray", None)
             if tray is not None:
                 try:
@@ -7366,24 +7554,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     pass
             self._add_bubble("system" if level == "caution" else "error",
                              f"🛡 Download protection: **{name}** — {detail}")
-            path = evt.get("path")
-            if path and Path(path).exists():
-                box = QMessageBox(self)
-                box.setWindowTitle("Download protection")
-                box.setText(f"{name}\n\n{detail}")
-                qb = box.addButton("Quarantine", QMessageBox.ButtonRole.AcceptRole)
-                db = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
-                box.addButton("Keep", QMessageBox.ButtonRole.RejectRole)
-                box.exec()
-                clicked = box.clickedButton()
-                if clicked is qb:
-                    import antivirus
-                    antivirus.quarantine_file(path, reasons=[detail])
-                elif clicked is db:
-                    try:
-                        Path(path).unlink()
-                    except Exception as e:
-                        QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
+            if not (path and Path(path).exists()):
+                return
+            # Make sure the judge is registered (covers the case where download protection was
+            # started from Settings before autostart ran), then surface Ember + show the dialog.
+            self._register_av_ai_judge()
+            self._surface_window()
+            dlg = DownloadGuardDialog(self, name=name, detail=detail, level=level,
+                                      path=path, settings=self.settings)
+            dlg.exec()
         except Exception:
             traceback.print_exc()
 

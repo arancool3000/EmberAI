@@ -249,5 +249,50 @@ def _ask_model(prompt: str, settings: dict) -> str:
         return ""
 
 
+def ai_available(settings: dict) -> bool:
+    """True if SOME AI model is reachable with the configured keys (Claude or Gemini)."""
+    settings = settings or {}
+    return bool("".join((settings.get("anthropic_api_key") or "").split())
+                or "".join((settings.get("gemini_api_key") or "").split()))
+
+
+def judge_harmful(items: list, settings: dict) -> list:
+    """Ask the configured AI model which flagged files could cause REAL harm.
+
+    `items` is a list of {name, reasons, excerpt}. Returns a list[bool] aligned to `items`
+    (True = could cause real harm). Uses whatever model the user has a key for (via
+    _ask_model). On any uncertainty (no key, unparseable reply) it returns all-True so the
+    caller stays on the SAFE side and keeps the files flagged. Shared by the Antivirus window
+    AND the always-on download/open guards so they all get the same second opinion."""
+    import json
+    items = list(items or [])
+    if not items:
+        return []
+    lines = []
+    for i, it in enumerate(items):
+        reasons = ", ".join(it.get("reasons", []) or [])
+        excerpt = (it.get("excerpt") or "")[:1500]
+        lines.append(f"[{i}] {it.get('name', '?')} — flagged for: {reasons}\n"
+                     f"---content excerpt---\n{excerpt}\n---end---")
+    prompt = (
+        "You are a malware analyst. Each numbered item below is a file a HEURISTIC scanner "
+        "flagged as 'suspicious' (often a false positive). For EACH, decide if the file could "
+        "ACTUALLY cause real harm if opened or run. Source code, test files, documentation, "
+        "config, and normal app installers (.dmg/.pkg) are NOT harmful. Real malware "
+        "(reverse shells, ransomware, credential stealers, obfuscated droppers actually wired "
+        "to run) IS harmful. Reply with ONLY a JSON array of booleans in order "
+        "(true = could cause real harm), e.g. [false,true,false].\n\n" + "\n\n".join(lines))
+    raw = _ask_model(prompt, settings or {})
+    m = re.search(r"\[[^\]]*\]", raw or "")
+    if not m:
+        return [True] * len(items)          # uncertain -> keep flagged (safe)
+    try:
+        arr = json.loads(m.group(0))
+        out = [bool(x) for x in arr]
+        return out + [True] * (len(items) - len(out))
+    except Exception:
+        return [True] * len(items)
+
+
 def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
