@@ -490,6 +490,7 @@ def _instant_answer(query: str):
 class EmberBrowser(QWidget):
     _ai_result = pyqtSignal(str)
     _search_result = pyqtSignal(str, str)
+    _answer_ready = pyqtSignal(str, str)         # query, answer-html — fills the card in place
     _ext_made = pyqtSignal(str, str, str, str)   # name, match, description, js
 
     def __init__(self, settings: dict | None = None):
@@ -502,6 +503,7 @@ class EmberBrowser(QWidget):
         self.setStyleSheet(self._qss())
         self._ai_result.connect(self._show_ai_result)
         self._search_result.connect(self._load_search_results)
+        self._answer_ready.connect(self._update_search_answer)
         self._ext_made.connect(self._on_ext_made)
         self._bookmarks = self._load_bookmarks()
         self._history = self._load_history()
@@ -1253,7 +1255,7 @@ class EmberBrowser(QWidget):
         self.address.setText(query)
         v = self._cur() or self._new_tab()
         body = (f"<div class=wrap>{self._results_header(query)}"
-                "<div class=answer><h3>&#10024; Ember AI answer</h3><div class=body>"
+                "<div class=answer><h3>&#10024; Ember AI is thinking&hellip;</h3><div class=body>"
                 "<div class=skl style='width:94%'></div>"
                 "<div class=skl style='width:80%;margin-top:9px'></div>"
                 "<div class=skl style='width:88%;margin-top:9px'></div></div></div>"
@@ -1282,19 +1284,20 @@ class EmberBrowser(QWidget):
 
     def _search_thread(self, query: str):
         results = _ddg(query)
-        answer = self._grounded_answer(query, results)
         inst = _instant_answer(query)
-        self._search_result.emit(query, self._search_results_html(query, answer, results, inst))
+        # Phase 1: show the web results + engine links IMMEDIATELY, with the answer card in a
+        # "thinking" state — so the page is useful straight away instead of waiting on the (slow)
+        # grounded AI answer (which fetches pages + a model call).
+        self._search_result.emit(
+            query, self._search_results_html(query, None, results, inst, pending=True))
+        # Phase 2: compute the AI answer, then slot it into the card in place (no reload).
+        answer = self._grounded_answer(query, results)
+        self._answer_ready.emit(query, self._render_answer_html(answer, results))
 
-    def _search_results_html(self, query, answer, results, inst=None):
+    def _render_answer_html(self, answer, results):
+        """The AI answer as inner HTML for #ansBody: escaped, with [n] citations linkified to
+        the matching result."""
         import re
-        # Instant answer (arithmetic etc.) gets its own prominent chip, not buried in the prose.
-        calc = ""
-        if inst:
-            calc = ("<div class=calc><span>&#128425;</span>"
-                    f"<span>{_html.escape(str(inst))}</span></div>")
-
-        # AI answer, with inline [n] citations linkified to the matching result.
         ans = _html.escape(answer or "(no AI answer yet — add an API key in Ember Settings to "
                                      "get grounded answers. Web results are below.)")
 
@@ -1304,10 +1307,33 @@ class EmberBrowser(QWidget):
                 return f"<a class=cite href='{_html.escape(results[n - 1][1])}'>[{n}]</a>"
             return m.group(0)
 
-        ans = re.sub(r"\[(\d+)\]", _cite, ans).replace("\n", "<br>")
-        answer_card = ("<div class=answer><button class=copy id=copyBtn>Copy</button>"
-                       "<h3>&#10024; Ember AI answer</h3>"
-                       f"<div class=body id=ansBody>{ans}</div></div>")
+        return re.sub(r"\[(\d+)\]", _cite, ans).replace("\n", "<br>")
+
+    def _search_results_html(self, query, answer, results, inst=None, pending=False):
+        # Instant answer (arithmetic etc.) gets its own prominent chip, not buried in the prose.
+        calc = ""
+        if inst:
+            calc = ("<div class=calc><span>&#128425;</span>"
+                    f"<span>{_html.escape(str(inst))}</span></div>")
+
+        # AI answer card. In `pending` mode it shows a shimmer + a "thinking" header (the copy
+        # button stays hidden); phase 2 fills #ansBody in place via _update_search_answer. The
+        # data-q marker lets that update ignore a stale answer if the user searched again.
+        if pending:
+            head = "&#10024; Ember AI is thinking&hellip;"
+            inner = ("<div class=skl style='width:94%'></div>"
+                     "<div class=skl style='width:80%;margin-top:9px'></div>"
+                     "<div class=skl style='width:88%;margin-top:9px'></div>")
+            copy_attr = " style='display:none'"
+        else:
+            head = "&#10024; Ember AI answer"
+            inner = self._render_answer_html(answer, results)
+            copy_attr = ""
+        dq = _html.escape(query, quote=True)
+        answer_card = (f"<div class=answer id=answerCard data-q=\"{dq}\">"
+                       f"<button class=copy id=copyBtn{copy_attr}>Copy</button>"
+                       f"<h3 id=ansHead>{head}</h3>"
+                       f"<div class=body id=ansBody>{inner}</div></div>")
 
         # Result cards, each with a favicon (letter fallback) and a clean domain line.
         cards = ""
@@ -1362,6 +1388,24 @@ class EmberBrowser(QWidget):
         v = self._cur()
         if v is not None:
             v.setHtml(html, QUrl(f"https://{SEARCH_HOST}/"))
+
+    def _update_search_answer(self, query, answer_html):
+        """Phase 2: drop the finished AI answer into the results page's answer card in place
+        (no reload, so the results the user is already reading don't jump) — but only if the
+        current page is still showing THIS query (data-q guard against a newer search)."""
+        v = self._cur()
+        if v is None:
+            return
+        js = ("(function(){var card=document.getElementById('answerCard');"
+              "if(!card||card.getAttribute('data-q')!==%s)return;"
+              "var c=document.getElementById('ansBody');if(c)c.innerHTML=%s;"
+              "var h=document.getElementById('ansHead');if(h)h.innerHTML='\\u2728 Ember AI answer';"
+              "var b=document.getElementById('copyBtn');if(b)b.style.display='';"
+              "})();" % (json.dumps(query), json.dumps(answer_html)))
+        try:
+            v.page().runJavaScript(js)
+        except Exception:
+            pass
 
     # ---- AI panel ----
     def _build_ai_panel(self):
