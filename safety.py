@@ -367,7 +367,7 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
 
     # Self-extension: the AI writing/editing code Ember will run. HIGH so the user sees the code
     # and approves at authoring time (the authored tool then runs automatically thereafter).
-    if tool_name in {"create_python_tool", "self_edit_source"}:
+    if tool_name in {"create_python_tool", "self_edit_source", "build_app"}:
         return "high", "writes/edits code that Ember will run"
 
     return "medium", "unclassified tool"

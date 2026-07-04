@@ -63,6 +63,7 @@ import plugin_system
 import custom_tools
 import self_extend
 import song_id
+import app_builder
 import network_adblock
 from claude_bridge import build_handoff_prompt, copy_to_clipboard, try_anthropic_api
 
@@ -2152,7 +2153,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security_center,
               agent_profiles, agent_scheduler, integrations,
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
-              self_extend, song_id,
+              self_extend, song_id, app_builder,
               network_adblock, timers, gmail_tools, bulk_tools, security_suite):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
@@ -2163,6 +2164,7 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
 # so they don't prompt. Scoped to this module only (not a blanket reclassification of others).
 safety.SAFE_READONLY |= set(getattr(self_extend, "READONLY_TOOLS", set()))
 safety.SAFE_READONLY |= set(getattr(song_id, "READONLY_TOOLS", set()))
+safety.SAFE_READONLY |= set(getattr(app_builder, "READONLY_TOOLS", set()))
 
 # Tell custom_tools the full live tool registry so create_custom_tool can reject a recipe
 # step that names a tool Ember doesn't actually have. (run_custom_tool is host-executed, so
