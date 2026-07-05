@@ -2336,12 +2336,15 @@ class _CustomFC:
 
 
 class Agent:
-    # Conservative fallback chain - only confirmed-working free-tier IDs.
-    # If any returns 404 it's auto-blacklisted for the session.
+    # Fallback chain, smartest-reliable first. gemini-3.1-flash-lite (Ember's default model
+    # everywhere) leads: a newer-generation 'lite' is smarter than the older 2.5 models, so when
+    # the primary errors we drop to IT, not back to 2.5-flash. 3.5-flash is intentionally NOT
+    # here — it's the model most likely to be the erroring primary, so falling back to it is
+    # pointless. If any ID returns 404 it's auto-blacklisted for the session.
     DEFAULT_FALLBACKS = [
-        "gemini-2.5-flash-lite",
-        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
         "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
     ]
 
     def __init__(self, api_key: str, model_name: str = "gemini-3.1-flash-lite",

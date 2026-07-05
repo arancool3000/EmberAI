@@ -86,6 +86,7 @@ jobs:
             test_self_extend.py \
             test_app_builder.py \
             test_platform_fixes.py \
+            test_model_fallback.py \
             test_mac_permissions.py \
             test_ember_spec.py \
             test_more_tools.py \
