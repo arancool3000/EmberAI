@@ -1229,12 +1229,16 @@ class _KeyCaptureEdit(QLineEdit):
 class SettingsDialog(QDialog):
     """Tabbed settings: Models · Performance · Automations · Memory · Security · About."""
 
-    def __init__(self, settings: dict, parent=None, automation_engine=None):
+    def __init__(self, settings: dict, parent=None, automation_engine=None, only_tab=None):
         super().__init__(parent)
         self.setWindowTitle("Ember Settings")
         self.setMinimumSize(820, 560)
         self.settings = dict(settings)
         self.automation_engine = automation_engine
+        # When only_tab is set, this dialog is presented as a single feature's OWN window
+        # (its tab shown, the tab bar hidden, retitled). All tabs are still BUILT so the shared
+        # get_settings() save path is unchanged — we just don't show the others.
+        self._only_tab = only_tab
 
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -1273,6 +1277,9 @@ class SettingsDialog(QDialog):
             ev.addWidget(lbl)
             ev.addStretch()
             self.tabs.addTab(err_page, "⚠ Issues")
+
+        if self._only_tab:
+            self._scope_to_tab(self._only_tab)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -1332,6 +1339,27 @@ class SettingsDialog(QDialog):
         if not v or v == getattr(self, "_CUSTOM_VOICE", None):
             return default
         return v
+
+    def _scope_to_tab(self, only_tab: str):
+        """Present one built tab as a standalone feature window: switch to it and hide the tab
+        bar so only that section shows. We DON'T remove the other tabs — every widget stays
+        parented exactly as built, so the shared get_settings() save path is untouched (zero
+        reparenting risk); the user just sees one focused feature window."""
+        keep = None
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).strip().lower() == only_tab.strip().lower():
+                keep = i
+                break
+        if keep is None:
+            return  # unknown section -> fall back to the full tabbed dialog
+        title = self.tabs.tabText(keep)
+        self.tabs.setCurrentIndex(keep)
+        try:
+            self.tabs.tabBar().hide()
+        except Exception:
+            pass
+        self.setWindowTitle(f"Ember — {title}")
+        self.setMinimumSize(660, 520)
 
     def _add_tab(self, page, title: str, scroll: bool = True):
         """Add a tab, optionally wrapped in a scroll area so tall content never clips
@@ -7290,7 +7318,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self.input_box.setTextCursor(cur)
             self.input_box.setFocus()
         elif kind == "settings":
-            self._open_settings()
+            # Open the feature as its OWN focused window (its settings section, tab bar hidden),
+            # not the top of the full Settings dialog. val is the section name, "" = full Settings.
+            self._open_settings(only_tab=(val or None))
 
     def _show_usage_dashboard(self):
         show_usage_dashboard(self)
@@ -8656,7 +8686,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._add_bubble("system", "Conversation reset.")
         self._set_status(f"Ready ({self.settings.get('model_id') or self.settings.get('gemini_model')})")
 
-    def _open_settings(self):
+    def _open_settings(self, only_tab: str = None):
         old_hotkey = (self.settings.get("hotkey") or "ctrl+shift+space").lower()
         # Snapshot the keys the agent / glass effect actually depend on, so we only rebuild
         # them when relevant — a font or appearance tweak shouldn't drop conversation state.
@@ -8670,7 +8700,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         old_glass = {k: self.settings.get(k) for k in glass_keys}
         old_ptt = {k: self.settings.get(k) for k in ("push_to_talk", "push_to_talk_key")}
         try:
-            dlg = SettingsDialog(self.settings, self, automation_engine=self._automation)
+            dlg = SettingsDialog(self.settings, self, automation_engine=self._automation,
+                                 only_tab=only_tab)
         except Exception as e:
             import traceback
             traceback.print_exc()
