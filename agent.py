@@ -62,6 +62,7 @@ import productivity_tools
 import plugin_system
 import custom_tools
 import network_adblock
+import ember_bridge                       # MCP bridge start/stop/status tools
 from claude_bridge import build_handoff_prompt, copy_to_clipboard, try_anthropic_api
 
 
@@ -2150,7 +2151,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
 for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security_center,
               agent_profiles, agent_scheduler, integrations,
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
-              network_adblock, timers, gmail_tools, bulk_tools, security_suite):
+              network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
@@ -2461,6 +2462,23 @@ class Agent:
         self._model_latencies = {}
         if hasattr(self, "_bad_models"):
             self._bad_models = set()
+
+    def load_history(self, turns):
+        """Seed the chat from prior visible turns so a model/provider switch keeps context.
+        `turns` is [{"role": "user"|"assistant", "text": str}] (already normalized: alternating,
+        starts with user). Rebuilds the genai chat with that history. Text-only + best-effort."""
+        try:
+            hist = []
+            for t in turns or []:
+                text = (t.get("text") or "").strip()
+                if not text:
+                    continue
+                g_role = "user" if t.get("role") == "user" else "model"
+                hist.append(types.Content(role=g_role, parts=[types.Part(text=text)]))
+            if hist:
+                self._init_chat(model=self.active_model, history=hist)
+        except Exception:
+            pass
 
     def stop(self):
         self._stop_flag.set()
