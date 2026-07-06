@@ -34,6 +34,7 @@ from typing import Callable
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8770
 BRIDGE_NAME = "ember"
+_MAX_BODY_BYTES = 1_000_000   # cap request bodies (tool args are small); avoids memory DoS
 
 # Host-special tools that need the live agent turn loop (not a plain dispatch entry); never
 # exposed over the bridge even if they appear in declarations.
@@ -206,8 +207,15 @@ class _Handler(BaseHTTPRequestHandler):
         addr = (self.client_address or ["", 0])[0]
         return addr in ("127.0.0.1", "::1", "localhost")
 
+    def _host_ok(self) -> bool:
+        """Reject requests whose Host header isn't loopback. Defeats DNS-rebinding: a malicious
+        web page that rebinds its domain to 127.0.0.1 still sends its own domain as Host, so we
+        drop it before it can reach any tool — even before the token check."""
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        return host in ("127.0.0.1", "localhost", "::1", "")
+
     def _authed(self) -> bool:
-        if not self._client_is_local():
+        if not self._client_is_local() or not self._host_ok():
             return False
         tok = self.headers.get("X-Ember-Token") or ""
         if not tok:
@@ -228,9 +236,11 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if not self._client_is_local() or not self._host_ok():
+            return self._send(403, {"ok": False, "error": "forbidden"})
         if self.path.rstrip("/") == "/mcp/ping":
             # Unauthenticated liveness probe (no data disclosed) so the MCP server can wait
-            # for the bridge to come up.
+            # for the bridge to come up. Still gated on loopback + Host above.
             return self._send(200, {"ok": True, "name": BRIDGE_NAME})
         if not self._authed():
             return self._send(401, {"ok": False, "error": "unauthorized"})
@@ -249,6 +259,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": "not found"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
+            if length > _MAX_BODY_BYTES:
+                return self._send(413, {"ok": False, "error": "request too large"})
             raw = self.rfile.read(length) if length else b"{}"
             body = json.loads(raw or b"{}")
         except Exception as e:

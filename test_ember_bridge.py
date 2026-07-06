@@ -168,6 +168,32 @@ def test_bridge_http_roundtrip():
         code, _ = _get(base + "/mcp/tools", token="wrong")
         assert code == 401
 
+        # DNS-rebinding defense: a forged (non-loopback) Host header is refused outright,
+        # even with the right token — a malicious web page can't reach the bridge this way.
+        req = urllib.request.Request(base + "/mcp/tools")
+        req.add_header("X-Ember-Token", token)
+        req.add_header("Host", "evil.example.com")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            forged_code = 200
+        except urllib.error.HTTPError as e:
+            forged_code = e.code
+        assert forged_code == 403
+
+        # oversized body rejected on the Content-Length header (before reading the payload):
+        # the server returns 413, or the client sees the connection drop — either means refused.
+        req2 = urllib.request.Request(base + "/mcp/call", data=b"x" * 1_000_001, method="POST")
+        req2.add_header("X-Ember-Token", token)
+        req2.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req2, timeout=5)
+            big_code = 200
+        except urllib.error.HTTPError as e:
+            big_code = e.code
+        except urllib.error.URLError:
+            big_code = 413  # connection reset because we rejected without draining the body
+        assert big_code == 413
+
         # info file written for the MCP server to read
         info = eb.load_bridge_info()
         assert info and info["token"] == token
