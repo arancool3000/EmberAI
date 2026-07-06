@@ -28,6 +28,32 @@ CLAUDE_MODELS = [
     ("claude-opus-4-7",      "Claude Opus 4.7 (1M context)", "prior flagship - paid"),
 ]
 
+OPENAI_MODELS = [
+    # id, display name, notes  — OpenAI (ChatGPT) models. All paid, need an OpenAI API key.
+    ("gpt-5.1",              "GPT-5.1",                      "newest flagship - strongest OpenAI reasoning"),
+    ("gpt-5",                "GPT-5",                        "flagship - great for agents"),
+    ("gpt-5-mini",           "GPT-5 mini",                   "faster + cheaper GPT-5"),
+    ("gpt-4.1",              "GPT-4.1",                      "capable, lower cost"),
+    ("gpt-4o",               "GPT-4o",                       "fast multimodal"),
+    ("gpt-4o-mini",          "GPT-4o mini",                  "cheapest OpenAI - good default"),
+]
+
+# "Other API-key providers" — anything speaking the OpenAI Chat Completions protocol works
+# through the same OpenAIAgent by pointing base_url at it (id, label, base_url, env-var hint).
+# The user just pastes that provider's key and types a model id; leave base_url blank for
+# OpenAI itself. This is what turns "ChatGPT support" into "ChatGPT + most of the ecosystem".
+OPENAI_COMPAT_BASES = [
+    ("openai",     "OpenAI (ChatGPT)",  "",                                       "OPENAI_API_KEY"),
+    ("xai",        "xAI (Grok)",        "https://api.x.ai/v1",                    "XAI_API_KEY"),
+    ("deepseek",   "DeepSeek",          "https://api.deepseek.com/v1",            "DEEPSEEK_API_KEY"),
+    ("groq",       "Groq",              "https://api.groq.com/openai/v1",         "GROQ_API_KEY"),
+    ("mistral",    "Mistral",           "https://api.mistral.ai/v1",              "MISTRAL_API_KEY"),
+    ("together",   "Together AI",       "https://api.together.xyz/v1",            "TOGETHER_API_KEY"),
+    ("openrouter", "OpenRouter",        "https://openrouter.ai/api/v1",           "OPENROUTER_API_KEY"),
+    ("perplexity", "Perplexity",        "https://api.perplexity.ai",              "PERPLEXITY_API_KEY"),
+    ("local",      "Local (LM Studio / vLLM)", "http://localhost:1234/v1",        ""),
+]
+
 
 # "Auto" resolves to the best free model and leans on the rate-limit fail-over chain.
 RECOMMENDED_FREE = "gemini-3.1-flash-lite"
@@ -73,6 +99,8 @@ def all_choices() -> list[tuple[str, str, str, str]]:
         out.append(("gemini", mid, name, hint))
     for mid, name, notes in CLAUDE_MODELS:
         out.append(("claude", mid, name, f"{notes} · needs Anthropic API key"))
+    for mid, name, notes in OPENAI_MODELS:
+        out.append(("openai", mid, name, f"{notes} · needs OpenAI API key"))
     # Local Ollama brain — offline, no key, no rate limits. One generic entry; the actual
     # local model is resolved at runtime (or set via the "Ollama model" field in Settings).
     out.append(("ollama", "ollama", "Local (Ollama)",
@@ -81,12 +109,30 @@ def all_choices() -> list[tuple[str, str, str, str]]:
     return out
 
 
+_OPENAI_MODEL_IDS = {mid for mid, _n, _notes in OPENAI_MODELS}
+
+
 def provider_for(model_id: str) -> str:
     if model_id == "ollama" or model_id.startswith("ollama:"):
         return "ollama"
     if model_id.startswith("claude"):
         return "claude"
+    # OpenAI + OpenAI-compatible ids: the known GPT ids, the openai:/oai: prefix escape hatch
+    # (openai:<any-model> for custom/compat endpoints), and the reasoning-model families.
+    if (model_id in _OPENAI_MODEL_IDS or model_id.startswith("openai:")
+            or model_id.startswith("gpt-") or model_id.startswith("o1")
+            or model_id.startswith("o3") or model_id.startswith("o4")
+            or model_id.startswith("chatgpt")):
+        return "openai"
     return "gemini"   # "auto" + all Gemini ids run on the Gemini provider
+
+
+def openai_base_for(provider_key: str) -> str:
+    """Base URL for a named OpenAI-compatible provider ('' = OpenAI default). Unknown → ''."""
+    for key, _label, base, _env in OPENAI_COMPAT_BASES:
+        if key == provider_key:
+            return base
+    return ""
 
 
 def supports_tool_use(model_id: str) -> bool:
@@ -126,6 +172,7 @@ def rate_limit_summary() -> str:
             continue
         lines.append(f"  {name:<26} {rpm:>3} RPM   {rpd:>4} RPD   {tpm:>7,} TPM")
     lines.append("")
-    lines.append("Claude (Anthropic) is paid only - usage-based pricing.")
+    lines.append("Claude (Anthropic) and OpenAI (ChatGPT) are paid only - usage-based pricing.")
+    lines.append("OpenAI-compatible providers (Grok, DeepSeek, Groq, OpenRouter, local…) set their own limits.")
     lines.append("Ember falls back automatically if your primary model is overloaded.")
     return "\n".join(lines)
