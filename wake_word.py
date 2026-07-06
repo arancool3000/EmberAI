@@ -92,6 +92,7 @@ _events: "deque[dict]" = deque(maxlen=_EVENTS_MAXLEN)
 _on_wake = None
 _last_heard = ""          # most recent non-empty transcript (diagnostic: is the mic hearing anything?)
 _heard_count = 0          # how many non-empty transcripts we've captured
+_last_error = ""          # why the mic couldn't start (shown to the user), "" when healthy
 
 
 def _now_iso() -> str:
@@ -170,15 +171,36 @@ class _MicCapture:
 
 
 def _real_capture_factory():
-    """Persistent-stream mic capture. Returns None if the speech stack is unavailable
-    (so the loop degrades to a no-op, not a crash)."""
+    """Persistent-stream mic capture. Returns None if the speech stack is unavailable (so the
+    loop degrades to a no-op, not a crash). On failure it records a human-readable reason in the
+    module `_last_error` so start()/the UI can tell the user WHAT to fix — the difference between
+    'Hey Ember silently does nothing' and 'install pyaudio' / 'grant mic permission'."""
+    global _last_error
     try:
         import speech_recognition as sr
     except Exception:
+        _last_error = ("Voice input isn’t installed yet. Install it with: "
+                       "pip install SpeechRecognition pyaudio")
         return None
     try:
-        return _MicCapture(sr)
-    except Exception:
+        cap = _MicCapture(sr)
+        # Open the stream once, now, so a missing-pyaudio / denied-permission / no-device
+        # failure surfaces here (synchronously) instead of dying quietly on the daemon thread.
+        cap._ensure_open()
+        _last_error = ""
+        return cap
+    except Exception as e:
+        msg = str(e).lower()
+        if "pyaudio" in msg:
+            _last_error = ("Microphone support (PyAudio) isn’t installed. Install it with: "
+                           "pip install pyaudio  (macOS: brew install portaudio first)")
+        elif "permission" in msg or "denied" in msg or "-50" in msg:
+            _last_error = ("Ember doesn’t have Microphone permission. Grant it in System "
+                           "Settings ▸ Privacy & Security ▸ Microphone, then reopen Ember.")
+        elif "no default input" in msg or "no device" in msg or "invalid" in msg:
+            _last_error = "No microphone was found. Plug one in (or check your input device) and retry."
+        else:
+            _last_error = f"Microphone couldn’t start: {e}"
         return None
 
 
@@ -193,8 +215,8 @@ def _record(text: str) -> None:
         _events.append({"time": _now_iso(), "heard": (text or "")[:80]})
 
 
-def _loop(stop: "threading.Event") -> None:
-    capture = _CAPTURE or _real_capture_factory()
+def _loop(stop: "threading.Event", capture=None) -> None:
+    capture = capture or _CAPTURE or _real_capture_factory()
     if capture is None:
         with _LOCK:
             globals()["_running"] = False
@@ -248,16 +270,27 @@ def _loop(stop: "threading.Event") -> None:
 def start(on_wake=None) -> dict:
     """Start always-on wake-word listening. Idempotent. `on_wake` is called (on the
     daemon thread) each time the wake phrase is heard."""
-    global _thread, _stop_event, _running, _on_wake, _paused
+    global _thread, _stop_event, _running, _on_wake, _paused, _last_error
     if on_wake is not None:
         _on_wake = on_wake
     with _LOCK:
         if _running and _thread is not None and _thread.is_alive():
             return {"ok": True, "running": True, "message": "wake word already listening"}
+    # Open the mic SYNCHRONOUSLY before we claim to be running, so is_running()/this return
+    # value reflect reality. Previously the thread discovered a missing mic a moment later and
+    # the caller had already been told "running", so "Hey Ember" died silently.
+    capture = _CAPTURE or _real_capture_factory()
+    if capture is None:
+        with _LOCK:
+            _running = False
+        return {"ok": False, "running": False, "error": _last_error or "microphone unavailable"}
+    with _LOCK:
         _paused = False
+        _last_error = ""
         _stop_event = threading.Event()
         stop = _stop_event
-        _thread = threading.Thread(target=_loop, args=(stop,), name="ember-wake-word", daemon=True)
+        _thread = threading.Thread(target=_loop, args=(stop, capture),
+                                   name="ember-wake-word", daemon=True)
         _running = True
         _thread.start()
     return {"ok": True, "running": True, "message": "listening for 'hey ember'"}
@@ -299,6 +332,11 @@ def is_running() -> bool:
 
 def is_paused() -> bool:
     return _paused
+
+
+def last_error() -> str:
+    """The most recent reason the mic couldn't start (''/empty when healthy)."""
+    return _last_error
 
 
 def status() -> dict:
