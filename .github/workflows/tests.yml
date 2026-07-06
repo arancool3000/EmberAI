@@ -90,7 +90,8 @@ jobs:
             test_key_vault_recovery.py \
             test_openai_agent.py \
             test_ember_bridge.py \
-            test_av_static.py; do
+            test_av_static.py \
+            test_update_signing.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

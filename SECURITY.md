@@ -73,9 +73,14 @@ path. Keep your local Ollama bound to loopback (its default) and don't expose it
 
 - A holder of a valid pairing token can still drive input and chat remotely (by design — that's
   the feature). Revoke tokens by re-pairing / clearing them if a device is lost.
-- The auto-updater pins the host and checks the hash when present, but does not yet verify an
-  offline **code signature** on the manifest. A GitHub-account compromise is therefore still a
-  supply-chain risk. Signed manifests (Ed25519/minisign) are the recommended next step.
+- The auto-updater pins the download host (github.com), checks the SHA-256, and can now verify
+  an **Ed25519 signature** on the manifest (`update_signing.py`): once the maintainer runs
+  `python sign_release.py keygen`, commits `update_pubkey.pem`, and signs each `latest.json`,
+  Ember refuses any update whose manifest isn't validly signed — closing the compromised-channel
+  gap. Until a public key is bundled the check is inert (no behaviour change). Note this is
+  *update authenticity*, which is distinct from **OS code-signing**: making macOS/Windows stop
+  warning about an "unidentified developer" requires a paid Apple/Microsoft developer certificate
+  and notarization, which is an account/credential step, not a code change.
 - The encrypted-file key vault stores its key next to the ciphertext, so a local attacker with
   read access to your user directory can recover keys. The OS-keychain backend does not have
   this weakness — prefer it where available.
