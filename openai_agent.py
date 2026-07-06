@@ -208,6 +208,20 @@ class OpenAIAgent:
     def reset(self):
         self._messages = []
 
+    def load_history(self, turns):
+        """Seed the conversation from prior visible turns so a model/provider switch keeps
+        context. `turns` is [{"role": "user"|"assistant", "text": str}] (already normalized:
+        alternating, starts with user). Text-only — tool-call details don't carry across a
+        switch, but what was said does."""
+        msgs = [{"role": "system", "content": self._system_prompt()}]
+        for t in turns or []:
+            role = t.get("role")
+            text = (t.get("text") or "").strip()
+            if role in ("user", "assistant") and text:
+                msgs.append({"role": role, "content": text})
+        if len(msgs) > 1:
+            self._messages = msgs
+
     def stop(self):
         self._stop_flag.set()
 

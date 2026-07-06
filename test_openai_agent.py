@@ -164,6 +164,26 @@ def test_heal_dangling_tool_calls():
     assert len(fake2._messages) == 2  # answered -> untouched
 
 
+def test_load_history_seeds_messages_with_system_first():
+    fake = NS(_messages=[], _system_prompt=lambda: "SYS")
+    oa.OpenAIAgent.load_history(fake, [
+        {"role": "user", "text": "hi"},
+        {"role": "assistant", "text": "hello"},
+        {"role": "system", "text": "ignored"},
+        {"role": "user", "text": "  "},   # blank -> skipped
+    ])
+    assert fake._messages[0] == {"role": "system", "content": "SYS"}
+    assert fake._messages[1] == {"role": "user", "content": "hi"}
+    assert fake._messages[2] == {"role": "assistant", "content": "hello"}
+    assert len(fake._messages) == 3
+
+
+def test_load_history_empty_leaves_existing():
+    fake = NS(_messages=[{"role": "system", "content": "x"}], _system_prompt=lambda: "SYS")
+    oa.OpenAIAgent.load_history(fake, [])
+    assert fake._messages == [{"role": "system", "content": "x"}]   # untouched
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

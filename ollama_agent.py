@@ -301,6 +301,19 @@ class OllamaAgent:
     def reset(self):
         self._messages = []
 
+    def load_history(self, turns):
+        """Seed the conversation from prior visible turns so a model/provider switch keeps
+        context. `turns` is [{"role": "user"|"assistant", "text": str}] (already normalized).
+        Text-only; the system prompt is prepended at call time, not stored here."""
+        msgs = []
+        for t in turns or []:
+            role = t.get("role")
+            text = (t.get("text") or "").strip()
+            if role in ("user", "assistant") and text:
+                msgs.append({"role": role, "content": text})
+        if msgs:
+            self._messages = msgs
+
     def stop(self):
         self._stop_flag.set()
 

@@ -2463,6 +2463,23 @@ class Agent:
         if hasattr(self, "_bad_models"):
             self._bad_models = set()
 
+    def load_history(self, turns):
+        """Seed the chat from prior visible turns so a model/provider switch keeps context.
+        `turns` is [{"role": "user"|"assistant", "text": str}] (already normalized: alternating,
+        starts with user). Rebuilds the genai chat with that history. Text-only + best-effort."""
+        try:
+            hist = []
+            for t in turns or []:
+                text = (t.get("text") or "").strip()
+                if not text:
+                    continue
+                g_role = "user" if t.get("role") == "user" else "model"
+                hist.append(types.Content(role=g_role, parts=[types.Part(text=text)]))
+            if hist:
+                self._init_chat(model=self.active_model, history=hist)
+        except Exception:
+            pass
+
     def stop(self):
         self._stop_flag.set()
         # Drop any queued (not-yet-started) turns so a stop really stops everything.

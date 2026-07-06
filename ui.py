@@ -6200,6 +6200,30 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.chat_history["active_id"] = self.active_chat_id
         return sessions[0]
 
+    def _history_turns_for_seeding(self, max_turns: int = 40, max_chars: int = 6000) -> list:
+        """Normalized prior conversation to seed a freshly-built agent with (so switching the
+        model/provider mid-chat keeps context). Returns [{"role","text"}] that is: user/assistant
+        only, consecutive same-role turns merged, starts with a user turn and ends with an
+        assistant turn (valid for every provider), capped to the most recent turns."""
+        raw = (self._active_chat().get("messages") or [])
+        merged: list[dict] = []
+        for m in raw:
+            role = m.get("role")
+            text = (m.get("text") or "").strip()
+            if role not in ("user", "assistant") or not text:
+                continue   # skip system/tool bubbles + empties
+            if len(text) > max_chars:
+                text = text[:max_chars] + " …[truncated]"
+            if merged and merged[-1]["role"] == role:
+                merged[-1]["text"] += "\n\n" + text   # coalesce a same-role run
+            else:
+                merged.append({"role": role, "text": text})
+        while merged and merged[0]["role"] != "user":
+            merged.pop(0)          # must start with a user turn
+        while merged and merged[-1]["role"] != "assistant":
+            merged.pop()           # end on assistant so the next user message alternates cleanly
+        return merged[-max_turns:]
+
     def _refresh_history_sidebar(self):
         if not hasattr(self, "history_list"):
             return
@@ -8704,6 +8728,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     lean_tools=bool(self.settings.get("lean_tools", True)),
                 )
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
+            # Carry the visible conversation into the fresh agent so switching model/provider
+            # mid-chat doesn't wipe context. Best-effort: never let it block agent init.
+            try:
+                if hasattr(self.agent, "load_history"):
+                    turns = self._history_turns_for_seeding()
+                    if turns:
+                        self.agent.load_history(turns)
+            except Exception:
+                pass
             self._set_status(f"Ready ({model_id})")
         except Exception as e:
             # Only blame the key/model for actual auth/model errors; other failures
