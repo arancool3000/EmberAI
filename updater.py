@@ -91,6 +91,22 @@ def can_self_update() -> bool:
     return bool(root and os.access(root.parent, os.W_OK))
 
 
+# The update payload may ONLY be fetched from GitHub Releases. Pinning the host means a
+# tampered/MITM'd manifest can't redirect the download to an attacker-controlled server (the
+# initial URL is what the manifest controls; GitHub's own 302 to its release CDN is trusted
+# transitively). certifi-verified TLS already protects the transport; this bounds the origin.
+_ALLOWED_UPDATE_HOSTS = {"github.com", "www.github.com"}
+
+
+def _host_allowed(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return p.scheme == "https" and (p.hostname or "").lower() in _ALLOWED_UPDATE_HOSTS
+    except Exception:
+        return False
+
+
 def _manifest_download(manifest: dict) -> tuple[str, str]:
     """Return (url, sha256) for this OS, falling back to the predictable release-asset URL."""
     key = version.platform_key() or "macos"
@@ -177,6 +193,9 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
     macOS, the new install folder on Windows, or the new AppImage file on Linux). Raises on
     failure."""
     url, expected_sha = _manifest_download(manifest)
+    if not _host_allowed(url):
+        raise RuntimeError(f"refusing to download update from an untrusted host: {url[:80]} "
+                           "(updates must come from github.com over HTTPS)")
     tmp = Path(tempfile.mkdtemp(prefix="ember_update_"))
     appimage = is_appimage_asset(url)
     dlpath = tmp / ("Ember.AppImage" if appimage else "Ember.zip")

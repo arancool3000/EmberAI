@@ -56,6 +56,7 @@ _AUTH_LOCK = threading.Lock()
 _AUTH_MAX_FAILS = 5         # failures within the window before lockout
 _AUTH_WINDOW_S = 60.0       # rolling window for counting failures
 _AUTH_LOCKOUT_S = 120.0     # cooldown once locked out
+_MAX_POST_BYTES = 2_000_000  # cap request bodies (input events + chat are tiny); avoids a huge alloc
 
 
 # Pairing tokens: a phone pairs once on the LAN (proves it knows the PIN) and gets a LONG random
@@ -751,7 +752,7 @@ class _Handler(BaseHTTPRequestHandler):
             # A device on the LAN proves it knows the PIN (or already holds a token) and gets a
             # long pairing token, so it can reconnect from anywhere afterwards.
             try:
-                n = int(self.headers.get("Content-Length", 0))
+                n = min(int(self.headers.get("Content-Length", 0) or 0), _MAX_POST_BYTES)
                 o = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 o = {}
@@ -767,7 +768,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/chat":
             try:
-                n = int(self.headers.get("Content-Length", 0))
+                n = min(int(self.headers.get("Content-Length", 0) or 0), _MAX_POST_BYTES)
                 o = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 o = {}
@@ -796,14 +797,15 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != "/api/event":
             self.send_response(404); self.end_headers(); return
         try:
-            n = int(self.headers.get("Content-Length", 0))
+            n = min(int(self.headers.get("Content-Length", 0) or 0), _MAX_POST_BYTES)
             o = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             o = {}
         if not self._auth(o.get("pin"), o.get("tok")):
             self.send_response(403); self.end_headers(); return
         try:
-            result = _apply(o)
+            _ip = (self.client_address or ["", 0])[0]
+            result = _apply(o, is_lan=_is_lan_ip(_ip))
             if isinstance(result, dict):
                 # Macros (Lock PC / Mic Off / run-command) return a real {ok, detail}; hand it
                 # back so the phone can flash the ACTUAL outcome instead of always claiming "✓"
@@ -821,12 +823,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(500); self.end_headers()
 
 
-def _apply(o: dict):
+def _apply(o: dict, is_lan: bool = True):
     with _INPUT_LOCK:
-        return _apply_locked(o)
+        return _apply_locked(o, is_lan=is_lan)
 
 
-def _apply_locked(o: dict):
+def _apply_locked(o: dict, is_lan: bool = True):
     t = o.get("t")
     if t == "move":
         pyautogui.moveRel(int(o.get("dx", 0)), int(o.get("dy", 0)), duration=0)
@@ -865,6 +867,13 @@ def _apply_locked(o: dict):
     elif t == "macro":
         return _run_macro(str(o.get("name", "")))
     elif t == "macro_cmd":
+        # Arbitrary shell is the single most dangerous remote action. Allow it ONLY from a real
+        # LAN device (same Wi-Fi) — never over the tunnel, which arrives via loopback and so is
+        # non-LAN here (same scoping that keeps the PIN off the internet). A roaming pairing
+        # token therefore can no longer run shell commands on the machine.
+        if not is_lan:
+            return {"ok": False, "detail": "Remote shell is off over the internet — "
+                    "run commands from a device on the same Wi-Fi as this computer."}
         return _run_shell_macro(str(o.get("cmd", "")))
 
 

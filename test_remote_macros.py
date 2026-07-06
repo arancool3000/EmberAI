@@ -164,6 +164,25 @@ def test_shell_macro_uses_hook_then_tools():
     assert r2.get("ran") == "ls"
 
 
+def test_shell_macro_blocked_over_the_internet():
+    # Security: arbitrary remote shell must be refused for non-LAN (tunnel/loopback) requests,
+    # so a roaming pairing token can't run commands on the machine over the internet.
+    rs._MACRO_HOOKS.clear()
+    ran = {}
+    rs.set_macro_hooks(shell=lambda c: ran.setdefault("cmd", c) or {"ok": True})
+    blocked = rs._apply({"t": "macro_cmd", "cmd": "whoami"}, is_lan=False)
+    assert blocked["ok"] is False and "cmd" not in ran   # never reached the shell
+    # a real LAN device still works
+    allowed = rs._apply({"t": "macro_cmd", "cmd": "whoami"}, is_lan=True)
+    assert allowed["ok"] is True and ran.get("cmd") == "whoami"
+
+
+def test_non_shell_events_work_regardless_of_lan():
+    # Mouse/keyboard/chat over the tunnel are fine — only raw shell is gated.
+    rs._MACRO_HOOKS.clear()
+    rs._apply({"t": "clickat", "x": 10, "y": 20}, is_lan=False)   # must not raise
+
+
 def test_phone_page_exposes_macro_buttons():
     page = rs.PAGE
     assert "macro('lock')" in page and "macro('mute_mic')" in page
@@ -184,7 +203,7 @@ def test_server_returns_macro_result_json():
     # the /api/event handler must hand macro results back as JSON (200), not swallow them (204),
     # or the phone can never learn a macro failed.
     src = open(rs.__file__, encoding="utf-8").read()
-    assert "result = _apply(o)" in src
+    assert "result = _apply(o" in src   # now passes is_lan=… for the remote-shell gate
     assert "isinstance(result, dict)" in src
 
 

@@ -74,6 +74,17 @@ def test_linux_platform_key_and_asset_name():
     assert version.asset_name("linux") == "Ember-Linux.AppImage"
 
 
+def test_update_host_allowlist():
+    # Only github.com over HTTPS may serve the update payload — a tampered manifest can't
+    # redirect the download to an attacker host.
+    assert updater._host_allowed("https://github.com/o/r/releases/latest/download/Ember.zip")
+    assert updater._host_allowed("https://www.github.com/o/r/releases/latest/download/x.zip")
+    assert not updater._host_allowed("https://evil.example.com/Ember.zip")
+    assert not updater._host_allowed("http://github.com/o/r/x.zip")          # not HTTPS
+    assert not updater._host_allowed("https://github.com.evil.com/x.zip")     # look-alike host
+    assert not updater._host_allowed("")
+
+
 def test_is_appimage_asset():
     assert updater.is_appimage_asset("https://x/Ember-Linux.AppImage") is True
     assert updater.is_appimage_asset("https://x/Ember-Linux.AppImage?x=1") is True
