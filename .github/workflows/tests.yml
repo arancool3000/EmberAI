@@ -89,7 +89,8 @@ jobs:
             test_release_workflow.py \
             test_key_vault_recovery.py \
             test_openai_agent.py \
-            test_ember_bridge.py; do
+            test_ember_bridge.py \
+            test_av_static.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

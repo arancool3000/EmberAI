@@ -285,6 +285,14 @@ by default.
   (**Windows Defender** / **ClamAV** if installed), and **VirusTotal** (hash
   lookup, plus uploading unknown files when a key is set). Suspicious or malicious
   files are **not opened until the scan finishes**.
+- **Deep static analysis** — beyond hashes and entropy, Ember parses files structurally:
+  **PE/ELF/Mach-O** headers for packer sections (UPX/Themida/VMProtect…), writable-and-
+  executable (W^X) sections and missing import tables; **PDF** actions (`/JavaScript`,
+  `/OpenAction`, `/Launch`, embedded files); **Office VBA macros** (auto-run entry points +
+  dangerous APIs); and **scripts** — it de-obfuscates base64/hex/char-code payloads and runs a
+  Python **AST** pass so `eval`/`exec`/`os.system` are caught through renaming. Works out of the
+  box (pure-Python); installing `requirements-security.txt` upgrades it with **YARA**, real
+  **olevba** macro extraction, **lief** parsing, **ssdeep** fuzzy hashing and RAR/7z unpacking.
 - **AI safe-open** — anything **unconfirmed and risky** (an executable/script, anything the
   scanner flags, or a file it couldn't scan) gets an **AI second-opinion** and is **held until
   you confirm** it's safe to open. Confirmed files are remembered by content hash and open
