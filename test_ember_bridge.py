@@ -46,16 +46,18 @@ def test_tool_to_mcp_defaults_missing_schema():
     assert "properties" in m["inputSchema"]
 
 
-def test_list_tools_filters_agent_only_and_undispatchable():
+def test_list_tools_exposes_every_declared_tool():
+    # Every declared tool is exposed now — including agent-loop tools and ones not in dispatch —
+    # only duplicates are collapsed.
     decls = [
         {"name": "take_screenshot", "parameters": {"type": "OBJECT"}},
-        {"name": "ask_claude", "parameters": {"type": "OBJECT"}},   # agent-only -> excluded
-        {"name": "phantom", "parameters": {"type": "OBJECT"}},      # no dispatch -> excluded
-        {"name": "take_screenshot", "parameters": {"type": "OBJECT"}},  # dup -> once
+        {"name": "ask_claude", "parameters": {"type": "OBJECT"}},        # agent-loop -> still listed
+        {"name": "run_custom_tool", "parameters": {"type": "OBJECT"}},   # host-only -> still listed
+        {"name": "take_screenshot", "parameters": {"type": "OBJECT"}},   # dup -> once
     ]
-    dispatch = {"take_screenshot": lambda **k: {"ok": True}, "ask_claude": lambda **k: 1}
+    dispatch = {"take_screenshot": lambda **k: {"ok": True}}
     names = [t["name"] for t in eb.list_tools_from(decls, dispatch)]
-    assert names == ["take_screenshot"]
+    assert names == ["take_screenshot", "ask_claude", "run_custom_tool"]
 
 
 # ---- safety-gated execution ------------------------------------------------
@@ -64,9 +66,30 @@ def test_execute_unknown_tool():
     assert eb.execute_tool("nope", {}, {})["ok"] is False
 
 
-def test_execute_agent_only_blocked():
-    r = eb.execute_tool("ask_claude", {}, {"ask_claude": lambda **k: 1})
-    assert r["ok"] is False and "agent loop" in r["error"]
+def test_agent_loop_tools_return_sensible_results():
+    # ask_claude / pause_for_human are meaningless over MCP but must not error out.
+    assert eb.execute_tool("ask_claude", {}, {})["ok"] is True
+    assert eb.execute_tool("pause_for_human", {}, {})["ok"] is True
+    # spawn_agent / agent_run honestly report they run inside Ember, not over MCP.
+    assert eb.execute_tool("spawn_agent", {}, {})["ok"] is False
+
+
+def test_run_custom_tool_over_bridge():
+    # A custom tool is a recipe of other tools; each step runs through the same gate.
+    import custom_tools
+    ran = []
+    dispatch = {"list_files": lambda **k: ran.append(("list_files", k)) or {"ok": True}}
+    orig = custom_tools.resolve_steps
+    custom_tools.resolve_steps = lambda name, a=None: {
+        "ok": True, "name": name,
+        "steps": [{"tool": "list_files", "args": {"path": "/tmp"}}],
+    }
+    try:
+        r = eb.execute_tool("run_custom_tool", {"name": "my_tool"}, dispatch)
+        assert r["ok"] is True and r["ran"] == 1
+        assert ran == [("list_files", {"path": "/tmp"})]
+    finally:
+        custom_tools.resolve_steps = orig
 
 
 def test_execute_low_risk_runs_and_passes_args():
