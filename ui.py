@@ -1937,6 +1937,36 @@ class SettingsDialog(QDialog):
         except Exception:
             return "", ""                              # captured, just couldn't transcribe offline
 
+    def _setup_mcp_claude(self):
+        """One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config,
+        so the user never has to touch a terminal or find a Python path."""
+        self.mcp_setup_btn.setEnabled(False)
+        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        self.mcp_setup_status.setText("Setting up… installing the MCP SDK (this can take a minute).")
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+        try:
+            import mcp_setup
+            res = mcp_setup.setup_claude_desktop()
+        except Exception as e:
+            res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if res.get("ok"):
+            try:
+                self.mcp_bridge_check.setChecked(True)   # ensure the bridge turns on when saved
+            except Exception:
+                pass
+            self.mcp_setup_status.setStyleSheet("color: #9ece6a; font-size: 11px;")
+            self.mcp_setup_status.setText(
+                "✅ Claude Desktop is configured. Click Save (turns the bridge on), then fully "
+                "quit and reopen Claude Desktop — Ember appears under its tools icon.\n"
+                f"Config: {res.get('config')}")
+        else:
+            self.mcp_setup_status.setStyleSheet("color: #f7768e; font-size: 11px;")
+            self.mcp_setup_status.setText("❌ " + str(res.get("error", "setup failed")))
+        self.mcp_setup_btn.setEnabled(True)
+
     def _build_performance_tab(self):
         page = QWidget()
         layout = self._new_form()
@@ -1971,6 +2001,15 @@ class SettingsDialog(QDialog):
             "Off (recommended): high-risk actions are blocked over MCP since there's no human "
             "to approve them there. On: they run unattended — only enable if you trust the client.")
         layout.addRow(self.mcp_highrisk_check)
+
+        # One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config
+        # automatically — no terminal, no path hunting.
+        self.mcp_setup_btn = QPushButton("⚙️  Set up Claude Desktop (one-click)")
+        self.mcp_setup_btn.clicked.connect(self._setup_mcp_claude)
+        self.mcp_setup_status = QLabel("")
+        self.mcp_setup_status.setWordWrap(True)
+        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        layout.addRow(self.mcp_setup_btn, self.mcp_setup_status)
 
         self.keep_bg_check = QCheckBox(
             "Keep running in the background when closed (so “Hey Ember” still works)")
