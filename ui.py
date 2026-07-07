@@ -364,7 +364,7 @@ def _md_to_html(text: str) -> str:
 
 
 _VAULT_KEYS = ("gemini_api_key", "gemini_api_key_secondary", "gemini_api_key_3",
-               "gemini_api_key_4", "anthropic_api_key")
+               "gemini_api_key_4", "anthropic_api_key", "openai_api_key")
 
 
 def _hydrate_keys_from_vault(settings: dict) -> dict:
@@ -399,6 +399,10 @@ def load_settings() -> dict:
         "provider": "gemini",
         "anthropic_api_key": "",
         "anthropic_model": "claude-opus-4-8",
+        "openai_api_key": "",
+        "openai_model": "gpt-4o-mini",
+        "openai_base_url": "",        # blank = OpenAI; set for an OpenAI-compatible provider (Grok/DeepSeek/…)
+        "openai_provider_label": "OpenAI",
         "ollama_model": "",
         "auto_screenshot": True,
         "autocorrect_chat": True,
@@ -429,6 +433,9 @@ def load_settings() -> dict:
         "automation_enabled": True,
         "auto_confirm_popups": False,
         "remote_autostart": True,
+        "mcp_bridge_enabled": False,          # expose Ember's tools to external MCP clients (off by default)
+        "mcp_bridge_port": 8770,
+        "mcp_bridge_allow_high_risk": False,  # allow high-risk tools over MCP with no human confirm
         "auto_update": True,
         "lean_tools": True,
         "offline_mode": False,        # no internet: local brain + local tools, network tools fail fast
@@ -1279,6 +1286,28 @@ class SettingsDialog(QDialog):
         self.anthropic_key_input.setPlaceholderText("Required if Claude is the primary model")
         layout.addRow("Anthropic key:", self.anthropic_key_input)
 
+        self.openai_key_input = QLineEdit(self.settings.get("openai_api_key", ""))
+        self.openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.openai_key_input.setPlaceholderText("For ChatGPT (or a compatible provider's key)")
+        layout.addRow("OpenAI key:", self.openai_key_input)
+
+        # "Other API-key providers": pick an OpenAI-compatible endpoint (Grok/DeepSeek/Groq/…)
+        # or "OpenAI (ChatGPT)" for the default. Sets base_url so the OpenAI provider talks to it.
+        self.openai_provider_combo = QComboBox()
+        self._openai_bases = model_catalog.OPENAI_COMPAT_BASES
+        _cur_base = (self.settings.get("openai_base_url") or "").strip()
+        _cur_base_idx = 0
+        for i, (_k, _label, _base, _env) in enumerate(self._openai_bases):
+            self.openai_provider_combo.addItem(_label, userData=(_label, _base))
+            if _base == _cur_base:
+                _cur_base_idx = i
+        self.openai_provider_combo.setCurrentIndex(_cur_base_idx)
+        layout.addRow("OpenAI-compatible endpoint:", self.openai_provider_combo)
+        layout.addRow(self._hint(
+            "Use ChatGPT with an OpenAI key, or pick another provider (xAI Grok, DeepSeek, Groq, "
+            "Mistral, OpenRouter, local LM Studio/vLLM…) and paste that provider's key above. To "
+            "use a custom model id on a compatible endpoint, type it as openai:<model-id> below."))
+
         self.dual_api_check = QCheckBox("If Gemini is rate-limited, rotate through the backup keys")
         self.dual_api_check.setChecked(bool(self.settings.get("dual_api_failover", True)))
         layout.addRow(self.dual_api_check)
@@ -1734,6 +1763,23 @@ class SettingsDialog(QDialog):
             "Start Ember Link (phone control) automatically when Ember opens")
         self.remote_autostart_check.setChecked(bool(self.settings.get("remote_autostart", True)))
         layout.addRow(self.remote_autostart_check)
+
+        self.mcp_bridge_check = QCheckBox(
+            "🔌 MCP bridge — let external MCP clients (Claude Desktop, Cursor) control Ember")
+        self.mcp_bridge_check.setChecked(bool(self.settings.get("mcp_bridge_enabled", False)))
+        self.mcp_bridge_check.setToolTip(
+            "Exposes Ember's tools over the Model Context Protocol on a loopback-only, "
+            "token-secured local port. Point your MCP client at ember_mcp_server.py (see "
+            "docs/MCP.md). Off by default.")
+        layout.addRow(self.mcp_bridge_check)
+
+        self.mcp_highrisk_check = QCheckBox(
+            "Allow high-risk tools over MCP (no in-app confirmation) — advanced")
+        self.mcp_highrisk_check.setChecked(bool(self.settings.get("mcp_bridge_allow_high_risk", False)))
+        self.mcp_highrisk_check.setToolTip(
+            "Off (recommended): high-risk actions are blocked over MCP since there's no human "
+            "to approve them there. On: they run unattended — only enable if you trust the client.")
+        layout.addRow(self.mcp_highrisk_check)
 
         self.keep_bg_check = QCheckBox(
             "Keep running in the background when closed (so “Hey Ember” still works)")
@@ -2960,6 +3006,12 @@ class SettingsDialog(QDialog):
             self.settings["chat_title_model"] = (
                 self.title_model_combo.currentData() or model_catalog.DEFAULT_TITLE_MODEL)
         self.settings["anthropic_api_key"] = self.anthropic_key_input.text().strip()
+        if hasattr(self, "openai_key_input"):
+            self.settings["openai_api_key"] = self.openai_key_input.text().strip()
+        if hasattr(self, "openai_provider_combo"):
+            _label, _base = self.openai_provider_combo.currentData() or ("OpenAI", "")
+            self.settings["openai_base_url"] = _base
+            self.settings["openai_provider_label"] = _label
         if hasattr(self, "gmail_addr_input"):
             addr = self.gmail_addr_input.text().strip()
             pw = self.gmail_pw_input.text().strip()
@@ -2981,10 +3033,16 @@ class SettingsDialog(QDialog):
             self.settings["gemini_model"] = sel_id
         elif provider == "claude":
             self.settings["anthropic_model"] = sel_id
+        elif provider == "openai":
+            self.settings["openai_model"] = sel_id
         if hasattr(self, "ollama_model_input"):
             self.settings["ollama_model"] = self.ollama_model_input.text().strip()
         self.settings["auto_screenshot"] = self.auto_shot_check.isChecked()
         self.settings["remote_autostart"] = self.remote_autostart_check.isChecked()
+        if hasattr(self, "mcp_bridge_check"):
+            self.settings["mcp_bridge_enabled"] = self.mcp_bridge_check.isChecked()
+        if hasattr(self, "mcp_highrisk_check"):
+            self.settings["mcp_bridge_allow_high_risk"] = self.mcp_highrisk_check.isChecked()
         if hasattr(self, "keep_bg_check"):
             self.settings["keep_running_in_background"] = self.keep_bg_check.isChecked()
         if hasattr(self, "launch_login_check"):
@@ -3529,7 +3587,7 @@ class AntivirusDialog(QDialog):
 
     def _ai_available(self) -> bool:
         return bool((self._settings.get("gemini_api_key") or self._settings.get("anthropic_api_key")
-                     or "").strip())
+                     or self._settings.get("openai_api_key") or "").strip())
 
     def _ai_judge(self, items):
         """ONE batched model call: which flagged files could cause REAL harm? Returns list[bool].
@@ -4800,6 +4858,10 @@ class EmberWindow(QWidget):
             # Bring Ember Link (phone control) up as soon as the app opens — deferred a beat
             # so the window paints first. Starts silently; no modal on launch.
             QTimer.singleShot(1200, self._autostart_remote_control)
+        if self.settings.get("mcp_bridge_enabled", False) and not _SAFE_MODE:
+            # Expose Ember's tools to external MCP clients (Claude Desktop, Cursor). Loopback
+            # only + token-secured; off by default, so this only runs when the user opted in.
+            QTimer.singleShot(1400, self._autostart_mcp_bridge)
         if self.settings.get("download_protection", True) and not _SAFE_MODE:
             # Real-time download protection: start the Downloads watcher in the background.
             QTimer.singleShot(1800, self._autostart_download_protection)
@@ -4830,7 +4892,8 @@ class EmberWindow(QWidget):
         _prov = self.settings.get("provider") or model_catalog.provider_for(
             self.settings.get("model_id") or self.settings.get("gemini_model") or "")
         _can_start = bool(self.settings.get("gemini_api_key")) or _prov == "ollama" or (
-            _prov == "claude" and self.settings.get("anthropic_api_key"))
+            _prov == "claude" and self.settings.get("anthropic_api_key")) or (
+            _prov == "openai" and self.settings.get("openai_api_key"))
         if _can_start:
             # Defer agent init (and the heavy google.genai import) so the window paints first.
             self._set_status("Starting…")
@@ -6137,6 +6200,30 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.chat_history["active_id"] = self.active_chat_id
         return sessions[0]
 
+    def _history_turns_for_seeding(self, max_turns: int = 40, max_chars: int = 6000) -> list:
+        """Normalized prior conversation to seed a freshly-built agent with (so switching the
+        model/provider mid-chat keeps context). Returns [{"role","text"}] that is: user/assistant
+        only, consecutive same-role turns merged, starts with a user turn and ends with an
+        assistant turn (valid for every provider), capped to the most recent turns."""
+        raw = (self._active_chat().get("messages") or [])
+        merged: list[dict] = []
+        for m in raw:
+            role = m.get("role")
+            text = (m.get("text") or "").strip()
+            if role not in ("user", "assistant") or not text:
+                continue   # skip system/tool bubbles + empties
+            if len(text) > max_chars:
+                text = text[:max_chars] + " …[truncated]"
+            if merged and merged[-1]["role"] == role:
+                merged[-1]["text"] += "\n\n" + text   # coalesce a same-role run
+            else:
+                merged.append({"role": role, "text": text})
+        while merged and merged[0]["role"] != "user":
+            merged.pop(0)          # must start with a user turn
+        while merged and merged[-1]["role"] != "assistant":
+            merged.pop()           # end on assistant so the next user message alternates cleanly
+        return merged[-max_turns:]
+
     def _refresh_history_sidebar(self):
         if not hasattr(self, "history_list"):
             return
@@ -6733,6 +6820,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             # A key IS configured -> the agent likely failed to init earlier (e.g. the
             # working-dir / FileNotFound issue). Try to rebuild it before nagging about a key.
             has_key = bool(self.settings.get("gemini_api_key") or self.settings.get("anthropic_api_key")
+                           or self.settings.get("openai_api_key")
                            or (self.settings.get("provider") == "ollama"))
             if has_key:
                 try:
@@ -6900,6 +6988,16 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 raise RuntimeError("Add an Anthropic API key in Settings to run Claude tasks.")
             from claude_agent import ClaudeAgent
             return ClaudeAgent(api_key=key, model_name=model_id,
+                               auto_screenshot=bool(s.get("auto_screenshot", True)))
+        if provider == "openai":
+            key = s.get("openai_api_key") or ""
+            label = s.get("openai_provider_label") or "OpenAI"
+            if not key:
+                raise RuntimeError(f"Add a{'n' if label[:1] in 'AEIOU' else ''} {label} API key in Settings to run tasks.")
+            from openai_agent import OpenAIAgent
+            return OpenAIAgent(api_key=key, model_name=model_id,
+                               base_url=s.get("openai_base_url") or None,
+                               provider_label=label,
                                auto_screenshot=bool(s.get("auto_screenshot", True)))
         if not s.get("gemini_api_key"):
             raise RuntimeError("Add a Gemini API key in Settings to run tasks.")
@@ -7987,6 +8085,37 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             "Open it on a phone on the same Wi-Fi to control this Mac.",
         )
 
+    def _start_mcp_bridge(self, announce: bool = True):
+        """Start Ember's MCP bridge so external MCP clients (Claude Desktop, Cursor) can drive
+        Ember's tools. Loopback-only + token-secured. Returns the status dict."""
+        try:
+            import ember_bridge
+            r = ember_bridge.start(
+                port=int(self.settings.get("mcp_bridge_port", 8770) or 8770),
+                allow_high_risk=bool(self.settings.get("mcp_bridge_allow_high_risk", False)),
+            )
+        except Exception as e:
+            if announce:
+                QMessageBox.warning(self, "MCP bridge", f"Could not start: {e}")
+            return {"ok": False, "error": str(e)}
+        if not r.get("ok"):
+            if announce:
+                QMessageBox.warning(self, "MCP bridge", r.get("error", "Failed to start."))
+            return r
+        if announce and not r.get("already_running"):
+            self._add_bubble(
+                "system",
+                f"🔌 Ember MCP bridge is live at **{r.get('url')}**. Point Claude Desktop / "
+                "Cursor at `ember_mcp_server.py` (see docs/MCP.md) to control Ember over MCP.",
+            )
+        return r
+
+    def _autostart_mcp_bridge(self):
+        """Bring the MCP bridge up at launch (opt-in). Best-effort, failure-silent."""
+        r = self._start_mcp_bridge(announce=False)
+        if not r.get("ok"):
+            print(f"[Ember MCP bridge autostart failed: {r.get('error')}]")
+
     # ------------------------------------------------------------------ updates
     def _check_for_update_async(self):
         """Background check for a newer release. No-op in dev / when unconfigured.
@@ -8376,6 +8505,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         agent_keys = ("model_id", "provider", "gemini_api_key", "gemini_api_key_secondary",
                       "gemini_api_key_3", "gemini_api_key_4",
                       "anthropic_api_key", "anthropic_model", "gemini_model",
+                      "openai_api_key", "openai_model", "openai_base_url", "openai_provider_label",
                       "auto_screenshot", "request_timeout_seconds", "dual_api_failover")
         glass_keys = ("liquid_glass", "glass_opacity", "accent_color")
         old_agent = {k: self.settings.get(k) for k in agent_keys}
@@ -8395,11 +8525,24 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 f"Couldn't open Settings: {type(e).__name__}: {e}\n\n"
                 f"A crash log was saved to:\n{_data_dir() / 'ember-crash.log'}")
             return
+        old_mcp = {k: self.settings.get(k) for k in
+                   ("mcp_bridge_enabled", "mcp_bridge_port", "mcp_bridge_allow_high_risk")}
         if dlg.exec():
             self.settings = dlg.get_settings()
             save_settings(self.settings)
             if self.agent is None or any(self.settings.get(k) != old_agent[k] for k in agent_keys):
                 self._init_agent()
+            # Apply MCP bridge changes live: start/stop/restart to match the new settings.
+            if any(self.settings.get(k) != old_mcp[k] for k in old_mcp):
+                try:
+                    import ember_bridge
+                    if self.settings.get("mcp_bridge_enabled"):
+                        ember_bridge.stop()          # restart to pick up port/high-risk changes
+                        self._start_mcp_bridge(announce=True)
+                    else:
+                        ember_bridge.stop()
+                except Exception as e:
+                    print(f"[MCP bridge apply failed: {e}]")
             if hasattr(self, "_automation"):
                 self._automation.enabled = bool(self.settings.get("automation_enabled", True))
                 self._automation.auto_confirm_popups = bool(self.settings.get("auto_confirm_popups", False))
@@ -8553,6 +8696,20 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     model_name=model_id,
                     auto_screenshot=bool(self.settings.get("auto_screenshot", True)),
                 )
+            elif provider == "openai":
+                key = self.settings.get("openai_api_key") or ""
+                label = self.settings.get("openai_provider_label") or "OpenAI"
+                if not key:
+                    self._set_status(f"Need {label} API key — open settings (gear)")
+                    return
+                from openai_agent import OpenAIAgent
+                self.agent = OpenAIAgent(
+                    api_key=key,
+                    model_name=model_id,
+                    base_url=self.settings.get("openai_base_url") or None,
+                    provider_label=label,
+                    auto_screenshot=bool(self.settings.get("auto_screenshot", True)),
+                )
             else:
                 if not self.settings.get("gemini_api_key"):
                     self._set_status("Need Gemini API key — open settings (gear)")
@@ -8571,6 +8728,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     lean_tools=bool(self.settings.get("lean_tools", True)),
                 )
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
+            # Carry the visible conversation into the fresh agent so switching model/provider
+            # mid-chat doesn't wipe context. Best-effort: never let it block agent init.
+            try:
+                if hasattr(self.agent, "load_history"):
+                    turns = self._history_turns_for_seeding()
+                    if turns:
+                        self.agent.load_history(turns)
+            except Exception:
+                pass
             self._set_status(f"Ready ({model_id})")
         except Exception as e:
             # Only blame the key/model for actual auth/model errors; other failures

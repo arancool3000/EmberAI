@@ -92,7 +92,9 @@ jobs:
             test_more_tools.py \
             test_workflow_recorder.py \
             test_release_workflow.py \
-            test_key_vault_recovery.py; do
+            test_key_vault_recovery.py \
+            test_openai_agent.py \
+            test_ember_bridge.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"

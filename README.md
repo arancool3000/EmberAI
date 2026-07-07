@@ -15,8 +15,10 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
   run mode + tool scope + optional schedule), run them on demand or **on a schedule**; Ember can
   also **spawn scoped sub-agents** for sub-tasks.
-- **Any model** — **Gemini** *or* **Claude**, an **Auto** option that picks the best available,
-  and automatic **key failover** (rotates through backup keys, then falls back across models).
+- **Any model** — **Gemini**, **Claude**, or **ChatGPT (OpenAI)**, plus any **OpenAI-compatible
+  provider** (xAI Grok, DeepSeek, Groq, Mistral, OpenRouter, or a local LM Studio / vLLM server)
+  by pasting that provider's key. An **Auto** option picks the best available, with automatic
+  **key failover** (rotates through backup keys, then falls back across models).
 - **Setup tour** — a friendly first-run wizard: pick your experience level, install the free
   offline AI in one click or paste a free key, optionally connect Gmail, and see what Ember can do.
 - **Learns about you** — long-term memory of facts/preferences so it gets more useful over time.
@@ -42,6 +44,10 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   network via a Cloudflare Tunnel — the short PIN never leaves your LAN (only a long pairing
   token, minted after a Wi-Fi pairing, is accepted remotely).
 - **Quit-proof global hotkey** — summon Ember from anywhere, even when it's fully closed.
+- **MCP server** — like the Blender MCP server, Ember can be **controlled from Claude Desktop,
+  Cursor, or any MCP client**: flip on the loopback-only, token-secured **MCP bridge** and your
+  ~290 Ember tools become MCP tools. Off by default; capability modes enforced and high-risk
+  actions blocked unless you opt in. See **[docs/MCP.md](docs/MCP.md)**.
 
 ### 🌐 Browser & web
 - **Ember Browser** — a secure, AI-first browser: tracker/ad blocking, an AI-answer search page,
