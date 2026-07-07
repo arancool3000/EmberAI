@@ -1132,15 +1132,113 @@ def show_usage_dashboard(parent):
             pass
 
 
+def _qt_key_name(key, text: str) -> str:
+    """Map a Qt key code to the pynput-compatible name Ember's hotkey/PTT layers understand
+    ('f9', 'space', 'esc', 'a', …). Returns '' for keys we can't name."""
+    # Function keys F1..F35 are consecutive.
+    if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F35:
+        return f"f{key - Qt.Key.Key_F1 + 1}"
+    named = {
+        Qt.Key.Key_Space: "space", Qt.Key.Key_Tab: "tab", Qt.Key.Key_Return: "enter",
+        Qt.Key.Key_Enter: "enter", Qt.Key.Key_Escape: "esc", Qt.Key.Key_Backspace: "backspace",
+        Qt.Key.Key_Delete: "delete", Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down",
+        Qt.Key.Key_Left: "left", Qt.Key.Key_Right: "right", Qt.Key.Key_Home: "home",
+        Qt.Key.Key_End: "end", Qt.Key.Key_PageUp: "page_up", Qt.Key.Key_PageDown: "page_down",
+        Qt.Key.Key_Control: "ctrl", Qt.Key.Key_Shift: "shift", Qt.Key.Key_Alt: "alt",
+        Qt.Key.Key_Meta: "cmd",
+    }
+    if key in named:
+        return named[key]
+    if text and len(text.strip()) == 1 and text.isprintable():
+        return text.strip().lower()
+    try:
+        s = QKeySequence(key).toString().lower()
+        return s if s else ""
+    except Exception:
+        return ""
+
+
+def _qkeyevent_to_combo(e, chord: bool) -> str:
+    """Turn a Qt key press into Ember's combo string. chord=True -> 'ctrl+shift+space';
+    chord=False -> a single key like 'f9' (a lone modifier is accepted as the key)."""
+    key = e.key()
+    is_mod = key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta)
+    if chord and is_mod:
+        return ""  # wait for the real key while modifiers are held
+    name = _qt_key_name(key, e.text())
+    if not name:
+        return ""
+    if not chord:
+        return name
+    mods = []
+    m = e.modifiers()
+    if m & Qt.KeyboardModifier.ControlModifier:
+        mods.append("ctrl")
+    if m & Qt.KeyboardModifier.AltModifier:
+        mods.append("alt")
+    if m & Qt.KeyboardModifier.ShiftModifier:
+        mods.append("shift")
+    if m & Qt.KeyboardModifier.MetaModifier:
+        mods.append("cmd")
+    return "+".join(mods + [name])
+
+
+class _KeyCaptureEdit(QLineEdit):
+    """A shortcut field you set by PRESSING the key(s), like every other app — instead of typing
+    the key's name. chord=True captures a combination (Ctrl+Shift+Space); chord=False a single
+    key (F9). Read-only; the captured value is available via value()."""
+
+    def __init__(self, value: str = "", chord: bool = True, parent=None):
+        super().__init__(parent)
+        self._chord = chord
+        self._value = (value or "").strip()
+        self.setReadOnly(True)
+        self.setPlaceholderText("Click, then press a key…")
+        self.setToolTip("Click here, then press the key" + (" combination" if chord else "") +
+                        " you want to use.")
+        self._render()
+
+    def value(self) -> str:
+        return self._value
+
+    def _render(self):
+        self.setText(self._value.replace("+", " + ").title() if self._value else "")
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        self.setText("Press a key…" if self._chord else "Press a key…")
+
+    def focusOutEvent(self, e):
+        super().focusOutEvent(e)
+        self._render()
+
+    def keyPressEvent(self, e):
+        combo = _qkeyevent_to_combo(e, self._chord)
+        if combo:
+            self._value = combo
+            self._render()
+            self.clearFocus()
+        # swallow the event either way so it doesn't type into the field
+        e.accept()
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        self.setFocus()
+
+
 class SettingsDialog(QDialog):
     """Tabbed settings: Models · Performance · Automations · Memory · Security · About."""
 
-    def __init__(self, settings: dict, parent=None, automation_engine=None):
+    def __init__(self, settings: dict, parent=None, automation_engine=None, only_tab=None):
         super().__init__(parent)
         self.setWindowTitle("Ember Settings")
         self.setMinimumSize(820, 560)
         self.settings = dict(settings)
         self.automation_engine = automation_engine
+        # When only_tab is set, this dialog is presented as a single feature's OWN window
+        # (its tab shown, the tab bar hidden, retitled). All tabs are still BUILT so the shared
+        # get_settings() save path is unchanged — we just don't show the others.
+        self._only_tab = only_tab
 
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -1179,6 +1277,9 @@ class SettingsDialog(QDialog):
             ev.addWidget(lbl)
             ev.addStretch()
             self.tabs.addTab(err_page, "⚠ Issues")
+
+        if self._only_tab:
+            self._scope_to_tab(self._only_tab)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -1238,6 +1339,27 @@ class SettingsDialog(QDialog):
         if not v or v == getattr(self, "_CUSTOM_VOICE", None):
             return default
         return v
+
+    def _scope_to_tab(self, only_tab: str):
+        """Present one built tab as a standalone feature window: switch to it and hide the tab
+        bar so only that section shows. We DON'T remove the other tabs — every widget stays
+        parented exactly as built, so the shared get_settings() save path is untouched (zero
+        reparenting risk); the user just sees one focused feature window."""
+        keep = None
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).strip().lower() == only_tab.strip().lower():
+                keep = i
+                break
+        if keep is None:
+            return  # unknown section -> fall back to the full tabbed dialog
+        title = self.tabs.tabText(keep)
+        self.tabs.setCurrentIndex(keep)
+        try:
+            self.tabs.tabBar().hide()
+        except Exception:
+            pass
+        self.setWindowTitle(f"Ember — {title}")
+        self.setMinimumSize(660, 520)
 
     def _add_tab(self, page, title: str, scroll: bool = True):
         """Add a tab, optionally wrapped in a scroll area so tall content never clips
@@ -1551,6 +1673,15 @@ class SettingsDialog(QDialog):
         self.wake_word_check.setChecked(bool(self.settings.get("wake_word", True)))
         layout.addRow(self.wake_word_check)
 
+        # Concrete "does my mic work?" diagnostic — the fastest way to see WHY voice is dead
+        # (missing pyaudio / no permission / no device) instead of guessing.
+        self.mic_test_btn = QPushButton("🎤  Test microphone")
+        self.mic_test_btn.clicked.connect(self._test_microphone)
+        self.mic_test_status = QLabel("")
+        self.mic_test_status.setWordWrap(True)
+        self.mic_test_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        layout.addRow(self.mic_test_btn, self.mic_test_status)
+
         self.wake_visual_combo = QComboBox()
         for label, val in (("Glow around Ember (recommended)", "glow"),
                            ("Floating orb", "orb")):
@@ -1704,15 +1835,14 @@ class SettingsDialog(QDialog):
         self.ptt_check.setChecked(bool(self.settings.get("push_to_talk", False)))
         layout.addRow(self.ptt_check)
 
-        self.ptt_key_input = QLineEdit(self.settings.get("push_to_talk_key", "f9"))
-        self.ptt_key_input.setPlaceholderText("e.g. f9, space, ` (a single key you hold)")
+        self.ptt_key_input = _KeyCaptureEdit(self.settings.get("push_to_talk_key", "f9"), chord=False)
         layout.addRow("Push-to-talk key:", self.ptt_key_input)
 
         self.stt_engine_combo = QComboBox()
-        for val, label in (("auto", "Auto — local Whisper if installed, else cloud"),
-                           ("whisper", "Local Whisper only (offline, private)"),
-                           ("gemini", "Gemini (cloud — needs a key)"),
-                           ("google", "Google Web Speech (free, cloud)")):
+        for val, label in (("auto", "Auto (recommended)"),
+                           ("whisper", "On-device — private & offline (Whisper)"),
+                           ("gemini", "Cloud — uses your Gemini key"),
+                           ("google", "Free online (Google)")):
             self.stt_engine_combo.addItem(label, userData=val)
         _cur_stt = str(self.settings.get("stt_engine", "auto")).strip().lower()
         for i in range(self.stt_engine_combo.count()):
@@ -1745,6 +1875,97 @@ class SettingsDialog(QDialog):
         layout.addRow(ptt_note)
 
         self._add_tab(page, "Voice")
+
+    def _test_microphone(self):
+        """One-click 'does my mic actually work?' — opens the device and captures a moment of
+        audio, then reports EXACTLY what's wrong (missing pyaudio / no permission / no device) or
+        confirms it works. This is the fastest path out of 'voice does nothing and I don't know why'."""
+        self.mic_test_btn.setEnabled(False)
+        self.mic_test_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        self.mic_test_status.setText("Testing… say a few words.")
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+        try:
+            import voice
+            ok, detail = voice.mic_available()
+            if not ok:
+                hint = detail
+                if "pyaudio" in detail.lower():
+                    hint = ("Microphone support (PyAudio) isn’t installed.\n"
+                            "Install it, then reopen Ember:\n"
+                            "  macOS:  brew install portaudio && pip install pyaudio\n"
+                            "  Windows:  pip install pyaudio\n"
+                            "  Linux:  sudo apt install portaudio19-dev && pip install pyaudio")
+                self.mic_test_status.setStyleSheet("color: #f7768e; font-size: 11px;")
+                self.mic_test_status.setText("❌ " + hint)
+                return
+            text, err = self._quick_capture()
+            if err:
+                self.mic_test_status.setStyleSheet("color: #e0af68; font-size: 11px;")
+                self.mic_test_status.setText("⚠️ Mic opened but capture failed: " + err)
+            elif text:
+                self.mic_test_status.setStyleSheet("color: #9ece6a; font-size: 11px;")
+                self.mic_test_status.setText(f"✅ Microphone works — I heard: “{text}”")
+            else:
+                self.mic_test_status.setStyleSheet("color: #9ece6a; font-size: 11px;")
+                self.mic_test_status.setText("✅ Microphone works (captured audio). If ‘Hey Ember’ "
+                                             "still won’t trigger, speak a bit louder/closer.")
+        except Exception as e:
+            self.mic_test_status.setStyleSheet("color: #f7768e; font-size: 11px;")
+            self.mic_test_status.setText(f"❌ {type(e).__name__}: {e}")
+        finally:
+            self.mic_test_btn.setEnabled(True)
+
+    def _quick_capture(self):
+        """Listen briefly and try to transcribe. Returns (text, error). error='' means audio was
+        captured even if it couldn't be transcribed (e.g. offline)."""
+        try:
+            import speech_recognition as sr
+        except Exception as e:
+            return "", f"SpeechRecognition not installed ({e})"
+        try:
+            r = sr.Recognizer()
+            with sr.Microphone() as src:
+                r.adjust_for_ambient_noise(src, duration=0.3)
+                audio = r.listen(src, timeout=4, phrase_time_limit=3)
+        except Exception as e:
+            return "", str(e)
+        try:
+            return r.recognize_google(audio), ""      # best-effort; free + no key
+        except Exception:
+            return "", ""                              # captured, just couldn't transcribe offline
+
+    def _setup_mcp_claude(self):
+        """One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config,
+        so the user never has to touch a terminal or find a Python path."""
+        self.mcp_setup_btn.setEnabled(False)
+        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        self.mcp_setup_status.setText("Setting up… installing the MCP SDK (this can take a minute).")
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+        try:
+            import mcp_setup
+            res = mcp_setup.setup_claude_desktop()
+        except Exception as e:
+            res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if res.get("ok"):
+            try:
+                self.mcp_bridge_check.setChecked(True)   # ensure the bridge turns on when saved
+            except Exception:
+                pass
+            self.mcp_setup_status.setStyleSheet("color: #9ece6a; font-size: 11px;")
+            self.mcp_setup_status.setText(
+                "✅ Claude Desktop is configured. Click Save (turns the bridge on), then fully "
+                "quit and reopen Claude Desktop — Ember appears under its tools icon.\n"
+                f"Config: {res.get('config')}")
+        else:
+            self.mcp_setup_status.setStyleSheet("color: #f7768e; font-size: 11px;")
+            self.mcp_setup_status.setText("❌ " + str(res.get("error", "setup failed")))
+        self.mcp_setup_btn.setEnabled(True)
 
     def _build_performance_tab(self):
         page = QWidget()
@@ -1781,6 +2002,15 @@ class SettingsDialog(QDialog):
             "to approve them there. On: they run unattended — only enable if you trust the client.")
         layout.addRow(self.mcp_highrisk_check)
 
+        # One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config
+        # automatically — no terminal, no path hunting.
+        self.mcp_setup_btn = QPushButton("⚙️  Set up Claude Desktop (one-click)")
+        self.mcp_setup_btn.clicked.connect(self._setup_mcp_claude)
+        self.mcp_setup_status = QLabel("")
+        self.mcp_setup_status.setWordWrap(True)
+        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        layout.addRow(self.mcp_setup_btn, self.mcp_setup_status)
+
         self.keep_bg_check = QCheckBox(
             "Keep running in the background when closed (so “Hey Ember” still works)")
         self.keep_bg_check.setChecked(bool(self.settings.get("keep_running_in_background", True)))
@@ -1807,8 +2037,7 @@ class SettingsDialog(QDialog):
         self.auto_update_check.setChecked(bool(self.settings.get("auto_update", True)))
         layout.addRow(self.auto_update_check)
 
-        self.hotkey_input = QLineEdit(self.settings.get("hotkey", "ctrl+shift+space"))
-        self.hotkey_input.setPlaceholderText("e.g. ctrl+alt+a, ctrl+shift+space")
+        self.hotkey_input = _KeyCaptureEdit(self.settings.get("hotkey", "ctrl+shift+space"), chord=True)
         layout.addRow("Global summon hotkey:", self.hotkey_input)
 
         self.hotkey_daemon_check = QCheckBox(
@@ -2614,7 +2843,7 @@ class SettingsDialog(QDialog):
     def _toggle_hotkey_daemon(self, state):
         on = bool(state)
         self.settings["hotkey_daemon"] = on
-        combo = (self.hotkey_input.text().strip() if hasattr(self, "hotkey_input") else "") or \
+        combo = (self.hotkey_input.value().strip() if hasattr(self, "hotkey_input") else "") or \
             self.settings.get("hotkey", "ctrl+shift+space")
         try:
             import hotkey_daemon
@@ -3077,10 +3306,10 @@ class SettingsDialog(QDialog):
             self.settings["voice_chat_phrase_timeout"] = self.voice_phrase_combo.currentData() or "auto"
         if hasattr(self, "ptt_check"):
             self.settings["push_to_talk"] = self.ptt_check.isChecked()
-            self.settings["push_to_talk_key"] = (self.ptt_key_input.text().strip().lower() or "f9")
+            self.settings["push_to_talk_key"] = (self.ptt_key_input.value().strip().lower() or "f9")
             self.settings["stt_engine"] = self.stt_engine_combo.currentData() or "auto"
             self.settings["whisper_model"] = self.whisper_model_combo.currentData() or "base"
-        self.settings["hotkey"] = self.hotkey_input.text().strip() or "ctrl+shift+space"
+        self.settings["hotkey"] = self.hotkey_input.value().strip() or "ctrl+shift+space"
         # If the quit-proof hotkey helper is installed, refresh it with the (possibly new) combo.
         try:
             import hotkey_daemon
@@ -7128,7 +7357,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self.input_box.setTextCursor(cur)
             self.input_box.setFocus()
         elif kind == "settings":
-            self._open_settings()
+            # Open the feature as its OWN focused window (its settings section, tab bar hidden),
+            # not the top of the full Settings dialog. val is the section name, "" = full Settings.
+            self._open_settings(only_tab=(val or None))
 
     def _show_usage_dashboard(self):
         show_usage_dashboard(self)
@@ -7738,20 +7969,16 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         leaving 'Hey Ember' silently dead."""
         try:
             import wake_word
-            wake_word.start(on_wake=lambda: self._bridge.wake_detected.emit())
-            if wake_word.is_running():
+            res = wake_word.start(on_wake=lambda: self._bridge.wake_detected.emit())
+            if res.get("ok") and wake_word.is_running():
                 print("[Wake word on: listening for 'Hey Ember']")
                 return
-            print("[Wake word: mic unavailable]")
-            try:
-                import voice
-                ok, detail = voice.mic_available()
-            except Exception:
-                ok, detail = False, "microphone unavailable"
-            if not ok and not self.settings.get("_warned_mic_perm"):
+            # start() now decides mic availability synchronously and hands back the real reason.
+            detail = res.get("error") or wake_word.last_error() or "microphone unavailable"
+            print(f"[Wake word: {detail}]")
+            if not self.settings.get("_warned_mic_perm"):
                 self.settings["_warned_mic_perm"] = True
-                self._add_bubble("system",
-                    "🎙️ “Hey Ember” couldn’t start: " + detail)
+                self._add_bubble("system", "🎙️ “Hey Ember” couldn’t start — " + detail)
         except Exception as e:
             print(f"[Wake word autostart failed: {e}]")
 
@@ -8498,7 +8725,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._add_bubble("system", "Conversation reset.")
         self._set_status(f"Ready ({self.settings.get('model_id') or self.settings.get('gemini_model')})")
 
-    def _open_settings(self):
+    def _open_settings(self, only_tab: str = None):
         old_hotkey = (self.settings.get("hotkey") or "ctrl+shift+space").lower()
         # Snapshot the keys the agent / glass effect actually depend on, so we only rebuild
         # them when relevant — a font or appearance tweak shouldn't drop conversation state.
@@ -8512,7 +8739,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         old_glass = {k: self.settings.get(k) for k in glass_keys}
         old_ptt = {k: self.settings.get(k) for k in ("push_to_talk", "push_to_talk_key")}
         try:
-            dlg = SettingsDialog(self.settings, self, automation_engine=self._automation)
+            dlg = SettingsDialog(self.settings, self, automation_engine=self._automation,
+                                 only_tab=only_tab)
         except Exception as e:
             import traceback
             traceback.print_exc()

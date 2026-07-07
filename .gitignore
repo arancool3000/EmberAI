@@ -50,3 +50,6 @@ Thumbs.db
 
 # Runtime crash log (written by _install_crash_guards)
 ember-crash.log
+
+# Update signing private key — NEVER commit
+update_privkey.pem

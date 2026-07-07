@@ -1,0 +1,15 @@
+# Optional antivirus/static-analysis engines for av_static.py. The core app does NOT require
+# these — every engine degrades gracefully when its library is absent (see av_static.py). Install
+# them to upgrade the built-in stdlib analysis to full-strength parsing:
+#
+#   pip install -r requirements-security.txt
+#
+# These pull in native builds; keep them OUT of the default requirements.txt so the base install
+# stays lightweight and cross-platform (same pattern as requirements-voice.txt).
+
+yara-python>=4.5.0       # YARA rule scanning (av_static.yara_scan) — set EMBER_YARA_RULES to a .yar file
+oletools>=0.60.1         # real VBA macro extraction / p-code analysis (av_static.analyze_office_macros)
+lief>=0.14.0             # rich PE/ELF/Mach-O parsing (av_static.parse_binary upgrades from stdlib)
+ppdeep>=20200505         # pure-python ssdeep fuzzy hashing (av_static.fuzzy_hash_file); or install python-ssdeep
+rarfile>=4.2             # unpack .rar archives for interior scanning (needs the `unrar` tool installed)
+py7zr>=0.21.0            # unpack .7z archives for interior scanning

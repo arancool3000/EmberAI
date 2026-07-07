@@ -107,6 +107,17 @@ if __name__ == "__main__":
             except Exception:
                 pass
         sys.exit(ember_hotkey_listener.run(_combo))
+    # MCP server mode: an MCP client (Claude Desktop / Cursor) launches THIS binary with
+    # --mcp-server to talk to the running Ember over its loopback bridge. This lets the frozen
+    # .app act as its own MCP server (no separate Python needed) — the app already bundles the
+    # `mcp` SDK. It must run BEFORE the single-instance guard + GUI imports (like --hotkey-listener).
+    if "--mcp-server" in sys.argv:
+        try:
+            import ember_mcp_server
+            sys.exit(ember_mcp_server.main([a for a in sys.argv[1:] if a != "--mcp-server"]))
+        except Exception as e:
+            print(f"[ember-mcp] {e}", file=sys.stderr)
+            sys.exit(1)
     try:
         _ensure_valid_cwd()   # repair a deleted CWD before anything calls os.getcwd()
         _fix_gui_path()       # put Homebrew on PATH so flac/brew resolve when launched from Finder

@@ -15,6 +15,8 @@ hiddenimports = []
 common_pkgs = ["google.genai", "google.ai", "google.api_core", "google.auth",
                "google.protobuf", "google.rpc", "mss", "pyautogui",
                "rapidfuzz", "psutil", "websocket", "send2trash", "anthropic",
+               "openai",   # OpenAI/ChatGPT + OpenAI-compatible providers (openai_agent)
+               "mcp",      # Model Context Protocol server so the app can run `--mcp-server`
                "speech_recognition", "pyttsx3", "pyaudio", "pynput",
                "PyPDF2", "openpyxl", "qrcode",
                "certifi"]   # bundles cacert.pem so HTTPS (auto-updater) verifies in the frozen app
@@ -38,7 +40,9 @@ hiddenimports += ["single_instance", "automation", "manual_mode", "more_tools",
                   "plan", "vpn", "utilities", "cleanup", "nettools", "mediatools", "privacy",
                   "models", "voice", "scheduled_tasks", "ember_browser", "ai_detect", "quick_tools",
                   "power_tools", "chart_tools", "local_ai", "macros", "creative", "security_extras",
-                  "claude_bridge", "claude_agent",
+                  "claude_bridge", "claude_agent", "openai_agent", "ollama_agent",
+                  "ember_bridge", "ember_mcp_server", "mcp_setup", "update_signing", "av_static",
+                  "tool_args", "sign_release",
                   "mac_permissions",
                   "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets",
                   "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore",

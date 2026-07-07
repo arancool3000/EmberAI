@@ -91,6 +91,22 @@ def can_self_update() -> bool:
     return bool(root and os.access(root.parent, os.W_OK))
 
 
+# The update payload may ONLY be fetched from GitHub Releases. Pinning the host means a
+# tampered/MITM'd manifest can't redirect the download to an attacker-controlled server (the
+# initial URL is what the manifest controls; GitHub's own 302 to its release CDN is trusted
+# transitively). certifi-verified TLS already protects the transport; this bounds the origin.
+_ALLOWED_UPDATE_HOSTS = {"github.com", "www.github.com"}
+
+
+def _host_allowed(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return p.scheme == "https" and (p.hostname or "").lower() in _ALLOWED_UPDATE_HOSTS
+    except Exception:
+        return False
+
+
 def _manifest_download(manifest: dict) -> tuple[str, str]:
     """Return (url, sha256) for this OS, falling back to the predictable release-asset URL."""
     key = version.platform_key() or "macos"
@@ -176,7 +192,30 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
     """Download + verify + unpack the update. Returns the staged install path (the new .app on
     macOS, the new install folder on Windows, or the new AppImage file on Linux). Raises on
     failure."""
+    # Cryptographic authenticity: when the maintainer has bundled a public key, the manifest
+    # MUST carry a valid Ed25519 signature (see update_signing / SECURITY.md). Inert until then.
+    try:
+        import update_signing
+        ok_sig, sig_reason = update_signing.check_manifest(manifest)
+        if not ok_sig:
+            raise RuntimeError(sig_reason)
+    except RuntimeError:
+        raise
+    except Exception:
+        pass  # a bug in the (optional) signing layer must not itself break updates
     url, expected_sha = _manifest_download(manifest)
+    if not _host_allowed(url):
+        raise RuntimeError(f"refusing to download update from an untrusted host: {url[:80]} "
+                           "(updates must come from github.com over HTTPS)")
+    # When signing is enforced, the signed manifest vouches for the SHA-256, so require it.
+    try:
+        import update_signing
+        if update_signing.signing_enforced() and not expected_sha:
+            raise RuntimeError("signed update is missing its SHA-256 — refusing to install")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
     tmp = Path(tempfile.mkdtemp(prefix="ember_update_"))
     appimage = is_appimage_asset(url)
     dlpath = tmp / ("Ember.AppImage" if appimage else "Ember.zip")

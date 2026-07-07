@@ -101,6 +101,7 @@ DEFAULT_CONFIG: dict = {
     "entropy_scan": True,          # flag packed/encrypted executables via Shannon entropy
     "entropy_threshold": 7.2,      # >= this (bits/byte) on code content -> likely packed/encrypted
     "ioc_scan": True,              # scan script/command content for malware IOCs (fileless, LOLBins)
+    "deep_static": True,           # av_static engines: PE/ELF/Mach-O + PDF actions + VBA macros + script de-obfuscation
     "scan_archives": True,         # look INSIDE zip archives for malicious members
     "archive_max_members": 200,    # max members inspected per archive
     "archive_member_max_bytes": 4 * 1024 * 1024,  # max bytes read per member
@@ -562,6 +563,23 @@ def _static_scan(path: Path, cfg: dict | None = None) -> tuple[int, list[str], d
                 score += min(ioc_score, 75)      # strong / corroborated -> can flag
             else:
                 score += min(ioc_score, 20)      # lone weak hint -> note it, rarely enough alone
+
+    # Deep static engines (av_static): PE/ELF/Mach-O structure + packer/W^X, PDF actions, VBA
+    # macros, and de-obfuscated script analysis. Best-effort + lazy so a missing optional lib or
+    # a parser hiccup never breaks the core scan.
+    if cfg.get("deep_static", True):
+        try:
+            import av_static
+            extra = av_static.contribute(str(path), sample, ext)
+            for r in extra.get("reasons", []):
+                if r not in reasons:
+                    reasons.append(r)
+            score += int(extra.get("score", 0))
+            if extra.get("reasons"):
+                info["deep_static"] = {"verdict": extra.get("verdict"),
+                                       "engines": len(extra["reasons"])}
+        except Exception:
+            pass
 
     return min(score, 100), reasons, info
 
@@ -1040,6 +1058,8 @@ def scan_file(path: str, deep: bool = True) -> dict:
             engines.append("entropy")
         if info.get("ioc_categories"):
             engines.append("ioc-signatures")
+        if info.get("deep_static"):
+            engines.append("deep-static")
         if info.get("eicar") or info.get("signature_hit"):
             _raise("malicious")
         elif score >= _SUSPICIOUS_SCORE:

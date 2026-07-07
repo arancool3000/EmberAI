@@ -66,6 +66,7 @@ import song_id
 import app_builder
 import network_adblock
 import ember_bridge                       # MCP bridge start/stop/status tools
+import mcp_setup                          # one-click "wire Ember into Claude Desktop" tool
 from claude_bridge import build_handoff_prompt, copy_to_clipboard, try_anthropic_api
 
 
@@ -2155,7 +2156,8 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
               agent_profiles, agent_scheduler, integrations,
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
               self_extend, song_id, app_builder,
-              network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge):
+              network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge,
+              mcp_setup):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
