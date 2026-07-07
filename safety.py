@@ -365,6 +365,11 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
     if tool_name == "vault_delete_key":
         return "medium", "deletes a stored secret from the key vault"
 
+    # Self-extension: the AI writing/editing code Ember will run. HIGH so the user sees the code
+    # and approves at authoring time (the authored tool then runs automatically thereafter).
+    if tool_name in {"create_python_tool", "self_edit_source", "build_app"}:
+        return "high", "writes/edits code that Ember will run"
+
     return "medium", "unclassified tool"
 
 
