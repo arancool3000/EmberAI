@@ -26,24 +26,18 @@ def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
-def _python_for_client() -> str:
-    """The interpreter the MCP client should launch. When Ember runs from source this is simply
-    Ember's own Python (guaranteed compatible + has our deps). In a frozen .app, sys.executable
-    is the app binary — not a usable python — so fall back to a real Python 3.10+ on the system."""
-    if not _is_frozen():
-        return sys.executable
-    for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3"):
-        p = shutil.which(name)
-        if p:
-            try:
-                out = subprocess.run([p, "-c", "import sys;print(sys.version_info[:2])"],
-                                     capture_output=True, text=True, timeout=10).stdout
-                major, minor = eval(out or "(0,0)")
-                if (major, minor) >= (3, 10):
-                    return p
-            except Exception:
-                continue
-    return ""   # none found — caller surfaces a clear "install Python 3.10+" message
+def _client_command_and_args() -> tuple[str, list]:
+    """How the MCP client should launch the Ember MCP server.
+
+    - Frozen .app: run the app binary itself with --mcp-server. No separate Python needed — the
+      app bundles the mcp SDK and main.py routes --mcp-server to the server. This is what makes
+      one-click setup work for users who have no system Python at all.
+    - From source: Ember's own interpreter (sys.executable, guaranteed 3.10+ with our deps)
+      running ember_mcp_server.py directly.
+    """
+    if _is_frozen():
+        return sys.executable, ["--mcp-server"]
+    return sys.executable, [_server_script()]
 
 
 # --- client config locations -----------------------------------------------------------
@@ -60,12 +54,13 @@ def claude_desktop_config_path() -> Path:
 # --- steps -----------------------------------------------------------------------------
 
 def ensure_mcp_installed() -> tuple[bool, str]:
-    """Make sure the `mcp` SDK is importable by the client's Python. Installs it if missing."""
-    py = _python_for_client()
-    if not py:
-        return False, ("No Python 3.10+ found to run the MCP server. Install Python 3.12 from "
-                       "python.org, then try again.")
-    # Already there?
+    """Make sure the `mcp` SDK is available to the client's launcher. Installs it when running
+    from source; in a frozen .app it's bundled at build time (can't pip into the app)."""
+    if _is_frozen():
+        # Verify the bundled interpreter can import mcp by launching the server in --help/list-less
+        # mode is overkill; trust the build. If it's missing, --mcp-server surfaces a clear error.
+        return True, "mcp SDK is bundled in the Ember app"
+    py = sys.executable
     try:
         r = subprocess.run([py, "-c", "import mcp"], capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
@@ -87,9 +82,9 @@ def ensure_mcp_installed() -> tuple[bool, str]:
 
 def configure_claude_desktop() -> tuple[bool, str]:
     """Add (or update) the 'ember' server in Claude Desktop's config, preserving everything else."""
-    py = _python_for_client()
-    if not py:
-        return False, "No suitable Python 3.10+ found for the MCP server."
+    command, args = _client_command_and_args()
+    if not command:
+        return False, "Could not determine how to launch the Ember MCP server."
     cfg = claude_desktop_config_path()
     try:
         cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +103,7 @@ def configure_claude_desktop() -> tuple[bool, str]:
         if not isinstance(servers, dict):
             servers = {}
             data["mcpServers"] = servers
-        servers["ember"] = {"command": py, "args": [_server_script()]}
+        servers["ember"] = {"command": command, "args": args}
         cfg.write_text(json.dumps(data, indent=2))
         return True, str(cfg)
     except Exception as e:
@@ -129,12 +124,13 @@ def setup_claude_desktop(install: bool = True) -> dict:
         steps.append(where)
         return {"ok": False, "steps": steps, "error": where}
     steps.append(f"wrote Claude Desktop config: {where}")
+    command, args = _client_command_and_args()
     return {
         "ok": True,
         "steps": steps,
         "config": where,
-        "python": _python_for_client(),
-        "server": _server_script(),
+        "launcher": " ".join([command] + args),
+        "frozen": _is_frozen(),
         "note": ("Now quit Claude Desktop (Cmd/Ctrl+Q) and reopen it, with Ember running and the "
                  "MCP bridge on. Ember will appear under the tools icon."),
     }
