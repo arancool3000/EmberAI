@@ -408,17 +408,55 @@ def _ember_own_dirs() -> list:
     return dirs
 
 
+# Files whose presence together fingerprints an Ember source tree. The point: Ember's own
+# security modules + tests legitimately CONTAIN malware indicator strings (they're the signature
+# DB / detectors), so a scan of Ember's code — the running copy OR a checkout/copy the user
+# scanned — must skip the whole tree, not just the exact running directory.
+_EMBER_TREE_FILES = ("agent.py", "antivirus.py", "version.py")
+_EMBER_TREE_CACHE: dict = {}
+
+
+def _dir_is_ember_source(d: Path) -> bool:
+    """True if `d` looks like an Ember source tree: the fingerprint files are present AND
+    version.py carries Ember's own marker (so a random folder that happens to hold files with
+    these names isn't blindly trusted). Memoized per directory for scan-speed."""
+    key = str(d)
+    cached = _EMBER_TREE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = False
+    try:
+        if all((d / name).is_file() for name in _EMBER_TREE_FILES):
+            vt = (d / "version.py").read_text("utf-8", "ignore")
+            result = ("EmberAI" in vt) or ("GITHUB_REPO" in vt)
+    except Exception:
+        result = False
+    _EMBER_TREE_CACHE[key] = result
+    return result
+
+
 def _is_ember_own(p: Path) -> bool:
     try:
         rp = p.resolve()
-        for d in _ember_own_dirs():
-            try:
-                rp.relative_to(d)
-                return True
-            except ValueError:
-                continue
     except Exception:
-        pass
+        return False
+    # 1) Under the running / installed Ember directories.
+    for d in _ember_own_dirs():
+        try:
+            rp.relative_to(d)
+            return True
+        except ValueError:
+            continue
+    # 2) Under ANY directory that fingerprints as an Ember source tree (a checkout or copy the
+    #    user scanned). Walk a bounded number of ancestors so nested files (e.g. in a subdir) are
+    #    still recognized, without an unbounded climb per file on a big scan.
+    try:
+        ancestors = [rp.parent, *list(rp.parent.parents)[:6]]
+    except Exception:
+        return False
+    for anc in ancestors:
+        if _dir_is_ember_source(anc):
+            return True
     return False
 
 _MACRO_EXTS = {".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm"}

@@ -21,3 +21,9 @@ pocketsphinx>=5.0.0
 # Ember falls back to the system voice. Pure-Python; no system libs needed.
 edge-tts>=6.1.0
 
+# Optional: song identification ("what song is this?"). shazamio fingerprints a short
+# mic clip against Shazam with NO API key. Without it, Ember uses AudD instead if you set
+# an AUDD_API_TOKEN (uses only `requests`, already installed) — or the AI can add the
+# capability itself via create_python_tool. Needs the pyaudio mic input above.
+shazamio>=0.4.0
+

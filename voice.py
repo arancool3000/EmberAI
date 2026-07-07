@@ -503,7 +503,8 @@ def listen_once(on_transcript: Callable[[str, str | None], None],
                     audio = rec.listen(source, timeout=listen_timeout,
                                        phrase_time_limit=(phrase_timeout or None))
         except sr.WaitTimeoutError:
-            on_transcript("", "no speech detected")
+            on_transcript("", "no speech detected — I didn't hear anything. Check that Ember has "
+                              "microphone permission and the right input device is selected.")
             return
         except Exception as e:
             on_transcript("", f"mic error: {e}")

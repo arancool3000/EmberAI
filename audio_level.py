@@ -16,6 +16,7 @@ math and VAD are unit-testable with scripted frames and never touch real audio.
 from __future__ import annotations
 
 import math
+import sys
 import threading
 import time
 from array import array
@@ -187,15 +188,25 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
 
             # Calibrate a noise floor over the first few frames.
             floor_frames = max(1, int(0.3 / frame_secs))
-            floor = 0.0
-            for _ in range(floor_frames):
+            floor_vals: list[float] = []
+            peak = 0.0                       # loudest frame seen — distinguishes a dead/muted mic
+            for _ in range(floor_frames):    # from merely-quiet speech when nothing gets captured
                 try:
                     fr = stream.read(CHUNK)
                 except Exception:
                     fr = b""
-                floor = max(floor, rms_of_frame(fr))
-            # Speech must clear the noise floor by a margin (and an absolute minimum).
-            threshold = max(floor * 1.8, 350.0)
+                r = rms_of_frame(fr)
+                floor_vals.append(r)
+                peak = max(peak, r)
+            # Noise floor = MEDIAN of the calibration frames, NOT the max: one loud blip (or the
+            # user already starting to talk) shouldn't inflate the floor and then swallow the rest
+            # of the phrase.
+            floor_vals.sort()
+            floor = floor_vals[len(floor_vals) // 2] if floor_vals else 0.0
+            # Speech must clear the floor by a margin AND an absolute minimum. 180 (was 350): 350
+            # was high enough that quiet / low-gain mics never cleared it, so every phrase came
+            # back "no speech".
+            threshold = max(floor * 1.8, 180.0)
 
             started = False
             speech_secs = 0.0
@@ -217,6 +228,7 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
                     # Injected stream exhausted -> stop.
                     break
                 rms = rms_of_frame(fr)
+                peak = max(peak, rms)
                 lvl = normalize_level(rms)
                 # Snappy attack, smoother release -> reads as "alive" but not jittery.
                 smooth = lvl if lvl > smooth else smooth * 0.6 + lvl * 0.4
@@ -255,7 +267,21 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
 
     raw = b"".join(collected)
     if not raw:
-        on_transcript("", err or "no speech detected")
+        if not err:
+            if peak < 25.0:
+                # The mic delivered (near-)silence the whole time — almost always a permission or
+                # wrong-input-device problem, not the user being quiet. Say so, actionably.
+                if sys.platform == "darwin":
+                    err = ("no speech detected — Ember's microphone received almost no audio. "
+                           "Grant mic access in System Settings ▸ Privacy & Security ▸ "
+                           "Microphone, and check the correct input device is selected.")
+                else:
+                    err = ("no speech detected — Ember's microphone received almost no audio. "
+                           "Check that microphone permission is granted and the right input "
+                           "device is selected.")
+            else:
+                err = "no speech detected — the audio was too quiet; try speaking a bit louder."
+        on_transcript("", err)
         return
     try:
         text = recognizer(raw, RATE, WIDTH) or ""

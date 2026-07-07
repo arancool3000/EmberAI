@@ -127,7 +127,7 @@ def _bind_builders():
 
     Fake._shell = _shell
     cls = _class("EmberBrowser")
-    for meth in ("_results_header", "_search_results_html"):
+    for meth in ("_results_header", "_render_answer_html", "_search_results_html"):
         fn = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == meth)
         code = ast.get_source_segment(_SRC, fn)
         exec(compile(ast.parse(code), "<m>", "exec"), glb)
@@ -193,6 +193,59 @@ def test_customise_panel_has_backdrop_and_keyboard_affordances():
     fn = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == "_home_html")
     src = ast.get_source_segment(_SRC, fn)
     assert "id=backdrop" in src and "aria-label" in src
+
+
+def test_results_render_before_the_ai_answer():
+    # The web results must be emitted BEFORE the slow grounded answer is computed, so they show
+    # while the AI is still thinking. Assert the ordering in _search_thread's source.
+    cls = _class("EmberBrowser")
+    fn = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == "_search_thread")
+    src = ast.get_source_segment(_SRC, fn)
+    i_results = src.index("_search_result.emit")
+    i_answer = src.index("_grounded_answer")
+    i_ready = src.index("_answer_ready.emit")
+    assert i_results < i_answer < i_ready, "results must be emitted before the answer is computed"
+    assert "pending=True" in src         # phase-1 render uses the thinking-state card
+
+
+def test_pending_card_is_a_thinking_skeleton():
+    f = _bind_builders()
+    results = [("Py", "https://python.org")]
+    pend = f._search_results_html("q", None, results, "= 5", pending=True)
+    assert "id=answerCard" in pend and 'data-q="q"' in pend    # marker for the in-place update
+    assert 'id=ansBody' in pend and "class=skl" in pend        # shimmer, not a blank/blocked card
+    assert "thinking" in pend.lower()
+    assert "class=card" in pend and "class=pill" in pend       # results ARE already present
+    # copy button exists but is hidden until the answer lands
+    assert "id=copyBtn" in pend and "display:none" in pend
+    # a normal (non-pending) render shows the answer + a visible copy button
+    full = f._search_results_html("q", "Answer [1].", results, None)
+    assert "class=skl" not in full.split("reslist")[0] and "class=cite" in full
+
+
+def test_answer_update_is_in_place_and_query_guarded():
+    # The phase-2 update must be a runJavaScript patch (no reload) guarded by data-q so a stale
+    # answer can't overwrite a newer search.
+    cls = _class("EmberBrowser")
+    m = {n.name for n in ast.walk(cls) if isinstance(n, ast.FunctionDef)}
+    assert "_update_search_answer" in m and "_render_answer_html" in m
+    fn = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == "_update_search_answer")
+    src = ast.get_source_segment(_SRC, fn)
+    assert "runJavaScript" in src and "getAttribute('data-q')" in src
+    assert "ansBody" in src and "ansHead" in src
+    # the signal is declared and wired
+    assert "_answer_ready = pyqtSignal" in _SRC
+    assert "self._answer_ready.connect(self._update_search_answer)" in _SRC
+
+
+def test_render_answer_html_linkifies_and_bounds_citations():
+    f = _bind_builders()
+    results = [("A", "https://a.com"), ("B", "https://b.com")]
+    html = f._render_answer_html("See [1] and [2] and [9].", results)
+    assert "a.com" in html and "b.com" in html and "class=cite" in html
+    assert "[9]" in html                                # out-of-range citation left as plain text
+    # no-answer fallback still guides the user
+    assert "add an api key" in f._render_answer_html(None, results).lower()
 
 
 def test_every_self_method_call_in_emberbrowser_resolves():
