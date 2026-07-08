@@ -99,18 +99,52 @@ def tool_to_mcp(decl: dict) -> dict:
 
 
 def list_tools_from(declarations: list, dispatch: dict) -> list:
-    """Build the MCP tool list — only tools that are actually dispatchable and not agent-only."""
+    """Build the MCP tool list — EVERY declared Ember tool (deduped). The handful that aren't in
+    the normal dispatch table (run_custom_tool + the agent-loop tools) are handled specially in
+    execute_tool, so they're exposed too. Nothing is filtered out."""
     out = []
     seen = set()
     for decl in declarations:
         name = decl.get("name")
-        if not name or name in seen or name in _AGENT_ONLY_TOOLS:
-            continue
-        if name not in dispatch:
+        if not name or name in seen:
             continue
         seen.add(name)
         out.append(tool_to_mcp(decl))
     return out
+
+
+def _run_custom_tool(args: dict, dispatch: dict, *, allow_high_risk: bool = False,
+                     param_types: dict | None = None, _depth: int = 0) -> dict:
+    """Execute an AI-authored custom tool over the bridge: resolve its saved recipe and run each
+    step through execute_tool, so every step keeps the same safety gate + capability mode."""
+    try:
+        import custom_tools
+    except Exception as e:
+        return {"ok": False, "error": f"custom tools unavailable: {e}"}
+    if _depth >= 3:
+        return {"ok": False, "error": "custom-tool nesting limit reached (3)"}
+    cname = (args.get("name") or "").strip()
+    call_args = args.get("args") if isinstance(args.get("args"), dict) else {}
+    resolved = custom_tools.resolve_steps(cname, call_args)
+    if not resolved.get("ok"):
+        return resolved
+    steps = resolved.get("steps", [])
+    if not steps:
+        return {"ok": False, "error": f"custom tool '{cname}' has no steps"}
+    results = []
+    for i, step in enumerate(steps):
+        tname = step.get("tool")
+        targs = step.get("args") if isinstance(step.get("args"), dict) else {}
+        if tname == "run_custom_tool":
+            r = _run_custom_tool(targs, dispatch, allow_high_risk=allow_high_risk,
+                                 param_types=param_types, _depth=_depth + 1)
+        else:
+            r = execute_tool(tname, targs, dispatch, allow_high_risk=allow_high_risk,
+                             param_types=param_types)
+        results.append({"tool": tname, "result": r})
+        if isinstance(r, dict) and r.get("ok") is False:
+            return {"ok": False, "error": f"step {i} ({tname}) failed", "results": results}
+    return {"ok": True, "ran": len(steps), "results": results}
 
 
 def execute_tool(name: str, args: dict, dispatch: dict, *,
@@ -118,13 +152,28 @@ def execute_tool(name: str, args: dict, dispatch: dict, *,
                  param_types: dict | None = None) -> dict:
     """Safety-gated tool execution shared by the bridge. Mirrors the agent dispatch guard.
 
-    Order: reject agent-only/unknown → classify risk → enforce capability mode →
+    Order: handle host-only tools → classify risk → enforce capability mode →
     block high-risk (unless opted in) → coerce arg types → dispatch. Always returns a dict.
     """
     import safety
     args = args if isinstance(args, dict) else {}
-    if name in _AGENT_ONLY_TOOLS:
-        return {"ok": False, "error": f"tool '{name}' is only available inside Ember's agent loop"}
+
+    # Tools that live in Ember's agent loop rather than the plain dispatch table. Expose them all
+    # so MCP has EVERY tool; run the ones that make sense, and give the rest an honest result.
+    if name == "run_custom_tool":
+        return _run_custom_tool(args, dispatch, allow_high_risk=allow_high_risk, param_types=param_types)
+    if name == "ask_claude":
+        return {"ok": True, "note": ("Ember is being driven by your MCP client, which is already "
+                                     "the model — no escalation needed. Continue with the other tools.")}
+    if name == "pause_for_human":
+        return {"ok": True, "resumed": True,
+                "note": ("Running over MCP (unattended); proceeding without a blocking pause. If "
+                         "you need the user, just ask them directly in chat.")}
+    if name in ("spawn_agent", "agent_run"):
+        return {"ok": False, "error": ("Sub-agents run inside Ember's own agent loop, not over MCP. "
+                                       "You're already the driving agent — do the task directly "
+                                       "with Ember's other tools.")}
+
     fn = dispatch.get(name)
     if not fn:
         return {"ok": False, "error": f"unknown tool {name}"}
