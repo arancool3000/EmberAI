@@ -117,37 +117,65 @@ class BridgeClient:
 
 
 def build_server(client: BridgeClient):
-    """Construct a FastMCP server that mirrors Ember's tools. Imports mcp lazily."""
+    """Construct an MCP server that mirrors Ember's tools 1:1. Imports mcp lazily.
+
+    Uses the low-level Server API: each tool is advertised with its REAL inputSchema
+    (from the bridge) and every call's arguments are forwarded to Ember VERBATIM.
+
+    This replaced a FastMCP version that registered a bare ``def _handler(**kwargs)``
+    for every tool. FastMCP introspects the signature and models ``**kwargs`` as a
+    single object field literally named ``kwargs`` — so a client call like
+    ``move_mouse(x=100, y=200)`` arrived as ``{"kwargs": {"x": 100, "y": 200}}`` and
+    was forwarded to Ember, whose tool functions then raised
+    ``TypeError: ... unexpected keyword argument 'kwargs'``. Forwarding the raw
+    arguments dict (as the bridge's own HTTP API already expects) fixes it.
+    """
     try:
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.lowlevel import Server
+        import mcp.types as types
     except ImportError as e:  # pragma: no cover - only when the SDK is absent
         raise RuntimeError(
             "The 'mcp' package is required to run the Ember MCP server. "
             "Install it with: pip install mcp"
         ) from e
 
-    server = FastMCP("ember")
-
-    # Register each live Ember tool as an MCP tool. We enumerate at startup; the client sees
-    # the same tool set the running Ember exposes (respecting its capability mode).
+    # Enumerate once at startup; the client sees the same tool set (and schemas) the
+    # running Ember exposes, respecting its capability mode.
     tools = client.list_tools()
+    server = Server("ember")
 
-    def _make_handler(tool_name: str):
-        def _handler(**kwargs) -> str:
-            result = client.call_tool(tool_name, kwargs)
-            return json.dumps(result, ensure_ascii=False, default=str)
-        return _handler
+    @server.list_tools()
+    async def _list_tools():
+        return [
+            types.Tool(
+                name=t["name"],
+                description=t.get("description", ""),
+                inputSchema=t.get("inputSchema") or {"type": "object", "properties": {}},
+            )
+            for t in tools
+        ]
 
-    for tool in tools:
-        name = tool["name"]
-        handler = _make_handler(name)
-        handler.__name__ = name
-        server.add_tool(
-            handler,
-            name=name,
-            description=tool.get("description", ""),
-        )
+    @server.call_tool()
+    async def _call_tool(name: str, arguments: dict | None):
+        # Forward arguments UNCHANGED — no wrapping, no renaming. This is exactly the
+        # shape the Ember bridge's /mcp/call endpoint expects.
+        result = client.call_tool(name, arguments or {})
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        return [types.TextContent(type="text", text=text)]
+
     return server
+
+
+def _serve_stdio(server) -> None:
+    """Run an MCP server over stdio using the low-level API."""
+    import anyio
+    from mcp.server.stdio import stdio_server
+
+    async def _run() -> None:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+
+    anyio.run(_run)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     server = build_server(client)
-    server.run()  # stdio transport
+    _serve_stdio(server)  # stdio transport
     return 0
 
 
