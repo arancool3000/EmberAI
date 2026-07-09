@@ -5103,7 +5103,7 @@ class OllamaChatPanel(QWidget):
         top.addWidget(self.refresh_btn)
         v.addLayout(top)
 
-        self.council_check = QCheckBox("🧠 Council — let several models team up on each answer")
+        self.council_check = QCheckBox("Council — let several models team up on each answer")
         self.council_check.setToolTip(
             "The selected models each draft an answer, read each other's drafts to improve, then "
             "one combines them into a single smarter answer. Slower, but better than any one model.")
@@ -5238,9 +5238,9 @@ class OllamaChatPanel(QWidget):
             self._stream_buf += str(payload)
         elif kind == "tool_call":
             try:
-                self._status.emit(f"🔧 {payload.get('name')}…")
+                self._status.emit(f"Running {payload.get('name')}…")
             except Exception:
-                self._status.emit("🔧 using a tool…")
+                self._status.emit("Using a tool…")
         elif kind == "confirm":
             self._confirm.emit(payload)   # ask on the UI thread
         elif kind == "error":
@@ -5274,9 +5274,9 @@ class OllamaChatPanel(QWidget):
                     text, models, ollama_council.default_completer(self._base()),
                     rounds=1, history=history,
                     on_event=lambda phase, m: self._status.emit(
-                        {"propose": f"✍️ {m} is drafting…",
-                         "refine": f"🔁 {m} is improving on the others…",
-                         "synthesize": f"🧠 {m} is combining everyone's answers…"}.get(phase, m)))
+                        {"propose": f"{m} is drafting…",
+                         "refine": f"{m} is improving on the others…",
+                         "synthesize": f"{m} is combining everyone's answers…"}.get(phase, m)))
                 if not r.get("ok"):
                     self._fail.emit(r.get("error", "the council could not produce an answer"))
                     return
@@ -5301,7 +5301,7 @@ class OllamaChatPanel(QWidget):
         self.send_btn.setEnabled(True)
 
     def _on_fail(self, msg: str):
-        self.status_label.setText("⚠️ " + msg)
+        self.status_label.setText(msg)
         self._busy = False
         self.send_btn.setEnabled(True)
 
@@ -6555,8 +6555,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         seg_inner = QHBoxLayout(seg)
         seg_inner.setContentsMargins(3, 3, 3, 3)
         seg_inner.setSpacing(3)
-        self.work_tab_btn = QPushButton("🛠  Work")
-        self.chat_tab_btn = QPushButton("💬  Chat")
+        self.work_tab_btn = QPushButton("Work")
+        self.chat_tab_btn = QPushButton("Chat")
         for b in (self.work_tab_btn, self.chat_tab_btn):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
