@@ -5637,9 +5637,13 @@ class EmberWindow(QWidget):
 
     # --- Natural voice (Gemini Live API) --------------------------------------
     def _live_voice_system_instruction(self) -> str:
-        return ("You are Ember, a friendly voice assistant that can control the user's computer. "
-                "Keep spoken replies short, natural and conversational. If asked to do a task on "
-                "the computer, acknowledge briefly and describe what you'll do.")
+        return ("You are Ember, a friendly voice assistant that can ACTUALLY control this "
+                "computer using the provided tools — take screenshots and read the screen, open "
+                "apps and websites, manage files, search the web, set timers, control volume/"
+                "media, check email, and more. When the user asks you to DO something, CALL the "
+                "relevant tool to really do it — don't just say you will. Acknowledge briefly in "
+                "one short spoken line, run the tool, then say what happened. Keep replies short, "
+                "natural and conversational.")
 
     def _start_live_voice(self):
         import live_voice
@@ -5651,6 +5655,17 @@ class EmberWindow(QWidget):
         self._lv_user_buf = ""
         self._lv_ember_buf = ""
         b = self._bridge
+        # Give the voice model Ember's tools so it can ACT, not just talk (the thing GPT Live
+        # can't do). Curated to a voice-appropriate set; high-risk tools stay gated by the same
+        # MCP setting unless the user opts in.
+        lv_tools, lv_exec = [], None
+        try:
+            import agent as _ag
+            lv_tools = live_voice.curate_voice_tools(_ag.TOOL_DECLARATIONS)
+            lv_exec = live_voice.default_tool_executor(
+                allow_high_risk=bool(self.settings.get("mcp_bridge_allow_high_risk", False)))
+        except Exception:
+            lv_tools, lv_exec = [], None
         self._live_voice = live_voice.LiveVoice(
             (self.settings.get("gemini_api_key") or ""),
             model=self.settings.get("live_voice_model") or live_voice.DEFAULT_MODEL,
@@ -5663,6 +5678,9 @@ class EmberWindow(QWidget):
             on_turn_complete=lambda: b.live_voice_event.emit("turn", ""),
             on_interrupted=lambda: b.live_voice_event.emit("state", "listening"),
             on_error=lambda e: b.live_voice_event.emit("error", e),
+            on_tool=lambda name: b.live_voice_event.emit("tool", name),
+            tools=lv_tools,
+            tool_executor=lv_exec,
         )
         r = self._live_voice.start()
         if not r.get("ok"):
@@ -5760,6 +5778,12 @@ class EmberWindow(QWidget):
                 orb = self._ensure_orb()
                 if orb and text in ("listening", "speaking"):
                     orb.set_state(text)
+        elif kind == "tool":
+            # The voice model is operating the computer — show what it's doing.
+            self._set_status(f"🔧 {text}…")
+            orb = self._ensure_orb()
+            if orb:
+                orb.set_caption(f"running {text}…")
         elif kind == "error":
             self._set_status("Natural voice: " + (text or "")[:80])
 
