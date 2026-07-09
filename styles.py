@@ -261,6 +261,24 @@ QPushButton#commandTask:hover {{
     background-color: rgba(255, 255, 255, 30);
     color: #ffffff;
 }}
+QFrame#segToggle {{
+    background-color: rgba(255, 255, 255, 26);
+    border: 1px solid rgba(255, 255, 255, 40);
+    border-radius: 15px;
+}}
+QPushButton#segBtn {{
+    background: transparent;
+    color: #c8d0e0;
+    border: none;
+    border-radius: 12px;
+    padding: 7px 20px;
+    font-size: 13px;
+    font-weight: 800;
+}}
+QPushButton#segBtn:checked {{
+    background-color: rgba(255, 255, 255, 235);
+    color: #08080a;
+}}
 QPushButton#voiceToggle {{
     background-color: rgba(255, 255, 255, 220);
     color: #08080a;
@@ -607,6 +625,24 @@ QPushButton#commandTask:hover {
     background-color: rgba(122,162,247,0.18);
     color: #ffffff;
     border-color: rgba(122,162,247,0.55);
+}
+QFrame#segToggle {
+    background-color: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 15px;
+}
+QPushButton#segBtn {
+    background: transparent;
+    color: #c8d0e0;
+    border: none;
+    border-radius: 12px;
+    padding: 7px 20px;
+    font-size: 13px;
+    font-weight: 800;
+}
+QPushButton#segBtn:checked {
+    background-color: rgba(238,241,248,0.95);
+    color: #08080a;
 }
 QPushButton#voiceToggle {
     background-color: rgba(238,241,248,0.92);
