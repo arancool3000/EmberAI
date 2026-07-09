@@ -261,6 +261,16 @@ QPushButton#commandTask:hover {{
     background-color: rgba(255, 255, 255, 30);
     color: #ffffff;
 }}
+QPushButton#primaryBtn {{
+    background-color: rgba(59, 130, 246, 235);
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 800;
+}}
+QPushButton#primaryBtn:hover {{ background-color: rgba(37, 110, 235, 245); }}
 QFrame#segToggle {{
     background-color: rgba(255, 255, 255, 26);
     border: 1px solid rgba(255, 255, 255, 40);
@@ -626,6 +636,16 @@ QPushButton#commandTask:hover {
     color: #ffffff;
     border-color: rgba(122,162,247,0.55);
 }
+QPushButton#primaryBtn {
+    background-color: rgba(59,130,246,0.95);
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 800;
+}
+QPushButton#primaryBtn:hover { background-color: rgba(37,110,235,1.0); }
 QFrame#segToggle {
     background-color: rgba(255,255,255,0.10);
     border: 1px solid rgba(255,255,255,0.16);

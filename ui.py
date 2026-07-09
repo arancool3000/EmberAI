@@ -4980,6 +4980,82 @@ class DownloadGuardDialog(QDialog):
             QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
 
 
+class UpdateDialog(QDialog):
+    """A friendly 'a new version is ready' dialog with Skip / Install on Quit / Install &
+    Relaunch, plus an 'auto-update in future' checkbox — the standard desktop-app update prompt."""
+
+    def __init__(self, new_version: str, current: str, notes: str = "",
+                 auto_update: bool = True, parent=None):
+        super().__init__(parent)
+        self.choice = None                 # "relaunch" | "on_quit" | "skip" | None
+        self.auto_update = auto_update
+        self.setWindowTitle("Update Ember")
+        self.setMinimumWidth(560)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 20, 22, 18)
+        v.setSpacing(14)
+
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        icon = QLabel()
+        try:
+            p = _base_dir() / "icon.png"
+            if not p.exists() and getattr(sys, "frozen", False):
+                p = Path(getattr(sys, "_MEIPASS", _base_dir())) / "icon.png"
+            if p.exists():
+                icon.setPixmap(QPixmap(str(p)).scaled(
+                    64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            pass
+        icon.setFixedSize(64, 64)
+        top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(6)
+        title = QLabel("A new version of Ember is ready to install!")
+        title.setStyleSheet("font-size: 16px; font-weight: 800;")
+        title.setWordWrap(True)
+        col.addWidget(title)
+        sub = QLabel(f"Ember {new_version} is available (you have {current}). "
+                     "Would you like to install it and relaunch Ember now?")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color: #c8d0e0;")
+        col.addWidget(sub)
+        if notes:
+            nlbl = QLabel(notes[:300] + ("…" if len(notes) > 300 else ""))
+            nlbl.setWordWrap(True)
+            nlbl.setStyleSheet("color: #8b93a7; font-size: 11px;")
+            col.addWidget(nlbl)
+        top.addLayout(col, 1)
+        v.addLayout(top)
+
+        self.auto_check = QCheckBox("Automatically download and install updates in the future")
+        self.auto_check.setChecked(bool(auto_update))
+        v.addWidget(self.auto_check)
+
+        row = QHBoxLayout()
+        skip = QPushButton("Skip This Version")
+        skip.clicked.connect(lambda: self._pick("skip"))
+        row.addWidget(skip)
+        row.addStretch()
+        on_quit = QPushButton("Install on Quit")
+        on_quit.clicked.connect(lambda: self._pick("on_quit"))
+        row.addWidget(on_quit)
+        relaunch = QPushButton("Install and Relaunch")
+        relaunch.setObjectName("primaryBtn")
+        relaunch.setDefault(True)
+        relaunch.clicked.connect(lambda: self._pick("relaunch"))
+        row.addWidget(relaunch)
+        v.addLayout(row)
+
+    def _pick(self, choice: str):
+        self.choice = choice
+        self.auto_update = self.auto_check.isChecked()
+        self.accept()
+
+
 class OllamaChatPanel(QWidget):
     """A fully-offline chat with local Ollama models — no API key, no internet. Also hosts
     'Council' mode, where several local models draft, critique each other, and combine into one
@@ -4988,6 +5064,7 @@ class OllamaChatPanel(QWidget):
     _reply = pyqtSignal(str)      # final assistant text -> append to transcript
     _status = pyqtSignal(str)     # progress line (council phases / thinking)
     _fail = pyqtSignal(str)
+    _confirm = pyqtSignal(object)  # a tool needs approval (PendingConfirmation)
 
     OLLAMA_BASE = "http://localhost:11434"
 
@@ -4996,10 +5073,14 @@ class OllamaChatPanel(QWidget):
         self.settings = settings or {}
         self._messages: list[dict] = []   # [{role, content}] for context
         self._busy = False
+        self._agent = None                # tool-capable offline OllamaAgent (lazy)
+        self._agent_model = None
+        self._stream_buf = ""
         self._build()
         self._reply.connect(self._on_reply)
         self._status.connect(lambda s: self.status_label.setText(s))
         self._fail.connect(self._on_fail)
+        self._confirm.connect(self._on_confirm)
         QTimer.singleShot(0, self._refresh_models)
 
     def _build(self):
@@ -5122,7 +5203,67 @@ class OllamaChatPanel(QWidget):
         self._busy = True
         self.send_btn.setEnabled(False)
         self.status_label.setText("Thinking…")
-        threading.Thread(target=self._worker, args=(text, council, models), daemon=True).start()
+        if council and len(models) > 1:
+            threading.Thread(target=self._worker, args=(text, council, models), daemon=True).start()
+        else:
+            # Single model → the tool-capable offline agent, so the chat can SEE the screen and
+            # control the mouse/keyboard/files (all local, no API key).
+            self._send_via_agent(text, models[0])
+
+    def _send_via_agent(self, text: str, model: str):
+        try:
+            self._ensure_agent(model)
+            self._stream_buf = ""
+            self._agent.send_user_message(text)
+        except Exception as e:
+            self._fail.emit(f"{type(e).__name__}: {e}")
+
+    def _ensure_agent(self, model: str):
+        """Build (or rebuild on model change) the offline tool-driving OllamaAgent and subscribe."""
+        if self._agent is not None and self._agent_model == model:
+            return
+        from ollama_agent import OllamaAgent
+        self._agent = OllamaAgent(model_name=model,
+                                  auto_screenshot=bool(self.settings.get("auto_screenshot", True)))
+        self._agent_model = model
+        self._agent.subscribe(self._on_agent_event)
+
+    def _on_agent_event(self, ev):
+        """Marshal OllamaAgent events onto the UI thread via signals (they fire on its thread)."""
+        kind = getattr(ev, "kind", None)
+        payload = getattr(ev, "payload", None)
+        if kind == "stream_chunk" and payload:
+            self._stream_buf += str(payload)
+        elif kind == "message" and payload:
+            self._stream_buf += str(payload)
+        elif kind == "tool_call":
+            try:
+                self._status.emit(f"🔧 {payload.get('name')}…")
+            except Exception:
+                self._status.emit("🔧 using a tool…")
+        elif kind == "confirm":
+            self._confirm.emit(payload)   # ask on the UI thread
+        elif kind == "error":
+            self._fail.emit(str(payload)[:200])
+        elif kind == "done":
+            self._reply.emit(self._stream_buf.strip() or "(done)")
+
+    def _on_confirm(self, pending):
+        """A tool wants approval — ask, then hand the answer back to the agent thread."""
+        try:
+            name = getattr(pending, "tool_name", "an action")
+            reason = getattr(pending, "reason", "")
+            ok = QMessageBox.question(
+                self, "Allow this action?",
+                f"The local chat wants to run:\n\n{name}\n\n{reason}\n\nAllow it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            ) == QMessageBox.StandardButton.Yes
+            pending.response.put(ok)
+        except Exception:
+            try:
+                pending.response.put(False)
+            except Exception:
+                pass
 
     def _worker(self, text: str, council: bool, models: list):
         try:
@@ -6954,6 +7095,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
     def _do_quit(self):
         """Really quit Ember (tray ▸ Quit / explicit quit) — stops the background listeners."""
         self._really_quit = True
+        # "Install on Quit": the user chose to update when they close Ember — do it now (the
+        # updater installs the new version and relaunches into it).
+        if getattr(self, "_install_on_quit", False) and getattr(self, "_pending_update", None):
+            try:
+                self._start_update(auto=True)
+                return
+            except Exception:
+                pass
         lv = getattr(self, "_live_voice", None)
         if lv is not None:
             try:
@@ -8747,23 +8896,39 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return False
 
     def _on_update_available(self, manifest: dict):
-        """A newer release is available. With auto-update on (default) install it now;
-        otherwise just announce it (manual install via /update)."""
+        """A newer release is available — show the standard update prompt (Skip / Install on Quit /
+        Install & Relaunch) with an 'auto-update in future' checkbox."""
         import version
         self._pending_update = manifest
         ver = manifest.get("version", "?")
-        notes = (manifest.get("notes") or "").strip()
-        if bool(self.settings.get("auto_update", True)):
-            self._add_bubble("system", f"🔄 Installing **Ember {ver}** automatically…")
-            self._set_status(f"Updating to {ver}…")
-            QTimer.singleShot(300, lambda: self._start_update(auto=True))
+        # Respect a previously-skipped version — don't nag about the same one again.
+        if self.settings.get("skipped_update_version") == ver:
+            self._set_status(f"Update {ver} available — type /update")
             return
-        msg = (f"🔄 **Ember {ver}** is available (you have {version.__version__}). "
-               "Type **/update** to install it now.")
-        if notes:
-            msg += "\n\n" + notes[:500]
-        self._add_bubble("system", msg)
-        self._set_status(f"Update {ver} available — type /update")
+        notes = (manifest.get("notes") or "").strip()
+        try:
+            dlg = UpdateDialog(ver, version.__version__, notes,
+                               bool(self.settings.get("auto_update", True)), self)
+            dlg.exec()
+            choice = dlg.choice
+            # Persist the auto-update preference from the checkbox.
+            self.settings["auto_update"] = bool(dlg.auto_update)
+            save_settings(self.settings)
+        except Exception:
+            choice = "relaunch" if self.settings.get("auto_update", True) else None
+        if choice == "relaunch":
+            self._set_status(f"Updating to {ver}…")
+            QTimer.singleShot(150, lambda: self._start_update(auto=True))
+        elif choice == "on_quit":
+            self._install_on_quit = True
+            self._add_bubble("system", f"✅ Ember {ver} will install when you quit Ember.")
+            self._set_status(f"Ember {ver} will install on quit")
+        elif choice == "skip":
+            self.settings["skipped_update_version"] = ver
+            save_settings(self.settings)
+            self._set_status("Ready")
+        else:
+            self._set_status(f"Update {ver} available — type /update")
 
     def _update_now(self):
         """Manual 'check for updates' that is NEVER silent — it always tells the user what
