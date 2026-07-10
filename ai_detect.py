@@ -278,10 +278,14 @@ def judge_harmful(items: list, settings: dict) -> list:
         "You are a malware analyst. Each numbered item below is a file a HEURISTIC scanner "
         "flagged as 'suspicious' (often a false positive). For EACH, decide if the file could "
         "ACTUALLY cause real harm if opened or run. Source code, test files, documentation, "
-        "config, and normal app installers (.dmg/.pkg) are NOT harmful. Real malware "
-        "(reverse shells, ransomware, credential stealers, obfuscated droppers actually wired "
-        "to run) IS harmful. Reply with ONLY a JSON array of booleans in order "
-        "(true = could cause real harm), e.g. [false,true,false].\n\n" + "\n\n".join(lines))
+        "config, and normal app installers (.dmg/.pkg) are NOT harmful. An app being UNSIGNED, "
+        "ad-hoc signed, or not notarized is NOT by itself harmful — that is completely normal for "
+        "open-source and indie Mac/Windows software; judge the actual behavior/content, never the "
+        "mere absence of a signature. A binary you cannot read (raw Mach-O/PE bytes) is NOT "
+        "harmful just because it looks like gibberish. Real malware (reverse shells, ransomware, "
+        "credential stealers, obfuscated droppers actually wired to run) IS harmful. Reply with "
+        "ONLY a JSON array of booleans in order (true = could cause real harm), e.g. "
+        "[false,true,false].\n\n" + "\n\n".join(lines))
     raw = _ask_model(prompt, settings or {})
     m = re.search(r"\[[^\]]*\]", raw or "")
     if not m:

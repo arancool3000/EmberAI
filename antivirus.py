@@ -102,6 +102,8 @@ DEFAULT_CONFIG: dict = {
     "entropy_threshold": 7.2,      # >= this (bits/byte) on code content -> likely packed/encrypted
     "ioc_scan": True,              # scan script/command content for malware IOCs (fileless, LOLBins)
     "deep_static": True,           # av_static engines: PE/ELF/Mach-O + PDF actions + VBA macros + script de-obfuscation
+    "signing_check": True,         # macOS: check code-signing / notarization so an UNSIGNED app is a
+                                   # caution (not "malicious"), and a notarized publisher is trusted
     "scan_archives": True,         # look INSIDE zip archives for malicious members
     "archive_max_members": 200,    # max members inspected per archive
     "archive_member_max_bytes": 4 * 1024 * 1024,  # max bytes read per member
@@ -378,15 +380,32 @@ def ai_assess_file(path: str, reasons: list | None = None) -> dict:
     if not judge:
         return {"available": False, "verdict": "unknown"}
     p = Path(path).expanduser()
-    excerpt = ""
+    raw = b""
     try:
-        excerpt = p.read_bytes()[:4000].decode("utf-8", "replace")
+        raw = p.read_bytes()[:4000]
     except Exception:
         pass
+    excerpt = raw.decode("utf-8", "replace")
     try:
         verdicts = judge([{"name": p.name, "reasons": list(reasons or []), "excerpt": excerpt}])
         if isinstance(verdicts, list) and verdicts:
-            return {"available": True, "verdict": "malicious" if verdicts[0] else "clean"}
+            if not verdicts[0]:
+                return {"available": True, "verdict": "clean"}
+            # The judge thinks it could be harmful. How far we escalate depends on whether the AI
+            # could ACTUALLY read the file. 'malicious' (red, auto-quarantine) is reserved for
+            # content the model can reason about — scripts / text. For a binary it only saw 4 KB
+            # of unreadable bytes (the classic "unsigned .dmg looks like an obfuscated dropper"
+            # false positive), so we cap at 'suspicious' (a caution). A trusted / notarized
+            # publisher is likewise never AI-escalated past 'suspicious'.
+            ext = p.suffix.lower()
+            sig = signing_status(str(p), ext)
+            if sig.get("trust") == "trusted":
+                verdict = "suspicious"
+            elif _looks_textual(raw):
+                verdict = "malicious"
+            else:
+                verdict = "suspicious"
+            return {"available": True, "verdict": verdict, "signing": sig}
     except Exception:
         pass
     return {"available": False, "verdict": "unknown"}
@@ -462,6 +481,167 @@ def _is_ember_own(p: Path) -> bool:
 _MACRO_EXTS = {".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm"}
 
 
+# ---------------------------------------------------------------------------
+# macOS code-signing / notarization awareness
+# ---------------------------------------------------------------------------
+# Ember used to treat an unsigned macOS app (.dmg/.pkg/.app or a bare Mach-O) as just another
+# "executable" — and, worse, its AI second-opinion could brand the 4 KB of binary it can't read
+# as a "malicious dropper". But most open-source Mac software (VS Code builds, OBS, Blender
+# nightlies — and the Ember .dmg itself) is unsigned or only ad-hoc signed, so that heuristic
+# cried wolf on legitimate apps and trained users to ignore the scanner. We now READ the real
+# trust signal — Gatekeeper's own verdict — to separate "unsigned / unnotarized" (a CAUTION,
+# yellow) from a genuinely malicious payload (obfuscated code, a known-bad hash, an AV
+# detection — red). Signing is only ever a POSITIVE de-noiser: a valid signature NEVER clears a
+# real detection (signed malware exists), and its ABSENCE is never, on its own, malicious.
+
+# Extensions that carry macOS native code / installers (Gatekeeper-assessable).
+_MAC_CODE_EXTS = {".dmg", ".pkg", ".mpkg", ".app", ".command"}
+
+# spctl assessment type per file kind (installers assess differently from executables).
+_SPCTL_TYPE = {".pkg": "install", ".mpkg": "install", ".dmg": "open"}
+
+# Entitlements that materially weaken the process sandbox. On an UNSIGNED binary these are a real
+# red flag (the user's "sketchy entitlements"); on a signed app they're often a deliberate,
+# legitimate choice (Electron apps request several), so they only escalate when the code is NOT
+# signed by an identified developer.
+_RISKY_ENTITLEMENTS = {
+    "com.apple.security.cs.allow-unsigned-executable-memory": "unsigned executable memory",
+    "com.apple.security.cs.disable-library-validation": "library validation disabled",
+    "com.apple.security.cs.allow-dyld-environment-variables": "DYLD injection allowed",
+    "com.apple.security.cs.disable-executable-page-protection": "page protection disabled",
+    "com.apple.security.get-task-allow": "debuggable (get-task-allow)",
+}
+
+# Injection point for tests / customization: callable(path:str, ext:str) -> dict shaped like
+# signing_status()'s return. Default None -> the real macOS probe (a no-op off macOS).
+_SIGNING_PROBE = None
+_SIGNING_CACHE: dict = {}
+_SIGNING_LOCK = threading.Lock()
+
+
+def set_signing_probe(fn) -> None:
+    """Override the code-signing probe (tests inject a fake so no real codesign/spctl runs)."""
+    global _SIGNING_PROBE
+    _SIGNING_PROBE = fn
+
+
+def _unknown_signing(detail: str = "") -> dict:
+    return {"available": False, "signed": False, "notarized": False, "trust": "unknown",
+            "authority": "", "entitlements_risky": [], "detail": detail}
+
+
+def _sig_run(cmd: list, timeout: float = 6.0) -> tuple[int, str, str]:
+    """Run a short probe command, capturing text output. (-1, '', err) on any failure."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def _macos_signing_status(path: str, ext: str) -> dict:
+    """The real probe: ask Gatekeeper (spctl) + codesign. macOS only; elsewhere -> unknown."""
+    if not sys.platform.startswith("darwin"):
+        return _unknown_signing("not macOS")
+    if not shutil.which("spctl") and not shutil.which("codesign"):
+        return _unknown_signing("codesign/spctl unavailable")
+    out = _unknown_signing("")
+    out["available"] = True
+    out["trust"] = "unsigned"   # assume unsigned until a valid signature is proven
+
+    # 1) Gatekeeper assessment — the trust decision macOS itself makes on open/install.
+    stype = _SPCTL_TYPE.get(ext, "execute")
+    if shutil.which("spctl"):
+        rc, so, se = _sig_run(["spctl", "--assess", "--type", stype, "--verbose=4", path])
+        blob = so + "\n" + se
+        low = blob.lower()
+        if rc == 0 and "accepted" in low:
+            out["signed"] = True
+            if "notarized" in low:
+                out["notarized"] = True
+                out["trust"] = "trusted"
+            elif "developer id" in low or "mac app store" in low or "apple" in low:
+                out["trust"] = "trusted"   # signed + Gatekeeper-accepted
+        for line in blob.splitlines():
+            s = line.strip()
+            if s.lower().startswith("origin="):
+                out["authority"] = s.split("=", 1)[1].strip()
+                break
+
+    # 2) codesign for the signing authority + entitlements (works on .app / Mach-O; often errors
+    #    on a .dmg, which is fine — spctl above already assessed the image).
+    if shutil.which("codesign"):
+        rc, so, se = _sig_run(["codesign", "-dv", "--verbose=4", path])
+        info = so + "\n" + se
+        if rc == 0:
+            out["signed"] = True
+            for line in info.splitlines():
+                s = line.strip()
+                if s.startswith("Authority=") and not out["authority"]:
+                    out["authority"] = s.split("=", 1)[1].strip()
+                if "adhoc" in s.lower():
+                    out["trust"] = "unsigned"   # ad-hoc signature = not an identified developer
+        rc2, so2, se2 = _sig_run(["codesign", "-d", "--entitlements", ":-", path])
+        ent_blob = so2 + "\n" + se2
+        out["entitlements_risky"] = [msg for key, msg in _RISKY_ENTITLEMENTS.items()
+                                     if key in ent_blob]
+
+    out["detail"] = (("signed and notarized" if out["notarized"] else "signed, Gatekeeper-accepted")
+                     if out["trust"] == "trusted"
+                     else "not signed or notarized by an identified developer")
+    return out
+
+
+def signing_status(path: str, ext: str | None = None) -> dict:
+    """Best-effort macOS code-signing / notarization status for a file.
+
+    Returns {available, signed, notarized, trust, authority, entitlements_risky, detail} where
+    trust is:
+        'trusted'  — Gatekeeper accepts it (Developer-ID signed and, for installers, notarized)
+        'unsigned' — no valid signature, or ad-hoc / unnotarized (a CAUTION, not a threat)
+        'unknown'  — couldn't determine (not macOS, tools missing, or a probe error)
+    Never raises. Cached per (path, size, mtime) so a folder sweep doesn't re-shell per file."""
+    p = Path(path)
+    if ext is None:
+        ext = p.suffix.lower()
+    try:
+        st = p.stat()
+        key = f"{p}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        key = str(p)
+    with _SIGNING_LOCK:
+        cached = _SIGNING_CACHE.get(key)
+    if cached is not None:
+        return cached
+    probe = _SIGNING_PROBE or _macos_signing_status
+    try:
+        res = probe(str(p), ext) or _unknown_signing()
+    except Exception as e:
+        res = _unknown_signing(f"probe error: {e}")
+    out = _unknown_signing()
+    out.update({k: res.get(k, out[k]) for k in list(out)})
+    out["entitlements_risky"] = list(res.get("entitlements_risky") or [])
+    with _SIGNING_LOCK:
+        if len(_SIGNING_CACHE) > 512:
+            _SIGNING_CACHE.clear()
+        _SIGNING_CACHE[key] = out
+    return out
+
+
+def _looks_textual(data: bytes) -> bool:
+    """True if a byte sample reads as text (a script / source), not a binary blob. Binaries
+    (Mach-O, .dmg, .pkg) are full of NULs and non-printable bytes; an AI judge can meaningfully
+    READ text but only GUESSES at a binary — so we never let it call a binary 'malicious' on a
+    guess (that was the 'unsigned .dmg looks like an obfuscated dropper' false positive)."""
+    if not data:
+        return False
+    sample = data[:4096]
+    if b"\x00" in sample:
+        return False
+    printable = sum(1 for b in sample if 9 <= b <= 13 or 32 <= b <= 126)
+    return printable / len(sample) >= 0.85
+
+
 def _static_scan(path: Path, cfg: dict | None = None) -> tuple[int, list[str], dict]:
     """Heuristic analysis. Returns (score 0-100, reasons, info)."""
     score = 0
@@ -513,7 +693,32 @@ def _static_scan(path: Path, cfg: dict | None = None) -> tuple[int, list[str], d
         score += 35
         reasons.append("Office container holds a VBA macro project (vbaProject.bin)")
 
-    # A plainly dangerous executable type (noted, but not damning on its own).
+    # macOS trust signal: an app's code-signing / notarization status. This separates
+    # "unsigned / unnotarized" (a caution — normal for open-source Mac apps) from a genuine
+    # threat, so Ember stops branding every unsigned .dmg as malicious. It's never damning on its
+    # own; a valid signature is only a DE-NOISER (see scan_file — it can't clear a real detection).
+    is_mac_code = (exec_kind == "macho"
+                   or (exec_kind == "macho-universal-or-java" and ext != ".jar")
+                   or ext in _MAC_CODE_EXTS)
+    if cfg.get("signing_check", True) and is_mac_code:
+        sig = signing_status(str(path), ext)
+        info["signing"] = sig
+        auth = f" ({sig['authority']})" if sig.get("authority") else ""
+        if sig.get("trust") == "trusted":
+            info["trusted"] = True
+            reasons.append(f"signed & notarized by an identified developer{auth} — trusted publisher")
+        elif sig.get("trust") == "unsigned":
+            reasons.append("not signed or notarized by an identified developer — common for "
+                           "open-source apps; only open it if you trust the source")
+            risky = sig.get("entitlements_risky") or []
+            if risky:
+                # An UNSIGNED app demanding sandbox-weakening entitlements is a real signal (can
+                # corroborate other heuristics into 'suspicious'); alone it stays below the bar.
+                score += 30
+                reasons.append("unsigned app requests high-risk entitlements: " + ", ".join(risky[:4]))
+
+    # A plainly dangerous executable type (noted, but not damning on its own). A macOS app we've
+    # already described via its signing status above doesn't also need this generic note.
     if ext in _DANGEROUS_EXTS and not reasons:
         score += 20
         reasons.append(f"executable file type ({ext})")
@@ -1060,6 +1265,14 @@ def scan_file(path: str, deep: bool = True) -> dict:
             engines.append("ioc-signatures")
         if info.get("deep_static"):
             engines.append("deep-static")
+        if info.get("signing"):
+            engines.append("signing")
+        # A trusted (Developer-ID signed + notarized) publisher isn't pushed to 'suspicious' by
+        # soft heuristics (packing / an embedded /bin/sh path). This ONLY de-noises the fuzzy
+        # signals — EICAR, a signature-DB byte match, a known-bad hash, and the real AV/VT engines
+        # below still escalate a signed file to malicious (signed malware is real).
+        if info.get("trusted") and not (info.get("eicar") or info.get("signature_hit")):
+            score = min(score, _SUSPICIOUS_SCORE - 1)
         if info.get("eicar") or info.get("signature_hit"):
             _raise("malicious")
         elif score >= _SUSPICIOUS_SCORE:
@@ -1117,7 +1330,8 @@ def scan_file(path: str, deep: bool = True) -> dict:
 
         return {"ok": True, "path": str(p), "sha256": sha, "verdict": verdict,
                 "score": score, "reasons": reasons or ["no indicators found"],
-                "engines": engines, "size": size, "scan_error": scan_errored}
+                "engines": engines, "size": size, "scan_error": scan_errored,
+                "signing": info.get("signing"), "trusted": bool(info.get("trusted"))}
     except Exception as e:
         return {"ok": False, "error": f"scan failed: {e}", "verdict": "unknown"}
 

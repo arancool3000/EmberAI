@@ -112,3 +112,44 @@ def test_dispatch_matches_declarations():
     assert download_guard.INTERACTION_TOOLS == {
         "download_guard_start", "download_guard_stop"
     }
+
+
+def test_unsigned_dmg_download_is_a_caution(tmp_path):
+    """A clean-but-UNSIGNED .dmg download is surfaced as a caution with a plain-language
+    explanation — not silently 'clean', and never a 'threat'."""
+    def scanner(path):
+        if path.lower().endswith(".dmg"):
+            return {"ok": True, "verdict": "clean", "reasons": ["no indicators found"],
+                    "signing": {"trust": "unsigned"}}
+        return {"ok": True, "verdict": "clean", "reasons": []}
+    download_guard._SCANNER = scanner
+    try:
+        download_guard.download_guard_start(str(tmp_path))
+        (tmp_path / "OpenApp.dmg").write_bytes(b"koly\x00\x00")
+
+        assert _wait_for(lambda: "OpenApp.dmg" in _results_by_name(), timeout=6.0), \
+            _results_by_name()
+        evts = {e["name"]: e for e in download_guard.download_guard_events(limit=50)["events"]}
+        e = evts["OpenApp.dmg"]
+        assert e["result"] == "caution", e
+        assert "signed or notarized" in e["detail"].lower(), e
+    finally:
+        download_guard.download_guard_stop()
+        download_guard._SCANNER = None
+
+
+def test_notarized_dmg_download_is_not_nagged(tmp_path):
+    """A notarized app from an identified developer (VS Code, etc.) is trusted — no scary alert."""
+    def scanner(path):
+        return {"ok": True, "verdict": "clean", "reasons": [], "signing": {"trust": "trusted"}}
+    download_guard._SCANNER = scanner
+    try:
+        download_guard.download_guard_start(str(tmp_path))
+        (tmp_path / "VSCode.dmg").write_bytes(b"koly\x00\x00")
+
+        assert _wait_for(lambda: "VSCode.dmg" in _results_by_name(), timeout=6.0), \
+            _results_by_name()
+        assert _results_by_name()["VSCode.dmg"] == "clean"    # trusted -> no caution
+    finally:
+        download_guard.download_guard_stop()
+        download_guard._SCANNER = None

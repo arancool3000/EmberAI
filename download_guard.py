@@ -202,11 +202,24 @@ def _watch_loop(folder: Path, stop: threading.Event) -> None:
                         status, detail = "error", f"scan raised: {e}"
                     ext = os.path.splitext(path)[1].lower()
                     # A clean-but-EXECUTABLE download still deserves a heads-up (this is the
-                    # 'virus.vbs slipped through' case — benign content, dangerous type).
+                    # 'virus.vbs slipped through' case — benign content, dangerous type). Use the
+                    # macOS signing status when the scanner reported it: an unsigned/unnotarized
+                    # app is a clear CAUTION, while a notarized app from an identified developer
+                    # (VS Code, etc.) is trusted and doesn't trip a scary alert at all.
                     if status == "clean" and ext in _DANGEROUS_DL_EXTS:
-                        status = "caution"
-                        detail = (f"Downloaded an executable file ({ext}). Don't open it unless "
-                                  "you trust the source.")
+                        sig = result.get("signing") if isinstance(result, dict) else None
+                        trust = (sig or {}).get("trust")
+                        if trust == "trusted":
+                            pass  # signed + notarized by an identified developer -> no nag
+                        elif trust == "unsigned":
+                            status = "caution"
+                            detail = (f"This app ({ext}) isn't signed or notarized by an identified "
+                                      "developer — common for open-source software, but only open "
+                                      "it if you trust the source.")
+                        else:
+                            status = "caution"
+                            detail = (f"Downloaded an executable file ({ext}). Don't open it unless "
+                                      "you trust the source.")
                     _record(path, status, detail)
                     # ACT on it: auto-quarantine confirmed malware; alert on threat/caution.
                     if status in ("threat", "caution"):
