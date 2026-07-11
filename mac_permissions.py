@@ -120,6 +120,73 @@ def open_screen_recording_settings():
         pass
 
 
+def _request_system_audio_tap() -> None:
+    """Best-effort: surface the macOS 14.4+ "record this computer's audio" consent by creating a
+    throwaway Core Audio process tap, then destroying it. This is the dedicated 'System Audio
+    Recording Only' prompt macOS shows for audio-only capture. Never raises; a clean no-op when the
+    pyobjc CoreAudio binding or the OS is too old (the Screen Recording umbrella below still
+    authorises system audio captured via ScreenCaptureKit)."""
+    tap_id = None
+    try:
+        import CoreAudio
+        tap_desc_cls = getattr(CoreAudio, "CATapDescription", None)
+        create = getattr(CoreAudio, "AudioHardwareCreateProcessTap", None)
+        if tap_desc_cls is None or create is None:
+            return
+        # A global tap of all system audio, excluding no processes -> the broadest consent prompt.
+        desc = tap_desc_cls.alloc().initStereoGlobalTapButExcludeProcesses_([])
+        result = create(desc, None)
+        # pyobjc returns the out-param tapID alongside the OSStatus; tolerate either shape.
+        tap_id = result[1] if isinstance(result, tuple) and len(result) >= 2 else result
+    except Exception:
+        pass
+    finally:
+        try:
+            if tap_id:
+                import CoreAudio
+                destroy = getattr(CoreAudio, "AudioHardwareDestroyProcessTap", None)
+                if destroy:
+                    destroy(tap_id)
+        except Exception:
+            pass
+
+
+def has_system_audio_recording(prompt: bool = False) -> bool:
+    """True if Ember may record this Mac's SYSTEM audio — the sound coming out of the speakers,
+    used for song ID, "what just played" transcription and the screen mirror's audio track (this
+    is separate from Microphone, which only captures the user's voice).
+
+    On macOS this consent lives in the SAME "Screen & System Audio Recording" privacy pane as
+    Screen Recording: system audio captured via ScreenCaptureKit is gated by the Screen Recording
+    TCC service, and macOS 15 adds a dedicated per-app system-audio toggle in that pane. macOS is
+    supposed to prompt on first capture, but that quietly fails to fire for a lot of unsigned /
+    ad-hoc-signed builds (the same reason Screen Recording and the mic don't auto-ask), so Ember
+    triggers it explicitly. Returns True off macOS / when the APIs are unavailable (can't check,
+    so don't hard-block)."""
+    if sys.platform != "darwin":
+        return True
+    if prompt:
+        # The dedicated audio-only consent (macOS 14.4+). Best-effort — see _request_system_audio_tap.
+        _request_system_audio_tap()
+    # Status signal: system audio is authorised under the Screen Recording service, so its preflight
+    # doubles as ours. (We don't re-prompt for screen here — the caller requests that separately.)
+    return has_screen_recording(prompt=False)
+
+
+def open_system_audio_settings():
+    """Open System Settings at Privacy -> Screen & System Audio Recording (the combined pane that
+    holds the system-audio toggle on macOS Sequoia and the Screen Recording list before it)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"],
+            capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
 def has_microphone(prompt: bool = False) -> bool:
     """True if Ember has macOS Microphone access (needed for push-to-talk / voice chat). Same
     story as Screen Recording: the OS prompt is supposed to fire on first use, but a mic-open

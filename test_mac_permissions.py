@@ -20,6 +20,7 @@ def _restore():
     sys.platform = _REAL_PLATFORM
     sys.modules.pop("Quartz", None)
     sys.modules.pop("AVFoundation", None)
+    sys.modules.pop("CoreAudio", None)
 
 
 def test_screen_recording_true_off_macos():
@@ -171,6 +172,105 @@ def test_open_microphone_settings_calls_open_with_the_right_url():
         mp.open_microphone_settings()
         assert captured["cmd"][0] == "open"
         assert "Privacy_Microphone" in captured["cmd"][1]
+    finally:
+        real_subprocess.run = orig_run
+        _restore()
+
+
+# --- System Audio Recording (the "Screen & System Audio Recording" pane) -------------------
+
+def _fake_quartz(preflight: bool):
+    q = types.ModuleType("Quartz")
+    q.CGPreflightScreenCaptureAccess = lambda: preflight
+    q.CGRequestScreenCaptureAccess = lambda: preflight
+    sys.modules["Quartz"] = q
+    return q
+
+
+def test_system_audio_true_off_macos():
+    _restore()
+    assert mp.has_system_audio_recording() is True
+
+
+def test_system_audio_true_when_pyobjc_missing():
+    _darwin()
+    sys.modules.pop("Quartz", None)
+    try:
+        assert mp.has_system_audio_recording() is True   # can't check -> don't hard-block
+    finally:
+        _restore()
+
+
+def test_system_audio_reports_screen_capture_status():
+    # System audio is authorised under the Screen Recording TCC service, so it tracks that status.
+    _darwin()
+    _fake_quartz(preflight=True)
+    try:
+        assert mp.has_system_audio_recording() is True
+    finally:
+        _restore()
+    _darwin()
+    _fake_quartz(preflight=False)
+    try:
+        assert mp.has_system_audio_recording() is False
+    finally:
+        _restore()
+
+
+def test_system_audio_prompt_triggers_the_audio_tap_only_when_asked():
+    _darwin()
+    _fake_quartz(preflight=False)
+    calls = []
+
+    class _Desc:
+        @staticmethod
+        def alloc():
+            return _Desc()
+
+        def initStereoGlobalTapButExcludeProcesses_(self, procs):
+            return self
+
+    ca = types.ModuleType("CoreAudio")
+    ca.CATapDescription = _Desc
+    ca.AudioHardwareCreateProcessTap = lambda desc, out: calls.append("create") or (0, 99)
+    ca.AudioHardwareDestroyProcessTap = lambda tid: calls.append(("destroy", tid))
+    sys.modules["CoreAudio"] = ca
+    try:
+        mp.has_system_audio_recording(prompt=False)
+        assert calls == []                       # prompt=False must never touch the OS
+        mp.has_system_audio_recording(prompt=True)
+        assert "create" in calls                 # prompt=True surfaces the system-audio consent
+        assert ("destroy", 99) in calls          # and cleans up the throwaway tap
+    finally:
+        _restore()
+
+
+def test_system_audio_tap_is_a_safe_noop_without_the_binding():
+    # macOS but no CoreAudio process-tap API (older OS / missing binding) must not raise.
+    _darwin()
+    _fake_quartz(preflight=True)
+    sys.modules.pop("CoreAudio", None)
+    try:
+        assert mp.has_system_audio_recording(prompt=True) is True
+    finally:
+        _restore()
+
+
+def test_open_system_audio_settings_calls_open_with_the_right_url():
+    _darwin()
+    captured = {}
+    import subprocess as real_subprocess
+    orig_run = real_subprocess.run
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        class R: pass
+        return R()
+    real_subprocess.run = fake_run
+    try:
+        mp.open_system_audio_settings()
+        assert captured["cmd"][0] == "open"
+        assert "Privacy_ScreenCapture" in captured["cmd"][1]
     finally:
         real_subprocess.run = orig_run
         _restore()

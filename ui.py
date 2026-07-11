@@ -8867,27 +8867,33 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             pass
 
     def _check_screen_and_mic_permissions(self):
-        """Explicitly trigger the macOS Screen Recording + Microphone prompts shortly after
-        launch, instead of hoping the first incidental screenshot/mic-open call surfaces them —
-        that quietly doesn't happen for a lot of unsigned/ad-hoc-signed builds, which is why
-        Ember could go most sessions without ever asking for either."""
+        """Explicitly trigger the macOS Screen Recording, System Audio Recording and Microphone
+        prompts shortly after launch, instead of hoping the first incidental screenshot / capture /
+        mic-open call surfaces them — that quietly doesn't happen for a lot of unsigned/ad-hoc-signed
+        builds, which is why Ember could go whole sessions without ever asking for any of them."""
         if sys.platform != "darwin":
             return
         try:
             import mac_permissions
             missing = []
-            if not mac_permissions.has_screen_recording(prompt=True):
-                missing.append("Screen Recording")
-                mac_permissions.open_screen_recording_settings()
+            # Screen Recording and System Audio Recording share ONE macOS pane ("Screen & System
+            # Audio Recording"). Request both — the mirror needs the video AND the audio track —
+            # then open that single pane once if either is still missing.
+            screen_ok = mac_permissions.has_screen_recording(prompt=True)
+            audio_ok = mac_permissions.has_system_audio_recording(prompt=True)
+            if not screen_ok or not audio_ok:
+                missing.append("Screen & System Audio Recording")
+                mac_permissions.open_system_audio_settings()
             if not mac_permissions.has_microphone(prompt=True):
                 missing.append("Microphone")
                 mac_permissions.open_microphone_settings()
             if missing:
                 self._add_bubble(
                     "system",
-                    f"⚠️ Ember needs **{' and '.join(missing)}** access for the screen mirror / "
-                    "voice features to work.\nI've opened the request — enable **Ember** under "
-                    "System Settings → Privacy & Security, then quit and reopen Ember.",
+                    f"⚠️ Ember needs **{' and '.join(missing)}** access for the screen mirror, "
+                    "system-audio capture and voice features to work.\nI've opened the request — "
+                    "enable **Ember** under System Settings → Privacy & Security, then quit and "
+                    "reopen Ember.",
                 )
         except Exception:
             pass
