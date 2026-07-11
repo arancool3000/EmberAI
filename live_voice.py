@@ -61,9 +61,21 @@ def parse_message(msg) -> dict:
     (the SDK's shape varies by version). Returns a dict with audio/user_text/
     ember_text/interrupted/turn_complete."""
     out = {"audio": None, "user_text": None, "ember_text": None,
-           "interrupted": False, "turn_complete": False}
+           "interrupted": False, "turn_complete": False, "tool_calls": []}
     if msg is None:
         return out
+    # Tool calls: the native-audio model can DRIVE Ember's tools mid-conversation (open apps,
+    # read the screen, manage files…) — the thing a talk-only assistant like GPT Live can't do.
+    tc = getattr(msg, "tool_call", None)
+    if tc is not None:
+        for fc in (getattr(tc, "function_calls", None) or []):
+            args = getattr(fc, "args", None)
+            try:
+                args = dict(args) if args else {}
+            except Exception:
+                args = {}
+            out["tool_calls"].append({"id": getattr(fc, "id", None),
+                                      "name": getattr(fc, "name", None), "args": args})
     data = getattr(msg, "data", None)
     if isinstance(data, (bytes, bytearray)) and len(data) > 0:
         out["audio"] = bytes(data)
@@ -89,6 +101,71 @@ def parse_message(msg) -> dict:
         if isinstance(t, str) and t:
             out["ember_text"] = t
     return out
+
+
+# Tools worth giving the live-voice model — the ones that make sense to drive by speaking. A
+# curated set (not all ~290) keeps the session lean and the model's tool-choice sharp. The UI
+# filters Ember's full declarations to these before starting the session.
+VOICE_TOOL_NAMES = {
+    # see + control the screen
+    "take_screenshot", "read_screen_text", "smart_click", "type_text", "press_key",
+    "list_windows", "focus_window", "open_app", "open_url", "open_path",
+    # web / browser
+    "web_search", "browser_open", "browser_navigate", "browser_get_page", "browser_click_text",
+    "wikipedia_summary", "weather_lookup", "translate_text", "define_word",
+    # files
+    "read_file", "write_file", "list_directory", "search_files", "find_large_files",
+    "organize_folder", "get_folder_size",
+    # system + media
+    "get_system_info", "get_performance", "system_health", "set_volume", "toggle_mute",
+    "media_keys", "get_battery", "power_action", "show_notification",
+    # productivity
+    "set_timer", "list_timers", "cancel_timer", "remember", "recall", "what_you_know",
+    "send_email", "gmail_search", "gmail_read", "now",
+    # security (read-mostly)
+    "security_status", "scan_file", "run_shell",
+}
+
+
+def curate_voice_tools(declarations: list) -> list:
+    """Return the [{function_declarations:[...]}] tools block for the Live API, filtered to the
+    voice-appropriate set. Pure so it's unit-tested without the genai SDK."""
+    decls = [d for d in (declarations or []) if d.get("name") in VOICE_TOOL_NAMES]
+    return [{"function_declarations": decls}] if decls else []
+
+
+def run_tool_calls(calls: list, executor) -> list:
+    """Execute each live tool call via `executor(name, args) -> dict` and shape the results as Live
+    API function responses. Pure control-flow (executor is injected), so it's fully unit-tested."""
+    responses = []
+    for c in (calls or []):
+        name = c.get("name")
+        args = c.get("args") if isinstance(c.get("args"), dict) else {}
+        try:
+            result = executor(name, args)
+        except Exception as e:  # an executor bug must not kill the voice session
+            result = {"ok": False, "error": str(e)}
+        if not isinstance(result, dict):
+            result = {"result": result}
+        responses.append({"id": c.get("id"), "name": name, "response": result})
+    return responses
+
+
+def default_tool_executor(allow_high_risk: bool = False):
+    """A safety-gated executor that runs a tool by name through Ember's normal guard (capability
+    mode + high-risk blocking), reusing ember_bridge.execute_tool. Imports agent lazily."""
+    def _exec(name, args):
+        import ember_bridge
+        import agent
+        param_types = {}
+        try:
+            import tool_args
+            param_types = tool_args.build_param_types(agent.TOOL_DECLARATIONS)
+        except Exception:
+            param_types = {}
+        return ember_bridge.execute_tool(name, args or {}, agent.TOOL_DISPATCH,
+                                         allow_high_risk=allow_high_risk, param_types=param_types)
+    return _exec
 
 
 def _audio_blob(frame: bytes):
@@ -142,8 +219,25 @@ async def _receiver(session, player, handlers: dict, stop_event: "asyncio.Event"
             handlers.get("on_user_text", _noop)(p["user_text"])
         if p["ember_text"]:
             handlers.get("on_ember_text", _noop)(p["ember_text"])
+        if p.get("tool_calls"):
+            await _run_and_reply_tools(session, p["tool_calls"], handlers)
         if p["turn_complete"]:
             handlers.get("on_turn_complete", _noop)()
+
+
+async def _run_and_reply_tools(session, calls: list, handlers: dict) -> None:
+    """Execute the model's tool calls (off the event loop so a slow tool can't stall audio) and
+    send the results back into the live session so it can speak the outcome."""
+    executor = handlers.get("tool_executor")
+    if not executor:
+        return
+    for c in calls:
+        handlers.get("on_tool", _noop)(c.get("name"))
+    responses = await asyncio.to_thread(run_tool_calls, calls, executor)
+    try:
+        await session.send_tool_response(function_responses=responses)
+    except Exception as e:
+        handlers.get("on_error", _noop)(f"tool response failed: {e}")
 
 
 async def _drive(session, mic, player, handlers: dict, stop_event: "asyncio.Event") -> None:
@@ -235,17 +329,25 @@ class LiveVoice:
                  on_user_text: Optional[Callable] = None, on_ember_text: Optional[Callable] = None,
                  on_state: Optional[Callable] = None, on_turn_complete: Optional[Callable] = None,
                  on_interrupted: Optional[Callable] = None, on_error: Optional[Callable] = None,
-                 max_failures: int = 4):
+                 max_failures: int = 4, tools: Optional[list] = None,
+                 tool_executor: Optional[Callable] = None, on_tool: Optional[Callable] = None):
         self.key = "".join((api_key or "").split())
         self.model = model or DEFAULT_MODEL
         self.voice = voice or DEFAULT_VOICE
         self.api_version = api_version or DEFAULT_API_VERSION
         self.system_instruction = system_instruction or ""
         self.max_failures = max_failures
+        # Tool-calling: `tools` is the Live API tools block ([{function_declarations:[...]}]);
+        # `tool_executor(name, args)->dict` actually runs them (safety-gated). When both are set
+        # the voice model can operate the computer mid-conversation.
+        self.tools = tools or []
+        self.tool_executor = tool_executor
         self._handlers = {
             "on_user_text": on_user_text or _noop, "on_ember_text": on_ember_text or _noop,
             "on_state": on_state or _noop, "on_turn_complete": on_turn_complete or _noop,
             "on_interrupted": on_interrupted or _noop, "on_error": on_error or _noop,
+            "on_tool": on_tool or _noop,          # notified (name) when the voice model runs a tool
+            "tool_executor": tool_executor,       # carried through to the receiver loop
         }
         self._thread: Optional[threading.Thread] = None
         self._loop_stop: Optional[asyncio.Event] = None
@@ -305,6 +407,8 @@ class LiveVoice:
         }
         if self.system_instruction:
             cfg["system_instruction"] = self.system_instruction
+        if self.tools:
+            cfg["tools"] = self.tools     # lets the model call Ember's tools mid-conversation
         return cfg
 
     async def _main(self):

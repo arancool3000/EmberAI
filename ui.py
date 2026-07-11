@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QSizePolicy, QSystemTrayIcon, QMenu,
     QComboBox, QCheckBox, QTabWidget, QListWidget, QListWidgetItem,
     QInputDialog, QFileDialog, QGraphicsOpacityEffect, QGraphicsDropShadowEffect,
-    QSlider, QLayout, QGroupBox, QProgressBar,
+    QSlider, QLayout, QGroupBox, QProgressBar, QStackedWidget,
 )
 
 import models as model_catalog
@@ -4980,6 +4980,344 @@ class DownloadGuardDialog(QDialog):
             QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
 
 
+class UpdateDialog(QDialog):
+    """A friendly 'a new version is ready' dialog with Skip / Install on Quit / Install &
+    Relaunch, plus an 'auto-update in future' checkbox — the standard desktop-app update prompt."""
+
+    def __init__(self, new_version: str, current: str, notes: str = "",
+                 auto_update: bool = True, parent=None):
+        super().__init__(parent)
+        self.choice = None                 # "relaunch" | "on_quit" | "skip" | None
+        self.auto_update = auto_update
+        self.setWindowTitle("Update Ember")
+        self.setMinimumWidth(560)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 20, 22, 18)
+        v.setSpacing(14)
+
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        icon = QLabel()
+        try:
+            p = _base_dir() / "icon.png"
+            if not p.exists() and getattr(sys, "frozen", False):
+                p = Path(getattr(sys, "_MEIPASS", _base_dir())) / "icon.png"
+            if p.exists():
+                icon.setPixmap(QPixmap(str(p)).scaled(
+                    64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            pass
+        icon.setFixedSize(64, 64)
+        top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(6)
+        title = QLabel("A new version of Ember is ready to install!")
+        title.setStyleSheet("font-size: 16px; font-weight: 800;")
+        title.setWordWrap(True)
+        col.addWidget(title)
+        sub = QLabel(f"Ember {new_version} is available (you have {current}). "
+                     "Would you like to install it and relaunch Ember now?")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color: #c8d0e0;")
+        col.addWidget(sub)
+        if notes:
+            nlbl = QLabel(notes[:300] + ("…" if len(notes) > 300 else ""))
+            nlbl.setWordWrap(True)
+            nlbl.setStyleSheet("color: #8b93a7; font-size: 11px;")
+            col.addWidget(nlbl)
+        top.addLayout(col, 1)
+        v.addLayout(top)
+
+        self.auto_check = QCheckBox("Automatically download and install updates in the future")
+        self.auto_check.setChecked(bool(auto_update))
+        v.addWidget(self.auto_check)
+
+        row = QHBoxLayout()
+        skip = QPushButton("Skip This Version")
+        skip.clicked.connect(lambda: self._pick("skip"))
+        row.addWidget(skip)
+        row.addStretch()
+        on_quit = QPushButton("Install on Quit")
+        on_quit.clicked.connect(lambda: self._pick("on_quit"))
+        row.addWidget(on_quit)
+        relaunch = QPushButton("Install and Relaunch")
+        relaunch.setObjectName("primaryBtn")
+        relaunch.setDefault(True)
+        relaunch.clicked.connect(lambda: self._pick("relaunch"))
+        row.addWidget(relaunch)
+        v.addLayout(row)
+
+    def _pick(self, choice: str):
+        self.choice = choice
+        self.auto_update = self.auto_check.isChecked()
+        self.accept()
+
+
+class OllamaChatPanel(QWidget):
+    """A fully-offline chat with local Ollama models — no API key, no internet. Also hosts
+    'Council' mode, where several local models draft, critique each other, and combine into one
+    answer (ollama_council). Original, clean design — not a copy of any other app's interface."""
+
+    _reply = pyqtSignal(str)      # final assistant text -> append to transcript
+    _status = pyqtSignal(str)     # progress line (council phases / thinking)
+    _fail = pyqtSignal(str)
+    _confirm = pyqtSignal(object)  # a tool needs approval (PendingConfirmation)
+
+    OLLAMA_BASE = "http://localhost:11434"
+
+    def __init__(self, settings: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.settings = settings or {}
+        self._messages: list[dict] = []   # [{role, content}] for context
+        self._busy = False
+        self._agent = None                # tool-capable offline OllamaAgent (lazy)
+        self._agent_model = None
+        self._stream_buf = ""
+        self._build()
+        self._reply.connect(self._on_reply)
+        self._status.connect(lambda s: self.status_label.setText(s))
+        self._fail.connect(self._on_fail)
+        self._confirm.connect(self._on_confirm)
+        QTimer.singleShot(0, self._refresh_models)
+
+    def _build(self):
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 8, 12, 12)
+        v.setSpacing(8)
+
+        header = QLabel("Local chat")
+        header.setObjectName("sectionTitle")
+        v.addWidget(header)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        top.addWidget(self.model_combo, 1)
+        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setFixedWidth(34)
+        self.refresh_btn.setToolTip("Refresh the list of installed Ollama models")
+        self.refresh_btn.clicked.connect(self._refresh_models)
+        top.addWidget(self.refresh_btn)
+        v.addLayout(top)
+
+        self.council_check = QCheckBox("Council — let several models team up on each answer")
+        self.council_check.setToolTip(
+            "The selected models each draft an answer, read each other's drafts to improve, then "
+            "one combines them into a single smarter answer. Slower, but better than any one model.")
+        self.council_check.toggled.connect(self._on_council_toggled)
+        v.addWidget(self.council_check)
+
+        self.council_list = QListWidget()
+        self.council_list.setMaximumHeight(96)
+        self.council_list.setVisible(False)
+        self.council_list.setToolTip("Tick the models that should join the council.")
+        v.addWidget(self.council_list)
+
+        self.transcript = QTextEdit()
+        self.transcript.setReadOnly(True)
+        self.transcript.setObjectName("chatTranscript")
+        v.addWidget(self.transcript, 1)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("panelHint")
+        self.status_label.setWordWrap(True)
+        v.addWidget(self.status_label)
+
+        row = QHBoxLayout()
+        self.input = QTextEdit()
+        self.input.setMaximumHeight(84)
+        self.input.setPlaceholderText("Message your local models…  (offline · no API key)")
+        row.addWidget(self.input, 1)
+        self.send_btn = QPushButton("Send")
+        self.send_btn.clicked.connect(self._on_send)
+        row.addWidget(self.send_btn)
+        v.addLayout(row)
+
+        hint = QLabel("Runs fully offline on your local Ollama models — no internet, no API key.")
+        hint.setObjectName("panelHint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+    # -- models ---------------------------------------------------------------
+    def _base(self) -> str:
+        return self.settings.get("ollama_base") or self.OLLAMA_BASE
+
+    def _refresh_models(self):
+        try:
+            import ollama_council
+            models = ollama_council.available_models(self._base())
+        except Exception:
+            models = []
+        cur = self.model_combo.currentText()
+        self.model_combo.clear()
+        self.council_list.clear()
+        if not models:
+            self.model_combo.addItem("(no Ollama models found — install Ollama + pull a model)")
+            self.model_combo.setEnabled(False)
+            self.status_label.setText(
+                "No local models detected. Install Ollama (ollama.com), then e.g. `ollama pull "
+                "llama3.1` and `ollama pull qwen2.5`, and press ↻.")
+            return
+        self.model_combo.setEnabled(True)
+        for m in models:
+            self.model_combo.addItem(m)
+        if cur in models:
+            self.model_combo.setCurrentText(cur)
+        for i, m in enumerate(models):
+            it = QListWidgetItem(m)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked if i < 3 else Qt.CheckState.Unchecked)
+            self.council_list.addItem(it)
+        self.status_label.setText("")
+
+    def _on_council_toggled(self, on: bool):
+        self.council_list.setVisible(on)
+
+    def _selected_council(self) -> list:
+        out = []
+        for i in range(self.council_list.count()):
+            it = self.council_list.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                out.append(it.text())
+        return out
+
+    # -- send / receive -------------------------------------------------------
+    def _on_send(self):
+        if self._busy:
+            return
+        text = self.input.toPlainText().strip()
+        if not text:
+            return
+        council = self.council_check.isChecked()
+        models = self._selected_council() if council else [self.model_combo.currentText()]
+        models = [m for m in models if m and not m.startswith("(")]
+        if not models:
+            self.status_label.setText("Pick at least one model first (press ↻ if the list is empty).")
+            return
+        self.input.clear()
+        self._append("You", text)
+        self._messages.append({"role": "user", "content": text})
+        self._busy = True
+        self.send_btn.setEnabled(False)
+        self.status_label.setText("Thinking…")
+        if council and len(models) > 1:
+            threading.Thread(target=self._worker, args=(text, council, models), daemon=True).start()
+        else:
+            # Single model → the tool-capable offline agent, so the chat can SEE the screen and
+            # control the mouse/keyboard/files (all local, no API key).
+            self._send_via_agent(text, models[0])
+
+    def _send_via_agent(self, text: str, model: str):
+        try:
+            self._ensure_agent(model)
+            self._stream_buf = ""
+            self._agent.send_user_message(text)
+        except Exception as e:
+            self._fail.emit(f"{type(e).__name__}: {e}")
+
+    def _ensure_agent(self, model: str):
+        """Build (or rebuild on model change) the offline tool-driving OllamaAgent and subscribe."""
+        if self._agent is not None and self._agent_model == model:
+            return
+        from ollama_agent import OllamaAgent
+        self._agent = OllamaAgent(model_name=model,
+                                  auto_screenshot=bool(self.settings.get("auto_screenshot", True)))
+        self._agent_model = model
+        self._agent.subscribe(self._on_agent_event)
+
+    def _on_agent_event(self, ev):
+        """Marshal OllamaAgent events onto the UI thread via signals (they fire on its thread)."""
+        kind = getattr(ev, "kind", None)
+        payload = getattr(ev, "payload", None)
+        if kind == "stream_chunk" and payload:
+            self._stream_buf += str(payload)
+        elif kind == "message" and payload:
+            self._stream_buf += str(payload)
+        elif kind == "tool_call":
+            try:
+                self._status.emit(f"Running {payload.get('name')}…")
+            except Exception:
+                self._status.emit("Using a tool…")
+        elif kind == "confirm":
+            self._confirm.emit(payload)   # ask on the UI thread
+        elif kind == "error":
+            self._fail.emit(str(payload)[:200])
+        elif kind == "done":
+            self._reply.emit(self._stream_buf.strip() or "(done)")
+
+    def _on_confirm(self, pending):
+        """A tool wants approval — ask, then hand the answer back to the agent thread."""
+        try:
+            name = getattr(pending, "tool_name", "an action")
+            reason = getattr(pending, "reason", "")
+            ok = QMessageBox.question(
+                self, "Allow this action?",
+                f"The local chat wants to run:\n\n{name}\n\n{reason}\n\nAllow it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            ) == QMessageBox.StandardButton.Yes
+            pending.response.put(ok)
+        except Exception:
+            try:
+                pending.response.put(False)
+            except Exception:
+                pass
+
+    def _worker(self, text: str, council: bool, models: list):
+        try:
+            import ollama_council
+            history = "\n".join(f"{m['role']}: {m['content']}" for m in self._messages[:-1][-6:])
+            if council and len(models) > 1:
+                r = ollama_council.run_council(
+                    text, models, ollama_council.default_completer(self._base()),
+                    rounds=1, history=history,
+                    on_event=lambda phase, m: self._status.emit(
+                        {"propose": f"{m} is drafting…",
+                         "refine": f"{m} is improving on the others…",
+                         "synthesize": f"{m} is combining everyone's answers…"}.get(phase, m)))
+                if not r.get("ok"):
+                    self._fail.emit(r.get("error", "the council could not produce an answer"))
+                    return
+                self._reply.emit(r["final"])
+            else:
+                import ollama_agent
+                prompt = (history + "\nuser: " + text) if history else text
+                out = ollama_agent.quick_complete(prompt, model=models[0], base_url=self._base(),
+                                                  timeout=120)
+                if not out:
+                    self._fail.emit("no reply (is Ollama running and the model pulled?)")
+                    return
+                self._reply.emit(out)
+        except Exception as e:
+            self._fail.emit(f"{type(e).__name__}: {e}")
+
+    def _on_reply(self, text: str):
+        self._messages.append({"role": "assistant", "content": text})
+        self._append("Ember (local)", text)
+        self.status_label.setText("")
+        self._busy = False
+        self.send_btn.setEnabled(True)
+
+    def _on_fail(self, msg: str):
+        self.status_label.setText(msg)
+        self._busy = False
+        self.send_btn.setEnabled(True)
+
+    def _append(self, who: str, text: str):
+        import html
+        safe = html.escape(text).replace("\n", "<br>")
+        colour = "#7aa2f7" if who == "You" else "#9ece6a"
+        self.transcript.append(
+            f'<div style="margin:6px 0;"><b style="color:{colour}">{html.escape(who)}</b><br>{safe}</div>')
+        try:
+            sb = self.transcript.verticalScrollBar()
+            sb.setValue(sb.maximum())
+        except Exception:
+            pass
+
+
 class EmberWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -5637,9 +5975,13 @@ class EmberWindow(QWidget):
 
     # --- Natural voice (Gemini Live API) --------------------------------------
     def _live_voice_system_instruction(self) -> str:
-        return ("You are Ember, a friendly voice assistant that can control the user's computer. "
-                "Keep spoken replies short, natural and conversational. If asked to do a task on "
-                "the computer, acknowledge briefly and describe what you'll do.")
+        return ("You are Ember, a friendly voice assistant that can ACTUALLY control this "
+                "computer using the provided tools — take screenshots and read the screen, open "
+                "apps and websites, manage files, search the web, set timers, control volume/"
+                "media, check email, and more. When the user asks you to DO something, CALL the "
+                "relevant tool to really do it — don't just say you will. Acknowledge briefly in "
+                "one short spoken line, run the tool, then say what happened. Keep replies short, "
+                "natural and conversational.")
 
     def _start_live_voice(self):
         import live_voice
@@ -5651,6 +5993,17 @@ class EmberWindow(QWidget):
         self._lv_user_buf = ""
         self._lv_ember_buf = ""
         b = self._bridge
+        # Give the voice model Ember's tools so it can ACT, not just talk (the thing GPT Live
+        # can't do). Curated to a voice-appropriate set; high-risk tools stay gated by the same
+        # MCP setting unless the user opts in.
+        lv_tools, lv_exec = [], None
+        try:
+            import agent as _ag
+            lv_tools = live_voice.curate_voice_tools(_ag.TOOL_DECLARATIONS)
+            lv_exec = live_voice.default_tool_executor(
+                allow_high_risk=bool(self.settings.get("mcp_bridge_allow_high_risk", False)))
+        except Exception:
+            lv_tools, lv_exec = [], None
         self._live_voice = live_voice.LiveVoice(
             (self.settings.get("gemini_api_key") or ""),
             model=self.settings.get("live_voice_model") or live_voice.DEFAULT_MODEL,
@@ -5663,6 +6016,9 @@ class EmberWindow(QWidget):
             on_turn_complete=lambda: b.live_voice_event.emit("turn", ""),
             on_interrupted=lambda: b.live_voice_event.emit("state", "listening"),
             on_error=lambda e: b.live_voice_event.emit("error", e),
+            on_tool=lambda name: b.live_voice_event.emit("tool", name),
+            tools=lv_tools,
+            tool_executor=lv_exec,
         )
         r = self._live_voice.start()
         if not r.get("ok"):
@@ -5760,6 +6116,12 @@ class EmberWindow(QWidget):
                 orb = self._ensure_orb()
                 if orb and text in ("listening", "speaking"):
                     orb.set_state(text)
+        elif kind == "tool":
+            # The voice model is operating the computer — show what it's doing.
+            self._set_status(f"🔧 {text}…")
+            orb = self._ensure_orb()
+            if orb:
+                orb.set_caption(f"running {text}…")
         elif kind == "error":
             self._set_status("Natural voice: " + (text or "")[:80])
 
@@ -6177,7 +6539,41 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         layout = QVBoxLayout(main_panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        root_row.addWidget(main_panel, 1)
+
+        # Center column: a top-center Work/Chat segmented toggle, then a stack that swaps between
+        # the agent view ("Work") and the offline local-model chat ("Chat"). The Chat panel is
+        # created lazily the first time you switch to it.
+        center = QWidget()
+        center_col = QVBoxLayout(center)
+        center_col.setContentsMargins(0, 0, 0, 0)
+        center_col.setSpacing(6)
+
+        seg_row = QHBoxLayout()
+        seg_row.addStretch()
+        seg = QFrame()
+        seg.setObjectName("segToggle")
+        seg_inner = QHBoxLayout(seg)
+        seg_inner.setContentsMargins(3, 3, 3, 3)
+        seg_inner.setSpacing(3)
+        self.work_tab_btn = QPushButton("Work")
+        self.chat_tab_btn = QPushButton("Chat")
+        for b in (self.work_tab_btn, self.chat_tab_btn):
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setObjectName("segBtn")
+            seg_inner.addWidget(b)
+        self.work_tab_btn.setChecked(True)
+        self.work_tab_btn.clicked.connect(lambda: self._switch_main_view("work"))
+        self.chat_tab_btn.clicked.connect(lambda: self._switch_main_view("chat"))
+        seg_row.addWidget(seg)
+        seg_row.addStretch()
+        center_col.addLayout(seg_row)
+
+        self.main_stack = QStackedWidget()
+        self.main_stack.addWidget(main_panel)     # index 0 = Work
+        self._chat_panel = None                   # index 1 = Chat, built on first switch
+        center_col.addWidget(self.main_stack, 1)
+        root_row.addWidget(center, 1)
 
         command_panel = QFrame()
         command_panel.setObjectName("commandPanel")
@@ -6417,6 +6813,27 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._refresh_history_sidebar()
         self._load_active_chat_into_view()
         self._update_voice_chat_ui()
+
+    def _switch_main_view(self, which: str):
+        """Toggle the center area between 'work' (the agent view) and 'chat' (offline local-model
+        chat). The Chat panel is built on first use so it never slows launch."""
+        chat = (which == "chat")
+        try:
+            self.work_tab_btn.setChecked(not chat)
+            self.chat_tab_btn.setChecked(chat)
+        except Exception:
+            pass
+        if chat and self._chat_panel is None:
+            try:
+                self._chat_panel = OllamaChatPanel(self.settings, self)
+                self.main_stack.addWidget(self._chat_panel)
+            except Exception as e:
+                traceback.print_exc()
+                self._chat_panel = None
+                QMessageBox.warning(self, "Chat", f"Couldn't open local chat: {e}")
+                self._switch_main_view("work")
+                return
+        self.main_stack.setCurrentWidget(self._chat_panel if chat else self.main_stack.widget(0))
 
     def _active_chat(self) -> dict:
         sessions = self.chat_history.setdefault("sessions", [])
@@ -6678,6 +7095,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
     def _do_quit(self):
         """Really quit Ember (tray ▸ Quit / explicit quit) — stops the background listeners."""
         self._really_quit = True
+        # "Install on Quit": the user chose to update when they close Ember — do it now (the
+        # updater installs the new version and relaunches into it).
+        if getattr(self, "_install_on_quit", False) and getattr(self, "_pending_update", None):
+            try:
+                self._start_update(auto=True)
+                return
+            except Exception:
+                pass
         lv = getattr(self, "_live_voice", None)
         if lv is not None:
             try:
@@ -8471,23 +8896,39 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return False
 
     def _on_update_available(self, manifest: dict):
-        """A newer release is available. With auto-update on (default) install it now;
-        otherwise just announce it (manual install via /update)."""
+        """A newer release is available — show the standard update prompt (Skip / Install on Quit /
+        Install & Relaunch) with an 'auto-update in future' checkbox."""
         import version
         self._pending_update = manifest
         ver = manifest.get("version", "?")
-        notes = (manifest.get("notes") or "").strip()
-        if bool(self.settings.get("auto_update", True)):
-            self._add_bubble("system", f"🔄 Installing **Ember {ver}** automatically…")
-            self._set_status(f"Updating to {ver}…")
-            QTimer.singleShot(300, lambda: self._start_update(auto=True))
+        # Respect a previously-skipped version — don't nag about the same one again.
+        if self.settings.get("skipped_update_version") == ver:
+            self._set_status(f"Update {ver} available — type /update")
             return
-        msg = (f"🔄 **Ember {ver}** is available (you have {version.__version__}). "
-               "Type **/update** to install it now.")
-        if notes:
-            msg += "\n\n" + notes[:500]
-        self._add_bubble("system", msg)
-        self._set_status(f"Update {ver} available — type /update")
+        notes = (manifest.get("notes") or "").strip()
+        try:
+            dlg = UpdateDialog(ver, version.__version__, notes,
+                               bool(self.settings.get("auto_update", True)), self)
+            dlg.exec()
+            choice = dlg.choice
+            # Persist the auto-update preference from the checkbox.
+            self.settings["auto_update"] = bool(dlg.auto_update)
+            save_settings(self.settings)
+        except Exception:
+            choice = "relaunch" if self.settings.get("auto_update", True) else None
+        if choice == "relaunch":
+            self._set_status(f"Updating to {ver}…")
+            QTimer.singleShot(150, lambda: self._start_update(auto=True))
+        elif choice == "on_quit":
+            self._install_on_quit = True
+            self._add_bubble("system", f"✅ Ember {ver} will install when you quit Ember.")
+            self._set_status(f"Ember {ver} will install on quit")
+        elif choice == "skip":
+            self.settings["skipped_update_version"] = ver
+            save_settings(self.settings)
+            self._set_status("Ready")
+        else:
+            self._set_status(f"Update {ver} available — type /update")
 
     def _update_now(self):
         """Manual 'check for updates' that is NEVER silent — it always tells the user what

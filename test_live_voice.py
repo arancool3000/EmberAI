@@ -252,6 +252,60 @@ def test_fallback_models_are_distinct_from_the_default():
     assert len(lv.FALLBACK_MODELS) == len(set(lv.FALLBACK_MODELS))
 
 
+# ---- tool calling (voice that ACTS — the "better than GPT Live" bit) -------
+
+def _tool_msg(calls):
+    fcs = [NS(id=c.get("id"), name=c["name"], args=c.get("args")) for c in calls]
+    return NS(data=None, server_content=None, text=None, tool_call=NS(function_calls=fcs))
+
+
+def test_parse_extracts_tool_calls():
+    m = _tool_msg([{"id": "a", "name": "take_screenshot", "args": {"grid": True}}])
+    p = lv.parse_message(m)
+    assert p["tool_calls"] == [{"id": "a", "name": "take_screenshot", "args": {"grid": True}}]
+
+
+def test_parse_no_tool_calls_defaults_empty():
+    assert lv.parse_message(_msg(user="hi"))["tool_calls"] == []
+
+
+def test_curate_voice_tools_filters_to_voice_set():
+    decls = [{"name": "take_screenshot"}, {"name": "some_obscure_tool"}, {"name": "web_search"}]
+    block = lv.curate_voice_tools(decls)
+    assert len(block) == 1
+    names = [d["name"] for d in block[0]["function_declarations"]]
+    assert "take_screenshot" in names and "web_search" in names and "some_obscure_tool" not in names
+
+
+def test_curate_empty_when_nothing_matches():
+    assert lv.curate_voice_tools([{"name": "nope"}]) == []
+
+
+def test_run_tool_calls_shapes_responses():
+    ran = []
+    def ex(name, args):
+        ran.append((name, args))
+        return {"ok": True, "did": name}
+    calls = [{"id": "1", "name": "take_screenshot", "args": {"grid": True}},
+             {"id": "2", "name": "web_search", "args": {"q": "cats"}}]
+    resp = lv.run_tool_calls(calls, ex)
+    assert ran == [("take_screenshot", {"grid": True}), ("web_search", {"q": "cats"})]
+    assert resp[0] == {"id": "1", "name": "take_screenshot",
+                       "response": {"ok": True, "did": "take_screenshot"}}
+
+
+def test_run_tool_calls_survives_executor_error():
+    def ex(name, args):
+        raise RuntimeError("boom")
+    resp = lv.run_tool_calls([{"id": "1", "name": "x", "args": {}}], ex)
+    assert resp[0]["response"]["ok"] is False and "boom" in resp[0]["response"]["error"]
+
+
+def test_run_tool_calls_wraps_non_dict_result():
+    resp = lv.run_tool_calls([{"id": "1", "name": "x", "args": {}}], lambda n, a: "plain")
+    assert resp[0]["response"] == {"result": "plain"}
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

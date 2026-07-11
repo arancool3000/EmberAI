@@ -97,7 +97,8 @@ jobs:
             test_ember_bridge.py \
             test_av_static.py \
             test_update_signing.py \
-            test_mcp_setup.py; do
+            test_mcp_setup.py \
+            test_ollama_council.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"
