@@ -112,6 +112,48 @@ def svg(name_or_emoji: str, color: str = DEFAULT_COLOR, stroke: float = 2.0) -> 
 
 
 # ---------------------------------------------------------------------------
+# Brand mark — the "ember gem" diamond
+# ---------------------------------------------------------------------------
+
+# Deep-ember gradient (amber -> orange -> red), matching the app icon's palette.
+_DIAMOND_STOPS = ("#e6963c", "#dc5a28", "#af2629")
+
+
+def diamond_svg(stops: "tuple[str, str, str]" = _DIAMOND_STOPS,
+                facet: str = "#fff3df", gloss: str = "#ffffff") -> str:
+    """Ember's brand mark: a faceted "ember gem" diamond filled with the warm ember gradient.
+
+    Unlike the monoline _ICONS glyphs (single-weight, recolourable to the theme) this is a
+    filled, colourful gem — the product's identity mark — so it lives in its own function
+    rather than the icon registry. It's a pure vector (viewBox 0 0 24 24) that scales crisply
+    to ANY size, so the in-app logo spots can render it at whatever size the widget is (i.e.
+    it's resizable). No Qt here — pure string, unit-tested."""
+    c0, c1, c2 = stops
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">'
+        '<defs>'
+        '<linearGradient id="emberGem" x1="0" y1="0" x2="1" y2="1">'
+        f'<stop offset="0" stop-color="{c0}"/>'
+        f'<stop offset="0.5" stop-color="{c1}"/>'
+        f'<stop offset="1" stop-color="{c2}"/>'
+        '</linearGradient>'
+        '</defs>'
+        # Gem silhouette: flat table on top, crown facets out to the girdle, pavilion to a point.
+        '<path d="M7 4 H17 L21.5 10 L12 21 L2.5 10 Z" fill="url(#emberGem)"/>'
+        # Soft top gloss over the crown so the gem reads as polished.
+        f'<path d="M7 4 H17 L12 10 Z" fill="{gloss}" opacity="0.16"/>'
+        # Cut facets: the girdle line plus the two pavilion edges.
+        f'<g stroke="{facet}" stroke-width="0.7" stroke-linecap="round" '
+        'stroke-linejoin="round" opacity="0.55">'
+        '<path d="M2.5 10 H21.5"/>'
+        '<path d="M7 4 L12 21"/>'
+        '<path d="M17 4 L12 21"/>'
+        '</g>'
+        '</svg>'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Qt wrappers (lazy import; return None on any failure so callers fall back)
 # ---------------------------------------------------------------------------
 

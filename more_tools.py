@@ -10,6 +10,7 @@ import json
 import math
 import operator
 import os
+import re
 import secrets
 import socket
 import string
@@ -252,6 +253,12 @@ def send_email(to: str, subject: str, body: str, smtp_host: str | None = None,
         smtp_port = smtp_port or int(st.get("email_smtp_port") or 587)
     except Exception:
         smtp_port = smtp_port or 587
+
+    # A Google App Password is displayed as "abcd efgh ijkl mnop" but authenticates only without
+    # the spaces. Strip them when the value is exactly that 4×4 format, so a pasted app password
+    # works while other providers' real passphrases (which may contain spaces) are left untouched.
+    if re.fullmatch(r"[A-Za-z]{4}(?: [A-Za-z]{4}){3}", (smtp_password or "").strip()):
+        smtp_password = smtp_password.replace(" ", "")
 
     if not (smtp_host and smtp_user and smtp_password):
         return {"ok": False, "error": "SMTP not configured - set email_smtp_host/user/password in Settings"}

@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 import models as model_catalog
 import automation as automation_mod
 import manual_mode as manual_mod
+import icons
 
 # NOTE: `agent` (which pulls in google.genai, ~1.7s) is imported lazily in _init_agent so the
 # window can paint immediately instead of blocking ~10s on startup. All references to Agent /
@@ -664,17 +665,97 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y() + m.bottom()
 
 
-def _dialog_header(title: str, description: str, eyebrow: str = "EMBER", mark: str = "E") -> QFrame:
-    """Reusable product header for every secondary Ember surface."""
+# Sentinel that tells _dialog_header (and any brand spot) to render Ember's diamond logo mark
+# instead of a text glyph.
+DIAMOND_MARK = "diamond"
+
+
+class DiamondMark(QWidget):
+    """Ember's brand logo: a resizable faceted "ember gem" diamond.
+
+    Renders the branded vector gem (icons.diamond_svg) scaled to the widget's CURRENT size, so
+    it stays crisp at any size and is trivially resizable — pass a size, call set_mark_size(),
+    or let a layout resize it. Replaces the old letter-"E" / sparkle badges. Falls back to a
+    hand-painted gradient diamond if QtSvg is unavailable, so the mark never disappears."""
+
+    def __init__(self, size: int = 34, parent=None):
+        super().__init__(parent)
+        self._size = max(8, int(size))
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def set_mark_size(self, px: int) -> None:
+        """Resize the mark. It re-renders crisply because the art is vector, not a fixed bitmap."""
+        self._size = max(8, int(px))
+        self.updateGeometry()
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._size, self._size)
+
+    def minimumSizeHint(self) -> QSize:
+        s = min(12, self._size)
+        return QSize(s, s)
+
+    def paintEvent(self, event) -> None:
+        side = min(self.width(), self.height())
+        if side <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        x = (self.width() - side) / 2.0
+        y = (self.height() - side) / 2.0
+        if not self._render_svg(painter, x, y, float(side)):
+            self._render_fallback(painter, x, y, float(side))
+        painter.end()
+
+    def _render_svg(self, painter, x, y, side) -> bool:
+        try:
+            from PyQt6.QtCore import QByteArray, QRectF
+            from PyQt6.QtSvg import QSvgRenderer
+            renderer = QSvgRenderer(QByteArray(icons.diamond_svg().encode("utf-8")))
+            if not renderer.isValid():
+                return False
+            renderer.render(painter, QRectF(x, y, side, side))
+            return True
+        except Exception:
+            return False
+
+    def _render_fallback(self, painter, x, y, side) -> None:
+        # QtSvg missing → draw a simple ember-gradient rhombus so the logo still appears.
+        try:
+            from PyQt6.QtCore import QPointF
+            from PyQt6.QtGui import QBrush, QLinearGradient, QPolygonF
+            cx, cy, h = x + side / 2.0, y + side / 2.0, side / 2.0
+            grad = QLinearGradient(cx - h, cy - h, cx + h, cy + h)
+            grad.setColorAt(0.0, QColor("#e6963c"))
+            grad.setColorAt(0.5, QColor("#dc5a28"))
+            grad.setColorAt(1.0, QColor("#af2629"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(grad))
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx, cy - h), QPointF(cx + h, cy),
+                QPointF(cx, cy + h), QPointF(cx - h, cy)]))
+        except Exception:
+            pass
+
+
+def _dialog_header(title: str, description: str, eyebrow: str = "EMBER",
+                   mark: str = DIAMOND_MARK) -> QFrame:
+    """Reusable product header for every secondary Ember surface. `mark` is a short text glyph
+    for the surface, or DIAMOND_MARK to show Ember's diamond brand logo."""
     frame = QFrame()
     frame.setObjectName("dialogHeader")
     row = QHBoxLayout(frame)
     row.setContentsMargins(13, 11, 15, 11)
     row.setSpacing(11)
-    icon = QLabel(mark)
-    icon.setObjectName("dialogMark")
-    icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    icon.setFixedSize(38, 38)
+    if mark == DIAMOND_MARK:
+        icon = DiamondMark(38)
+    else:
+        icon = QLabel(mark)
+        icon.setObjectName("dialogMark")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setFixedSize(38, 38)
     row.addWidget(icon)
     copy = QVBoxLayout()
     copy.setContentsMargins(0, 0, 0, 0)
@@ -1315,7 +1396,7 @@ class SettingsDialog(QDialog):
         outer.setSpacing(10)
         self._settings_header = _dialog_header(
             "Settings", "Configure Ember's models, behavior, privacy, and integrations.",
-            eyebrow="PREFERENCES", mark="⚙")
+            eyebrow="EMBER", mark="⚙")
         outer.addWidget(self._settings_header)
         self.tabs = QTabWidget()
         self.tabs.setObjectName("settingsTabs")
@@ -2106,7 +2187,7 @@ class SettingsDialog(QDialog):
         layout.addRow(self.remote_autostart_check)
 
         self.mcp_bridge_check = QCheckBox(
-            "MCP bridge — expose every Ember tool to ChatGPT and other MCP clients")
+            "MCP bridge — expose Ember's tools to your MCP client (Claude Desktop, ChatGPT, and others)")
         self.mcp_bridge_check.setChecked(bool(self.settings.get("mcp_bridge_enabled", False)))
         self.mcp_bridge_check.setToolTip(
             "Exposes Ember's tools over the Model Context Protocol on a loopback-only, "
@@ -2122,17 +2203,22 @@ class SettingsDialog(QDialog):
             "to approve them there. On: they run unattended — only enable if you trust the client.")
         layout.addRow(self.mcp_highrisk_check)
 
-        self.mcp_chatgpt_btn = QPushButton("Start ChatGPT MCP")
-        self.mcp_chatgpt_btn.setObjectName("primaryBtn")
-        self.mcp_chatgpt_btn.clicked.connect(self._setup_mcp_chatgpt)
+        # Both integrations get equal visual weight — neither client is the "main character".
         self.mcp_setup_btn = QPushButton("Set up Claude Desktop")
+        self.mcp_setup_btn.setObjectName("mcpBtn")
+        self.mcp_setup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mcp_setup_btn.clicked.connect(self._setup_mcp_claude)
+        self.mcp_chatgpt_btn = QPushButton("Set up ChatGPT")
+        self.mcp_chatgpt_btn.setObjectName("mcpBtn")
+        self.mcp_chatgpt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mcp_chatgpt_btn.clicked.connect(self._setup_mcp_chatgpt)
         self.mcp_setup_status = QLabel("")
         self.mcp_setup_status.setWordWrap(True)
         self.mcp_setup_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
         mcp_buttons = QHBoxLayout()
-        mcp_buttons.addWidget(self.mcp_chatgpt_btn)
+        mcp_buttons.setSpacing(9)
         mcp_buttons.addWidget(self.mcp_setup_btn)
+        mcp_buttons.addWidget(self.mcp_chatgpt_btn)
         layout.addRow(mcp_buttons)
         layout.addRow(self.mcp_setup_status)
 
@@ -5026,7 +5112,7 @@ class SetupTourDialog(QDialog):
         root.setSpacing(10)
         root.addWidget(_dialog_header(
             "Set up Ember", "Four quick choices, then your computer assistant is ready.",
-            eyebrow="WELCOME", mark="E"))
+            eyebrow="WELCOME", mark=DIAMOND_MARK))
 
         step_rail = QFrame()
         step_rail.setObjectName("stepRail")
@@ -7430,10 +7516,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         brand_row = QHBoxLayout(brand)
         brand_row.setContentsMargins(1, 0, 1, 5)
         brand_row.setSpacing(9)
-        mark = QLabel("E")
-        mark.setObjectName("brandMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(34, 34)
+        mark = DiamondMark(34)   # Ember's diamond brand logo (resizable vector), was the letter "E"
         brand_row.addWidget(mark)
         brand_copy = QVBoxLayout()
         brand_copy.setContentsMargins(0, 0, 0, 0)
@@ -8207,10 +8290,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         content = QVBoxLayout(frame)
         content.setContentsMargins(28, 54, 28, 28)
         content.setSpacing(10)
-        mark = QLabel("✦")
-        mark.setObjectName("emptyMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(46, 46)
+        mark = DiamondMark(46)   # Ember's diamond brand logo (resizable vector), was the "✦" mark
         self._start_ambient_pulse(mark)
         title = QLabel("What can I help you get done?")
         title.setObjectName("emptyTitle")
@@ -8238,6 +8318,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             button = QPushButton(label)
             button.setObjectName("promptCard")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(48)          # guarantee vertical room so labels never clip
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             button.clicked.connect(lambda _=False, c=command: self._run_slash(c))
             suggestion_grid.addWidget(button, index // 2, index % 2)
         content.addSpacing(3)
@@ -11247,6 +11329,28 @@ def _install_crash_guards():
     sys.excepthook = _hook
 
 
+def _set_macos_app_name(name: str = "Ember") -> None:
+    """Make macOS show `name` (not the interpreter, e.g. 'python3.12') in the menu bar and Dock.
+
+    When Ember runs from source (Ember.command → .venv/bin/python main.py) it isn't inside a
+    signed .app bundle, so macOS labels it with the executable's name. Overriding the main
+    bundle's info dictionary BEFORE the GUI (NSApplication) starts is the standard fix — the
+    frozen .app already carries CFBundleName=Ember, so this is a no-op there."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        if bundle is None:
+            return
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = name
+            info["CFBundleDisplayName"] = name
+    except Exception:
+        pass
+
+
 def main(instance_listener=None):
     _install_crash_guards()
     if _SAFE_MODE:
@@ -11259,8 +11363,14 @@ def main(instance_listener=None):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
+    _set_macos_app_name("Ember")   # menu bar / Dock say "Ember", not "python3.12" (source runs)
     app = QApplication(sys.argv)
     app.setApplicationName("Ember")
+    app.setApplicationDisplayName("Ember")
+    try:
+        app.setDesktopFileName("Ember")   # Linux: match the .desktop id so the launcher labels it
+    except Exception:
+        pass
     # Closing the window hides to tray (keeps the "Hey Ember" wake word + background
     # monitors alive); real quit is the tray ▸ Quit action.
     app.setQuitOnLastWindowClosed(False)
