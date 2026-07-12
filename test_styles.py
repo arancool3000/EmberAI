@@ -50,6 +50,27 @@ def test_command_action_is_readable_in_both():
     assert not _is_dark(_rule_color(g, "commandAction"))
 
 
+def test_workspace_polish_covers_primary_surfaces():
+    """The redesigned shell must stay present whichever material theme is selected."""
+    for selector in ("QFrame#workspaceHeader", "QComboBox#modePicker",
+                     "QFrame#pointerCard", "QFrame#composer",
+                     "QPushButton#commandPalette"):
+        assert selector in styles.WORKSPACE_POLISH, selector
+
+
+def test_workspace_polish_keeps_visible_focus_and_hover_states():
+    assert "QPushButton#newTask:hover" in styles.WORKSPACE_POLISH
+    assert "QPushButton#composerTool:hover" in styles.WORKSPACE_POLISH
+    assert "QSlider#pointerSpeed::handle:horizontal" in styles.WORKSPACE_POLISH
+
+
+def test_secondary_surfaces_share_the_product_system():
+    for selector in ("QFrame#dialogHeader", "QFrame#featureRow",
+                     "QTabWidget#settingsTabs", "QPlainTextEdit#codeSurface",
+                     "QPushButton#dangerBtn", "QLabel#securityHealth"):
+        assert selector in styles.WORKSPACE_POLISH, selector
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

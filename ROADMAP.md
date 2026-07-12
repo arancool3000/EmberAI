@@ -3,7 +3,11 @@
 A running memory of what's shipped and what's next, so ideas aren't lost between sessions.
 
 ## ✅ Shipped
-- **Plans / Pro** — all Pro features unlocked, free.
+- **Free product** — every local capability and MCP tool is available without a licence, plan,
+  feature gate, or future-paywall switch. The old plan API is a free-only compatibility shim.
+- **Complete MCP surface** — ChatGPT, Claude Desktop, Cursor, and other MCP clients receive the
+  live registry (383 tools at the current revision) with real schemas, structured results, impact
+  annotations, stdio/Streamable HTTP transports, loopback isolation, and conservative risk gates.
 - **Security suite** — antivirus (file/dir scan, heuristics, quarantine, VirusTotal), run-in-sandbox
   (Docker / macOS `sandbox-exec`), web protection, secret redaction, tamper-evident audit log,
   read-only / capability modes, Security settings tab with buttons.
@@ -18,14 +22,15 @@ A running memory of what's shipped and what's next, so ideas aren't lost between
   `/localai`; chat-only (no computer control). Also available as the `local_ai_*` tools.
 - **Creative AI** — image generation, vision Q&A, audio transcription.
 - **Macros** — save / list / run / delete named task workflows.
-- **Tools** — 176 total: multitools (cleanup, network, media, privacy), charts (matplotlib),
+- **Tools** — complete live registry: multitools (cleanup, network, media, privacy), charts (matplotlib),
   documents (PDF/docx/xlsx), secret scan, secure-delete, unit convert, network connections,
   security checkup, + 28 text/data/math utilities.
 - **Reliability** — rate-limit pacing + mid-turn wait-and-retry (no model-switch context loss),
   React/Vue-safe form fill, multi-occurrence click safety, faulthandler, EMBER_SAFE_MODE.
 - **UX** — resizable window, 3-way size cycle (normal/full/compact-chat), opaque/readable theme,
   no focus-stealing, fixed chat-bubble layout, modern browser UI.
-- **Perf** — lean-tools mode (ON by default), non-blocking VPN status, debounced resize.
+- **Perf** — optional compact built-in-model tool mode (off by default; MCP always stays complete),
+  non-blocking VPN status, debounced resize.
 - **Launch** — MIT license, public README, secrets gitignored, no-Homebrew uv installer,
   offline launch, auto-update on launch (git pull for source / auto-install for the app),
   Ember-site links fixed to EmberAI.
@@ -218,9 +223,9 @@ A running memory of what's shipped and what's next, so ideas aren't lost between
    (no Apple/Windows certs in CI) — mac users run `unblock-mac.sh` or right-click → Open. Adding
    notarization/signing (secrets + `notarize_mac.sh`) is the remaining polish.
 
-Total: **30 new built-in tools** (288 total, 0 duplicate names) + dynamic plugin tools; **73 new
-tests** pass. Lean-tools mode hides the productivity utilities; vault/usage/download-guard/plugins/
-workflow stay core.
+The live MCP registry currently exposes **383 unique tools**, including dynamic plugin/runtime
+tools. Compact mode can reduce only the built-in model's prompt when a provider cannot accept a
+large schema; it never hides tools from MCP clients.
 
 ## 🔭 Backlog (next ideas)
 - **Release signing/notarization** — Apple Developer ID + notarytool (and Windows Authenticode) in CI

@@ -82,11 +82,13 @@ jobs:
             test_ember_browser_fullscreen.py \
             test_ember_browser_search.py \
             test_ember_browser_newtab.py \
+            test_ember_browser_product.py \
             test_download_guard_ui.py \
             test_self_extend.py \
             test_app_builder.py \
             test_platform_fixes.py \
             test_model_fallback.py \
+            test_build_script.py \
             test_mac_permissions.py \
             test_ember_spec.py \
             test_more_tools.py \
@@ -94,12 +96,43 @@ jobs:
             test_release_workflow.py \
             test_key_vault_recovery.py \
             test_openai_agent.py \
+            test_agent_continuation.py \
+            test_voice_mic.py \
             test_ember_bridge.py \
             test_av_static.py \
             test_update_signing.py \
             test_mcp_setup.py \
-            test_ollama_council.py; do
+            test_ollama_council.py \
+            test_install_entrypoints.py \
+            test_ui_product_coherence.py; do
               echo "::group::$t"
               python "$t"
               echo "::endgroup::"
           done
+
+  desktop-ui-smoke:
+    name: Desktop UI smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt runtime
+        run: python -m pip install PyQt6==6.11.0
+      - name: Compile product surfaces
+        run: python -m py_compile ui.py styles.py ember_browser.py
+      - name: Verify installers and cross-platform product wiring
+        run: |
+          python test_install_entrypoints.py
+          python test_ui_product_coherence.py
+          python test_ember_browser_product.py
+      - name: Open primary Qt surfaces offscreen
+        env:
+          QT_QPA_PLATFORM: offscreen
+          EMBER_SAFE_MODE: "1"
+        run: python test_ui_smoke.py

@@ -36,6 +36,40 @@ def test_clean_file_is_clean():
     assert r["ok"] and r["verdict"] == "clean", r
 
 
+def test_scan_result_is_explainable_and_does_not_overclaim_safety():
+    p = _write("explainable.txt", "ordinary business document\n")
+    r = antivirus.scan_file(str(p), deep=False)
+    assert r["classification"] == "no-known-threats", r
+    assert r["assurance"] == "no-known-threats", r
+    assert r["confidence"] in ("limited", "moderate"), r
+    assert r["detection_id"].startswith("EMB-")
+    assert isinstance(r["coverage"], dict) and isinstance(r["evidence"], list)
+    assert r["privacy"]["file_uploaded"] is False
+
+
+def test_unknown_sample_upload_is_private_by_default():
+    assert antivirus.DEFAULT_CONFIG["vt_upload_unknown"] is False
+    assert antivirus.DEFAULT_CONFIG["on_malware"] == "quarantine"
+
+
+def test_legacy_policy_migrates_to_consent_and_evidence_preservation():
+    import json
+    old = os.environ["EMBER_SUPPORT_DIR"]
+    isolated = tempfile.mkdtemp(prefix="ember_legacy_security_")
+    os.environ["EMBER_SUPPORT_DIR"] = isolated
+    try:
+        antivirus._config_path().write_text(json.dumps({
+            "on_malware": "quarantine_autodelete",
+            "vt_upload_unknown": True,
+        }), "utf-8")
+        cfg = antivirus.get_config()
+        assert cfg["on_malware"] == "quarantine"
+        assert cfg["vt_upload_unknown"] is False
+        assert cfg["response_policy_version"] == 2
+    finally:
+        os.environ["EMBER_SUPPORT_DIR"] = old
+
+
 def test_eicar_is_malicious():
     p = _write("eicar.com", antivirus.EICAR_SIG)
     r = antivirus.scan_file(str(p), deep=False)
@@ -65,7 +99,48 @@ def test_quarantine_list_and_restore_roundtrip():
     assert r["ok"] and dest.exists(), r
 
 
+def test_quarantine_ids_do_not_collide_for_identical_files():
+    a = _write("same-a.bin", b"identical evidence")
+    b = _write("same-b.bin", b"identical evidence")
+    qa = antivirus.quarantine_file(str(a))
+    qb = antivirus.quarantine_file(str(b))
+    assert qa["ok"] and qb["ok"]
+    assert qa["id"] != qb["id"] and qa["stored_path"] != qb["stored_path"]
+
+
+def test_quarantine_integrity_blocks_tampered_restore():
+    p = _write("tamper-me.bin", b"original evidence")
+    q = antivirus.quarantine_file(str(p))
+    stored = Path(q["stored_path"])
+    os.chmod(stored, 0o600)
+    stored.write_bytes(b"altered after containment")
+    verification = antivirus.verify_quarantined(q["id"])
+    assert verification["ok"] and verification["integrity_ok"] is False
+    restored = antivirus.restore_quarantined(q["id"])
+    assert restored["ok"] is False and "integrity" in restored["error"]
+    assert stored.exists()
+
+
+def test_failed_quarantine_delete_keeps_index_entry():
+    p = _write("undeletable.bin", b"retain index on failure")
+    q = antivirus.quarantine_file(str(p))
+    stored = Path(q["stored_path"])
+    original_unlink = Path.unlink
+    def fail_this(path_obj, *args, **kwargs):
+        if path_obj == stored:
+            raise PermissionError("simulated delete denial")
+        return original_unlink(path_obj, *args, **kwargs)
+    Path.unlink = fail_this
+    try:
+        result = antivirus.delete_quarantined(q["id"])
+        assert result["ok"] is False
+        assert any(item["id"] == q["id"] for item in antivirus.list_quarantine()["items"])
+    finally:
+        Path.unlink = original_unlink
+
+
 def test_purge_expired_deletes_after_grace_period():
+    antivirus.set_config(on_malware="quarantine_autodelete", autodelete_days=1)
     p = _write("sample2.exe", b"MZ\x00\x01")
     q = antivirus.quarantine_file(str(p))
     entries = antivirus._load_index()
@@ -73,9 +148,12 @@ def test_purge_expired_deletes_after_grace_period():
         if e["id"] == q["id"]:
             e["delete_after"] = 1  # an epoch firmly in the past
     antivirus._save_index(entries)
-    res = antivirus.purge_expired()
-    assert q["id"] in res["purged"], res
-    assert not Path(q["stored_path"]).exists()
+    try:
+        res = antivirus.purge_expired()
+        assert q["id"] in res["purged"], res
+        assert not Path(q["stored_path"]).exists()
+    finally:
+        antivirus.set_config(on_malware="quarantine", autodelete_days=30)
 
 
 def test_gate_download_quarantines_malicious():
@@ -119,7 +197,69 @@ def test_security_status_reports_engines():
 def test_config_roundtrip():
     antivirus.set_config(autodelete_days=3)
     assert antivirus.get_config()["autodelete_days"] == 3
-    antivirus.set_config(autodelete_days=7)
+    antivirus.set_config(autodelete_days=30)
+
+
+def test_ai_triage_never_clears_engine_findings():
+    antivirus.set_ai_judge(lambda items: [False for _ in items])
+    finding = {"path": str(_write("triage.ps1", "Write-Host hello\n")),
+               "verdict": "suspicious", "reasons": ["script requires review"]}
+    kept, cleared = antivirus.ai_review_flagged([finding])
+    assert cleared == []
+    assert len(kept) == 1 and kept[0]["ai_assessment"] == "likely-benign"
+    assert kept[0]["verdict"] == "suspicious"
+    antivirus.set_ai_judge(None)
+
+
+def test_legacy_delete_policy_is_overridden_by_containment():
+    antivirus.set_config(on_malware="delete")
+    p = _write("legacy-delete-eicar.com", antivirus.EICAR_SIG)
+    scan = antivirus.scan_file(str(p), deep=False)
+    handled = antivirus._handle_malicious(str(p), scan)
+    try:
+        assert handled["ok"] and handled["action"] == "quarantined", handled
+        assert not p.exists()
+        assert any(i["id"] == handled["id"] for i in antivirus.list_quarantine()["items"])
+    finally:
+        antivirus.set_config(on_malware="quarantine")
+
+
+def test_manual_retention_cancels_old_auto_delete_deadlines():
+    antivirus.set_config(on_malware="quarantine")
+    p = _write("retain-evidence.bin", b"incident evidence")
+    q = antivirus.quarantine_file(str(p))
+    entries = antivirus._load_index()
+    for entry in entries:
+        if entry.get("id") == q["id"]:
+            entry["delete_after"] = 1
+    antivirus._save_index(entries)
+    result = antivirus.purge_expired()
+    assert q["id"] not in result["purged"]
+    assert Path(q["stored_path"]).exists()
+    assert next(e for e in antivirus._load_index() if e["id"] == q["id"])["delete_after"] is None
+
+
+def test_security_audit_chain_and_report_redact_credentials():
+    old = os.environ["EMBER_SUPPORT_DIR"]
+    isolated = tempfile.mkdtemp(prefix="ember_endpoint_audit_")
+    os.environ["EMBER_SUPPORT_DIR"] = isolated
+    try:
+        antivirus.audit_event("test_detection", {"detection_id": "EMB-123"})
+        antivirus.audit_event("test_containment", {"quarantine_id": "q-1"})
+        audit = antivirus.security_audit()
+        assert audit["integrity_ok"] is True and audit["total"] == 2, audit
+        antivirus.set_config(vt_api_key="super-secret-security-key")
+        report = antivirus.security_report()
+        blob = str(report)
+        assert "super-secret-security-key" not in blob
+        assert report["policy"]["vt_api_key_configured"] is True
+        # Altering a retained record is detected.
+        lines = antivirus._audit_path().read_text("utf-8").splitlines()
+        lines[0] = lines[0].replace("test_detection", "tampered_detection")
+        antivirus._audit_path().write_text("\n".join(lines) + "\n", "utf-8")
+        assert antivirus.security_audit()["integrity_ok"] is False
+    finally:
+        os.environ["EMBER_SUPPORT_DIR"] = old
 
 
 # --- stronger static analysis: entropy + behavioral IOCs -----------------------

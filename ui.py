@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QSizePolicy, QSystemTrayIcon, QMenu,
     QComboBox, QCheckBox, QTabWidget, QListWidget, QListWidgetItem,
     QInputDialog, QFileDialog, QGraphicsOpacityEffect, QGraphicsDropShadowEffect,
-    QSlider, QLayout, QGroupBox, QProgressBar, QStackedWidget,
+    QSlider, QLayout, QGroupBox, QProgressBar, QStackedWidget, QGridLayout,
 )
 
 import models as model_catalog
@@ -96,6 +96,9 @@ SLASH_COMMANDS = {
     "/macros": "__macros__",
     "/localai": "__local_ai__",
     "/ollama": "__local_ai__",
+    "/storage": "__storage__",
+    "/network": "__network_inspector__",
+    "/clipboard": "__clipboard__",
 }
 
 HELP_TEXT = """Tip: click the ✨ Features button (top of the window) for a searchable list of
@@ -147,6 +150,9 @@ Features (open a tool)
   /snippets   manage reusable text snippets
   /macros     save & run named task macros
   /localai    use a local Ollama model (offline, no key, no limits)
+  /storage    open the visual large-file and duplicate-file inspector
+  /network    inspect Wi-Fi, connections, listening ports, and nearby devices
+  /clipboard  open a private, temporary clipboard history
   /usage      show API usage vs the free-tier limits
   /plugins    manage drop-in plugin tools
   /manual     bridge an external AI
@@ -183,10 +189,13 @@ Tip: just say "organize my Downloads", "find duplicates in Pictures",
 # anything else is a prompt/slash that gets sent to Ember as a request.
 COMMAND_CENTER_GROUPS = [
     ("Apps & tools", [
-        ("📱 Phone Link",     "__remote__",      "Control this Mac from your phone (Ember Link)"),
+        ("📱 Phone Link",     "__remote__",      "Control this computer from your phone (Ember Link)"),
         ("🌐 Ember Browser",  "__browser_app__", "Open the secure AI browser — tab groups + password manager"),
         ("🛡 Antivirus",      "__antivirus__",   "Open the Antivirus app — scan, quarantine, real-time protection"),
         ("🚫 Ad blocker",     "__adblock__",     "Block ads & trackers system-wide (every app, not just the browser)"),
+        ("💾 Storage",        "__storage__",     "Find large files and duplicates with a safe visual scanner"),
+        ("⌁ Network",         "__network_inspector__", "Inspect Wi-Fi, devices, connections, and listening ports"),
+        ("▣ Clipboard",       "__clipboard__",   "Use a private clipboard history while this window is open"),
         ("📦 Sandbox",        "__sandbox__",     "Run a file safely in an isolated sandbox"),
         ("🔐 Passwords",      "__passwords__",   "Saved website logins (encrypted)"),
         ("🌍 VPN",            "__vpn__",         "Connect / disconnect your WireGuard VPN"),
@@ -281,12 +290,15 @@ FEATURE_CATALOG = [
         ("📱", "Phone Link (Ember Link)", "Control this computer from your phone over Wi-Fi, PIN-protected.", ("open", "__remote__")),
     ]),
     ("Productivity", [
+        ("💾", "Storage inspector", "Find large files and duplicate copies, then move unwanted items to Trash.", ("open", "__storage__")),
+        ("▣", "Clipboard history", "Temporarily capture, preview, and reuse copied text. Nothing is uploaded.", ("open", "__clipboard__")),
         ("✂️", "Snippets", "Save reusable text and expand it anywhere.", ("open", "__snippets__")),
         ("📋", "Macros", "Save and run named task macros.", ("open", "__macros__")),
         ("🔴", "Screen recorder", "Record your screen to a video file.", ("open", "__screen_record__")),
         ("📊", "Usage dashboard", "See API calls & tokens vs the free-tier limits.", ("open", "__usage__")),
     ]),
     ("Diagnose your PC", [
+        ("⌁", "Network inspector", "Review Wi-Fi details, nearby devices, active connections, and listening ports.", ("open", "__network_inspector__")),
         ("🩺", "Full diagnosis", "Scan crashes, errors and health in one go.", ("open", "/diagnose")),
         ("📈", "Performance snapshot", "Live CPU / memory / disk.", ("open", "/perf")),
         ("💻", "System info", "OS / CPU / GPU / RAM.", ("open", "/info")),
@@ -437,7 +449,7 @@ def load_settings() -> dict:
         "mcp_bridge_port": 8770,
         "mcp_bridge_allow_high_risk": False,  # allow high-risk tools over MCP with no human confirm
         "auto_update": True,
-        "lean_tools": True,
+        "lean_tools": False,
         "offline_mode": False,        # no internet: local brain + local tools, network tools fail fast
         "auto_lockdown_on_critical": False,  # panic: auto stop-AI + cut-network + lock on a critical threat
         "hotkey": "ctrl+shift+space",
@@ -446,6 +458,7 @@ def load_settings() -> dict:
         "mouse_speed": 1.0,           # pointer movement speed multiplier (0.25x–3.0x)
         "request_timeout_seconds": 15,
         "animations_enabled": True,
+        "motion_level": "dynamic",  # dynamic | smooth | reduced | off
         "glow_enabled": True,
         "font_size": 12,
         "accent_color": "#7aa2f7",
@@ -580,7 +593,7 @@ def autocorrect_chat_text(text: str) -> tuple[str, bool]:
     return text2, changed or text2 != text
 
 
-from styles import _glass_style, STYLE  # stylesheets live in styles.py
+from styles import _glass_style, STYLE, WORKSPACE_POLISH  # stylesheets live in styles.py
 
 
 
@@ -651,6 +664,43 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y() + m.bottom()
 
 
+def _dialog_header(title: str, description: str, eyebrow: str = "EMBER", mark: str = "E") -> QFrame:
+    """Reusable product header for every secondary Ember surface."""
+    frame = QFrame()
+    frame.setObjectName("dialogHeader")
+    row = QHBoxLayout(frame)
+    row.setContentsMargins(13, 11, 15, 11)
+    row.setSpacing(11)
+    icon = QLabel(mark)
+    icon.setObjectName("dialogMark")
+    icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    icon.setFixedSize(38, 38)
+    row.addWidget(icon)
+    copy = QVBoxLayout()
+    copy.setContentsMargins(0, 0, 0, 0)
+    copy.setSpacing(0)
+    overline = QLabel(eyebrow.upper())
+    overline.setObjectName("dialogEyebrow")
+    heading = QLabel(title)
+    heading.setObjectName("dialogTitle")
+    heading.setWordWrap(True)
+    sub = QLabel(description)
+    sub.setObjectName("dialogDescription")
+    sub.setWordWrap(True)
+    copy.addWidget(overline)
+    copy.addWidget(heading)
+    copy.addWidget(sub)
+    row.addLayout(copy, 1)
+    frame.heading_label = heading
+    frame.description_label = sub
+    return frame
+
+
+def _polish_dialog(dialog: QDialog) -> None:
+    """Apply the shared surface system without relying on a parent window's stylesheet."""
+    dialog.setStyleSheet(STYLE + WORKSPACE_POLISH)
+
+
 class EventBridge(QObject):
     """Marshals agent events from worker threads to the UI thread."""
     event = pyqtSignal(object)
@@ -660,6 +710,7 @@ class EventBridge(QObject):
     chat_title = pyqtSignal(str, str)
     agent_ready = pyqtSignal()  # emitted from a worker thread once google.genai is imported
     update_available = pyqtSignal(object)  # emitted from the background update-check thread
+    update_progress = pyqtSignal(int)  # download percentage from the updater worker
     notice = pyqtSignal(str)  # post a one-line system bubble from a background thread
     source_updated = pyqtSignal(str)  # a git source checkout fast-forwarded to a new version
     wake_detected = pyqtSignal()  # the "hey ember" wake word was heard (from the wake thread)
@@ -943,23 +994,30 @@ class ManualModeDialog(QDialog):
 
     def __init__(self, recent_chat: list[str], last_screen_summary: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Manual mode — bridge an external AI")
+        self.setWindowTitle("External AI Bridge")
         self.setMinimumSize(700, 640)
         self._recent_chat = recent_chat
         self._last_screen_summary = last_screen_summary
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 12)
+        layout.setSpacing(9)
+        layout.addWidget(_dialog_header(
+            "External AI Bridge",
+            "Hand a difficult task to another model, then review and run the code it returns.",
+            eyebrow="HUMAN-IN-THE-LOOP WORKFLOW", mark="↗"))
 
         info = QLabel(
-            "Use this when Ember's API is exhausted or you want a stronger model.\n"
-            "1) Edit your request below.   2) Copy the prompt → paste into Claude.ai / ChatGPT.\n"
-            "3) Paste the response code back below → Run."
+            "1  Describe the outcome   ·   2  Copy the generated prompt into another AI   ·   "
+            "3  Review its code here before running it"
         )
-        info.setStyleSheet("color: #565f89; font-size: 11px;")
+        info.setObjectName("dialogStatus")
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        layout.addWidget(QLabel("Your request:"))
+        request_label = QLabel("OUTCOME")
+        request_label.setObjectName("fieldLabel")
+        layout.addWidget(request_label)
         self.request_input = QPlainTextEdit()
         self.request_input.setPlaceholderText("e.g. organize my Downloads by type, but skip files modified today")
         self.request_input.setMaximumHeight(70)
@@ -977,8 +1035,11 @@ class ManualModeDialog(QDialog):
         lang_row.addWidget(self.build_btn)
         layout.addLayout(lang_row)
 
-        layout.addWidget(QLabel("Prompt for external AI (Copy → paste into Claude.ai / ChatGPT):"))
+        prompt_label = QLabel("GENERATED PROMPT")
+        prompt_label.setObjectName("fieldLabel")
+        layout.addWidget(prompt_label)
         self.prompt_view = QPlainTextEdit()
+        self.prompt_view.setObjectName("codeSurface")
         self.prompt_view.setReadOnly(True)
         self.prompt_view.setMaximumHeight(180)
         layout.addWidget(self.prompt_view)
@@ -990,8 +1051,11 @@ class ManualModeDialog(QDialog):
         copy_row.addStretch()
         layout.addLayout(copy_row)
 
-        layout.addWidget(QLabel("Paste the AI's response code here:"))
+        code_label = QLabel("REVIEW RETURNED CODE")
+        code_label.setObjectName("fieldLabel")
+        layout.addWidget(code_label)
         self.code_input = QPlainTextEdit()
+        self.code_input.setObjectName("codeSurface")
         self.code_input.setPlaceholderText("Paste Python / PowerShell code returned by the external AI…")
         layout.addWidget(self.code_input, 1)
 
@@ -1006,13 +1070,16 @@ class ManualModeDialog(QDialog):
         run_row.addWidget(self.run_btn)
         layout.addLayout(run_row)
 
-        layout.addWidget(QLabel("Output:"))
+        output_label = QLabel("RUN OUTPUT")
+        output_label.setObjectName("fieldLabel")
+        layout.addWidget(output_label)
         self.output_view = QPlainTextEdit()
+        self.output_view.setObjectName("codeSurface")
         self.output_view.setReadOnly(True)
         self.output_view.setMaximumHeight(150)
         layout.addWidget(self.output_view)
 
-        self.setStyleSheet(STYLE)
+        _polish_dialog(self)
 
     def _build_prompt(self):
         req = self.request_input.toPlainText().strip()
@@ -1227,6 +1294,8 @@ class _KeyCaptureEdit(QLineEdit):
 
 
 class SettingsDialog(QDialog):
+    _mcp_setup_done = pyqtSignal(str, object)
+
     """Tabbed settings: Models · Performance · Automations · Memory · Security · About."""
 
     def __init__(self, settings: dict, parent=None, automation_engine=None, only_tab=None):
@@ -1239,13 +1308,23 @@ class SettingsDialog(QDialog):
         # (its tab shown, the tab bar hidden, retitled). All tabs are still BUILT so the shared
         # get_settings() save path is unchanged — we just don't show the others.
         self._only_tab = only_tab
+        self._mcp_setup_done.connect(self._on_mcp_setup_done)
 
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 12)
+        outer.setSpacing(10)
+        self._settings_header = _dialog_header(
+            "Settings", "Configure Ember's models, behavior, privacy, and integrations.",
+            eyebrow="PREFERENCES", mark="⚙")
+        outer.addWidget(self._settings_header)
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("settingsTabs")
+        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.tabs.setDocumentMode(True)
         self.tabs.setUsesScrollButtons(False)
         tab_bar = self.tabs.tabBar()
         tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
-        tab_bar.setExpanding(False)
+        tab_bar.setExpanding(True)
         outer.addWidget(self.tabs)
 
         # Build each tab defensively: if one builder raises, the dialog still opens with the rest
@@ -1283,8 +1362,9 @@ class SettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        save_btn = QPushButton("Save")
-        save_btn.setObjectName("send")
+        save_btn = QPushButton("Save changes")
+        save_btn.setObjectName("primaryBtn")
+        save_btn.setDefault(True)
         save_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
@@ -1292,7 +1372,7 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(save_btn)
         outer.addLayout(btn_row)
 
-        self.setStyleSheet(STYLE)
+        _polish_dialog(self)
 
     # --- layout helpers (keep every tab tidy + prevent clipped/elided text) ---
     def _new_form(self):
@@ -1318,7 +1398,7 @@ class SettingsDialog(QDialog):
 
     def _hint(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #565f89; font-size: 11px;")
+        lbl.setStyleSheet("color: #8f99ad; font-size: 11px;")
         lbl.setWordWrap(True)
         return lbl
 
@@ -1359,6 +1439,12 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
         self.setWindowTitle(f"Ember — {title}")
+        try:
+            self._settings_header.heading_label.setText(title)
+            self._settings_header.description_label.setText(
+                f"Focused {title.lower()} controls. Changes apply when you save.")
+        except Exception:
+            pass
         self.setMinimumSize(660, 520)
 
     def _add_tab(self, page, title: str, scroll: bool = True):
@@ -1552,9 +1638,24 @@ class SettingsDialog(QDialog):
         layout = self._new_form()
         page.setLayout(layout)
 
-        self.animations_check = QCheckBox("Enable bubble fade-in + typing animations")
+        self.animations_check = QCheckBox("Enable interface motion")
         self.animations_check.setChecked(bool(self.settings.get("animations_enabled", True)))
         layout.addRow(self.animations_check)
+
+        self.motion_combo = QComboBox()
+        for label, value in (("Dynamic — expressive motion", "dynamic"),
+                             ("Smooth — calm motion", "smooth"),
+                             ("Reduced — essential motion only", "reduced"),
+                             ("Off — no motion", "off")):
+            self.motion_combo.addItem(label, userData=value)
+        current_motion = str(self.settings.get("motion_level", "dynamic"))
+        for i in range(self.motion_combo.count()):
+            if self.motion_combo.itemData(i) == current_motion:
+                self.motion_combo.setCurrentIndex(i)
+                break
+        self.motion_combo.setEnabled(self.animations_check.isChecked())
+        self.animations_check.toggled.connect(self.motion_combo.setEnabled)
+        layout.addRow("Motion style:", self.motion_combo)
 
         self.autocorrect_check = QCheckBox("Autocorrect ordinary chat prompts before sending")
         self.autocorrect_check.setChecked(bool(self.settings.get("autocorrect_chat", True)))
@@ -1642,7 +1743,7 @@ class SettingsDialog(QDialog):
         note = QLabel(
             "Appearance changes apply when you save. Restart Ember via Ember.bat to fully refresh."
         )
-        note.setStyleSheet("color: #565f89; font-size: 11px;")
+        note.setStyleSheet("color: #8f99ad; font-size: 11px;")
         note.setWordWrap(True)
         layout.addRow(note)
 
@@ -1679,7 +1780,7 @@ class SettingsDialog(QDialog):
         self.mic_test_btn.clicked.connect(self._test_microphone)
         self.mic_test_status = QLabel("")
         self.mic_test_status.setWordWrap(True)
-        self.mic_test_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        self.mic_test_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
         layout.addRow(self.mic_test_btn, self.mic_test_status)
 
         self.wake_visual_combo = QComboBox()
@@ -1822,7 +1923,7 @@ class SettingsDialog(QDialog):
             "AI decide turn-taking. Voice chat uses the same brain as typed chat; mic permission "
             "is required."
         )
-        note.setStyleSheet("color: #565f89; font-size: 11px;")
+        note.setStyleSheet("color: #8f99ad; font-size: 11px;")
         note.setWordWrap(True)
         layout.addRow(note)
 
@@ -1870,7 +1971,7 @@ class SettingsDialog(QDialog):
             "faster-whisper (pip install faster-whisper); otherwise it uses your Gemini key or "
             "free Google speech. macOS needs Accessibility + Microphone permission."
         )
-        ptt_note.setStyleSheet("color: #565f89; font-size: 11px;")
+        ptt_note.setStyleSheet("color: #8f99ad; font-size: 11px;")
         ptt_note.setWordWrap(True)
         layout.addRow(ptt_note)
 
@@ -1881,7 +1982,7 @@ class SettingsDialog(QDialog):
         audio, then reports EXACTLY what's wrong (missing pyaudio / no permission / no device) or
         confirms it works. This is the fastest path out of 'voice does nothing and I don't know why'."""
         self.mic_test_btn.setEnabled(False)
-        self.mic_test_status.setStyleSheet("color: #565f89; font-size: 11px;")
+        self.mic_test_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
         self.mic_test_status.setText("Testing… say a few words.")
         try:
             QApplication.processEvents()
@@ -1892,12 +1993,11 @@ class SettingsDialog(QDialog):
             ok, detail = voice.mic_available()
             if not ok:
                 hint = detail
-                if "pyaudio" in detail.lower():
-                    hint = ("Microphone support (PyAudio) isn’t installed.\n"
-                            "Install it, then reopen Ember:\n"
-                            "  macOS:  brew install portaudio && pip install pyaudio\n"
-                            "  Windows:  pip install pyaudio\n"
-                            "  Linux:  sudo apt install portaudio19-dev && pip install pyaudio")
+                if "pyaudio" in detail.lower() or "sounddevice" in detail.lower():
+                    hint = ("Microphone input could not start.\n"
+                            "Repair Ember's portable backend, then reopen it:\n"
+                            "  pip install --upgrade sounddevice SpeechRecognition\n"
+                            "PyAudio remains an optional alternate backend.")
                 self.mic_test_status.setStyleSheet("color: #f7768e; font-size: 11px;")
                 self.mic_test_status.setText("❌ " + hint)
                 return
@@ -1938,34 +2038,53 @@ class SettingsDialog(QDialog):
             return "", ""                              # captured, just couldn't transcribe offline
 
     def _setup_mcp_claude(self):
-        """One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config,
-        so the user never has to touch a terminal or find a Python path."""
-        self.mcp_setup_btn.setEnabled(False)
-        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
-        self.mcp_setup_status.setText("Setting up… installing the MCP SDK (this can take a minute).")
-        try:
-            QApplication.processEvents()
-        except Exception:
-            pass
-        try:
-            import mcp_setup
-            res = mcp_setup.setup_claude_desktop()
-        except Exception as e:
-            res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        self._start_mcp_setup("claude")
+
+    def _setup_mcp_chatgpt(self):
+        self._start_mcp_setup("chatgpt")
+
+    def _start_mcp_setup(self, client: str):
+        """Install/start MCP off the UI thread so Settings never freezes during pip work."""
+        for button in (getattr(self, "mcp_chatgpt_btn", None),
+                       getattr(self, "mcp_setup_btn", None)):
+            if button is not None:
+                button.setEnabled(False)
+        self.mcp_setup_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        self.mcp_setup_status.setText(
+            f"Setting up {client.title()}… installing/verifying the free MCP runtime.")
+        def work():
+            try:
+                import mcp_setup
+                res = (mcp_setup.start_chatgpt_mcp() if client == "chatgpt"
+                       else mcp_setup.setup_claude_desktop())
+            except Exception as exc:
+                res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            self._mcp_setup_done.emit(client, res)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_mcp_setup_done(self, client: str, res: dict):
         if res.get("ok"):
             try:
                 self.mcp_bridge_check.setChecked(True)   # ensure the bridge turns on when saved
             except Exception:
                 pass
             self.mcp_setup_status.setStyleSheet("color: #9ece6a; font-size: 11px;")
-            self.mcp_setup_status.setText(
-                "✅ Claude Desktop is configured. Click Save (turns the bridge on), then fully "
-                "quit and reopen Claude Desktop — Ember appears under its tools icon.\n"
-                f"Config: {res.get('config')}")
+            if client == "chatgpt":
+                self.mcp_setup_status.setText(
+                    "ChatGPT MCP is running locally with every Ember tool. In ChatGPT developer "
+                    "mode, create an app with Secure MCP Tunnel and use:\n"
+                    f"{res.get('url')}\nRefresh its metadata after Ember updates.")
+            else:
+                self.mcp_setup_status.setText(
+                    "Claude Desktop is configured. Click Save, fully quit and reopen Claude "
+                    f"Desktop. Config: {res.get('config')}")
         else:
             self.mcp_setup_status.setStyleSheet("color: #f7768e; font-size: 11px;")
-            self.mcp_setup_status.setText("❌ " + str(res.get("error", "setup failed")))
-        self.mcp_setup_btn.setEnabled(True)
+            self.mcp_setup_status.setText(str(res.get("error", "setup failed")))
+        for button in (getattr(self, "mcp_chatgpt_btn", None),
+                       getattr(self, "mcp_setup_btn", None)):
+            if button is not None:
+                button.setEnabled(True)
 
     def _build_performance_tab(self):
         page = QWidget()
@@ -1986,7 +2105,7 @@ class SettingsDialog(QDialog):
         layout.addRow(self.remote_autostart_check)
 
         self.mcp_bridge_check = QCheckBox(
-            "🔌 MCP bridge — let external MCP clients (Claude Desktop, Cursor) control Ember")
+            "MCP bridge — expose every Ember tool to ChatGPT and other MCP clients")
         self.mcp_bridge_check.setChecked(bool(self.settings.get("mcp_bridge_enabled", False)))
         self.mcp_bridge_check.setToolTip(
             "Exposes Ember's tools over the Model Context Protocol on a loopback-only, "
@@ -2002,14 +2121,19 @@ class SettingsDialog(QDialog):
             "to approve them there. On: they run unattended — only enable if you trust the client.")
         layout.addRow(self.mcp_highrisk_check)
 
-        # One-click: install the mcp SDK into Ember's Python and write Claude Desktop's config
-        # automatically — no terminal, no path hunting.
-        self.mcp_setup_btn = QPushButton("⚙️  Set up Claude Desktop (one-click)")
+        self.mcp_chatgpt_btn = QPushButton("Start ChatGPT MCP")
+        self.mcp_chatgpt_btn.setObjectName("primaryBtn")
+        self.mcp_chatgpt_btn.clicked.connect(self._setup_mcp_chatgpt)
+        self.mcp_setup_btn = QPushButton("Set up Claude Desktop")
         self.mcp_setup_btn.clicked.connect(self._setup_mcp_claude)
         self.mcp_setup_status = QLabel("")
         self.mcp_setup_status.setWordWrap(True)
-        self.mcp_setup_status.setStyleSheet("color: #565f89; font-size: 11px;")
-        layout.addRow(self.mcp_setup_btn, self.mcp_setup_status)
+        self.mcp_setup_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        mcp_buttons = QHBoxLayout()
+        mcp_buttons.addWidget(self.mcp_chatgpt_btn)
+        mcp_buttons.addWidget(self.mcp_setup_btn)
+        layout.addRow(mcp_buttons)
+        layout.addRow(self.mcp_setup_status)
 
         self.keep_bg_check = QCheckBox(
             "Keep running in the background when closed (so “Hey Ember” still works)")
@@ -2058,9 +2182,12 @@ class SettingsDialog(QDialog):
         self.timeout_input.setPlaceholderText("seconds, 10-60 (lower = faster failover)")
         layout.addRow("API request timeout (s):", self.timeout_input)
 
-        self.lean_tools_check = QCheckBox("Lean tools — faster calls / fewer rate limits "
-                                          "(loads only core tools, hides niche utilities)")
-        self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", True)))
+        self.lean_tools_check = QCheckBox(
+            "Compact built-in model tool list (MCP still exposes every tool)")
+        self.lean_tools_check.setChecked(bool(self.settings.get("lean_tools", False)))
+        self.lean_tools_check.setToolTip(
+            "Off by default: Ember's built-in model receives every tool. Turn this on only if a "
+            "provider rejects very large tool lists. External MCP clients always receive all tools.")
         layout.addRow(self.lean_tools_check)
 
         self.offline_mode_check = QCheckBox("Offline Mode — no internet (local AI + local tools only)")
@@ -2091,7 +2218,7 @@ class SettingsDialog(QDialog):
             "If status shows 'failed', another app may have claimed the same combo "
             "(common: Ctrl+Shift+D = Chrome Bookmarks). Try Ctrl+Alt+A or Ctrl+Shift+Space."
         )
-        note.setStyleSheet("color: #565f89; font-size: 11px;")
+        note.setStyleSheet("color: #8f99ad; font-size: 11px;")
         note.setWordWrap(True)
         layout.addRow(note)
         self._add_tab(page, "Performance")
@@ -2104,7 +2231,7 @@ class SettingsDialog(QDialog):
             "Background rules. When the trigger fires, Ember runs the action automatically - "
             "no API calls needed. Edit automations.json next to the exe for advanced tweaks."
         )
-        head.setStyleSheet("color: #565f89; font-size: 11px;")
+        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
         head.setWordWrap(True)
         v.addWidget(head)
 
@@ -2211,7 +2338,7 @@ class SettingsDialog(QDialog):
         page = QWidget()
         v = QVBoxLayout(page)
         head = QLabel("Facts Ember has remembered about your system / preferences.")
-        head.setStyleSheet("color: #565f89; font-size: 11px;")
+        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
         v.addWidget(head)
         import memory
         facts = memory._load().get("facts", {})
@@ -2263,7 +2390,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(page, "About")
 
     def _build_security_tab(self):
-        """Security & Pro: malware protection, web protection, agent mode, VPN, audit."""
+        """Security controls: malware protection, web protection, agent mode, VPN, and audit."""
         from PyQt6.QtWidgets import QScrollArea
         page = QWidget()
         v = QVBoxLayout(page)
@@ -2280,14 +2407,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(scroll, "Security")
 
     def _populate_security_tab(self, v):
-        import antivirus, web_policy, safety, plan, audit, vpn
-
-        p = plan.get_plan()
-        plan_lbl = QLabel(
-            "<b>Plan:</b> " + ("Pro ✓ — all features unlocked (free for everyone)"
-                               if p.get("is_pro") else f"{p.get('plan')}"))
-        plan_lbl.setTextFormat(Qt.TextFormat.RichText)
-        v.addWidget(plan_lbl)
+        import antivirus, web_policy, safety, audit, vpn
 
         dash_row = QHBoxLayout()
         dash_btn = QPushButton("🛡️  Security dashboard")
@@ -2302,7 +2422,7 @@ class SettingsDialog(QDialog):
 
         def _section(text):
             lbl = QLabel(text)
-            lbl.setStyleSheet("color:#565f89; font-size:11px; margin-top:8px;")
+            lbl.setStyleSheet("color:#8f99ad; font-size:11px; margin-top:8px;")
             v.addWidget(lbl)
 
         # --- Malware protection ---
@@ -2334,7 +2454,7 @@ class SettingsDialog(QDialog):
         st = antivirus.security_status()
         eng = QLabel("Engines: " + ", ".join(st.get("engines_available", []))
                      + f"   ·   Sandbox: {st.get('sandbox_available')}")
-        eng.setStyleSheet("color:#565f89; font-size:11px;")
+        eng.setStyleSheet("color:#8f99ad; font-size:11px;")
         eng.setWordWrap(True)
         v.addWidget(eng)
 
@@ -2353,8 +2473,8 @@ class SettingsDialog(QDialog):
         row.addStretch()
         v.addLayout(row)
 
-        # --- Real-time protection (always active) ---
-        _section("Real-time protection (always active)")
+        # --- Real-time protection ---
+        _section("Real-time protection")
         self._sec_dl_guard = QCheckBox("Real-time download protection (auto-scan new downloads)")
         self._sec_dl_guard.setChecked(bool(self.settings.get("download_protection", True)))
         self._sec_dl_guard.stateChanged.connect(self._toggle_download_guard)
@@ -2387,7 +2507,7 @@ class SettingsDialog(QDialog):
         except Exception:
             rt_state = "unavailable"
         self._sec_fileless_lbl = QLabel(f"Process monitor: {rt_state}")
-        self._sec_fileless_lbl.setStyleSheet("color:#565f89; font-size:11px;")
+        self._sec_fileless_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
         rt_row.addWidget(self._sec_fileless_lbl)
         proc_btn = QPushButton("Scan running processes now")
         proc_btn.clicked.connect(self._scan_processes_ui)
@@ -2402,7 +2522,7 @@ class SettingsDialog(QDialog):
         self._sec_auto_lockdown.setChecked(bool(self.settings.get("auto_lockdown_on_critical", False)))
         self._sec_auto_lockdown.setToolTip(
             "If Ember detects a confirmed-malicious event, it immediately stops its own AI, turns "
-            "off Wi-Fi, and locks the screen — containing a compromise in seconds. Off by default.")
+            "off Wi-Fi, and locks the screen. Off by default; review this response policy before enabling.")
         self._sec_auto_lockdown.stateChanged.connect(self._toggle_auto_lockdown)
         v.addWidget(self._sec_auto_lockdown)
         panic_row = QHBoxLayout()
@@ -2425,7 +2545,7 @@ class SettingsDialog(QDialog):
         v.addWidget(self._sec_center)
 
         self._sec_center_lbl = QLabel(self._security_center_summary())
-        self._sec_center_lbl.setStyleSheet("color:#565f89; font-size:11px;")
+        self._sec_center_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
         self._sec_center_lbl.setWordWrap(True)
         v.addWidget(self._sec_center_lbl)
 
@@ -2468,7 +2588,7 @@ class SettingsDialog(QDialog):
         v.addLayout(mrow)
         mhint = QLabel("full = all tools · restricted = no high-risk actions · "
                        "read_only = safe read-only tools only")
-        mhint.setStyleSheet("color:#565f89; font-size:11px;")
+        mhint.setStyleSheet("color:#8f99ad; font-size:11px;")
         mhint.setWordWrap(True)
         v.addWidget(mhint)
 
@@ -2491,7 +2611,7 @@ class SettingsDialog(QDialog):
         v.addLayout(rmrow)
         rmhint = QLabel("auto = autonomous · plan = propose a plan and wait · "
                         "chat = talk only · read_only = investigate only")
-        rmhint.setStyleSheet("color:#565f89; font-size:11px;")
+        rmhint.setStyleSheet("color:#8f99ad; font-size:11px;")
         rmhint.setWordWrap(True)
         v.addWidget(rmhint)
 
@@ -2517,9 +2637,9 @@ class SettingsDialog(QDialog):
             self._mouse_speed_slider.sliderReleased.connect(self._persist_mouse_speed)
             srow = QHBoxLayout()
             slow = QLabel("slow")
-            slow.setStyleSheet("color:#565f89; font-size:11px;")
+            slow.setStyleSheet("color:#8f99ad; font-size:11px;")
             fast = QLabel("fast")
-            fast.setStyleSheet("color:#565f89; font-size:11px;")
+            fast.setStyleSheet("color:#8f99ad; font-size:11px;")
             srow.addWidget(slow)
             srow.addWidget(self._mouse_speed_slider, 1)
             srow.addWidget(fast)
@@ -2539,7 +2659,7 @@ class SettingsDialog(QDialog):
             import integrations
             chans = integrations.list_integrations().get("channels", [])
             self._intg_lbl = QLabel("Connected: " + (", ".join(c["channel"] for c in chans) or "none"))
-            self._intg_lbl.setStyleSheet("color:#565f89; font-size:11px;")
+            self._intg_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
             v.addWidget(self._intg_lbl)
             irow = QHBoxLayout()
             conn_btn = QPushButton("Connect a channel…")
@@ -2569,7 +2689,7 @@ class SettingsDialog(QDialog):
             if not vl.get("wireguard_installed"):
                 vtxt += "   ·   Install the free WireGuard app (Mac App Store) to connect"
             self._vpn_status_lbl = QLabel(vtxt)
-            self._vpn_status_lbl.setStyleSheet("color:#565f89; font-size:11px;")
+            self._vpn_status_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
             self._vpn_status_lbl.setWordWrap(True)
             v.addWidget(self._vpn_status_lbl)
 
@@ -2791,7 +2911,7 @@ class SettingsDialog(QDialog):
                 return "Security Center: unavailable"
             bs = st.get("by_source", {})
             return (f"Security Center: {'running' if st.get('running') else 'stopped'} · "
-                    f"{st.get('scan_cycles', 0)} scan cycles · {st.get('threats_found', 0)} threats "
+                    f"{st.get('scan_cycles', 0)} scan cycles · {st.get('threats_found', 0)} findings "
                     f"(process {bs.get('process',0)} · file {bs.get('file',0)} · "
                     f"network {bs.get('network',0)} · persistence {bs.get('persistence',0)})")
         except Exception as e:
@@ -2969,11 +3089,16 @@ class SettingsDialog(QDialog):
         box.setWindowTitle("Security dashboard")
         box.setMinimumSize(480, 420)
         v = QVBoxLayout(box)
-        head = QLabel(f"Security score: {d.get('score')}/100 — grade {d.get('grade')} "
-                     f"({d.get('rating')})")
+        head = QLabel(f"Security-control coverage: {d.get('score')}/100 ({d.get('rating')})")
         head.setStyleSheet("font-weight:700;font-size:15px;")
         head.setWordWrap(True)
         v.addWidget(head)
+        honesty = QLabel(
+            "This measures which protection controls are enabled. It is not proof that the "
+            "device is safe and it is not a threat count.")
+        honesty.setObjectName("dialogStatus")
+        honesty.setWordWrap(True)
+        v.addWidget(honesty)
 
         for c in d.get("components", []):
             row = QLabel(("✓ " if c["ok"] else "! ") + c["label"])
@@ -3326,6 +3451,7 @@ class SettingsDialog(QDialog):
         # Appearance tab
         if hasattr(self, "animations_check"):
             self.settings["animations_enabled"] = self.animations_check.isChecked()
+            self.settings["motion_level"] = self.motion_combo.currentData() or "dynamic"
             self.settings["autocorrect_chat"] = self.autocorrect_check.isChecked()
             self.settings["glow_enabled"] = self.glow_check.isChecked()
             self.settings["font_size"] = int(self.font_size_slider.value())
@@ -3455,22 +3581,24 @@ class FeaturesDialog(QDialog):
     def __init__(self, on_action, parent=None):
         super().__init__(parent)
         self._on_action = on_action
-        self.setWindowTitle("Everything Ember can do")
+        self.setWindowTitle("Ember Command Palette")
         self.setMinimumSize(660, 640)
         outer = QVBoxLayout(self)
-        head = QLabel("✨ Features")
-        head.setObjectName("title")
-        outer.addWidget(head)
-        sub = QLabel("Click any feature to open it or drop an example into the chat. "
-                     "Search to find anything fast.")
-        sub.setStyleSheet("color:#9aa0b5; font-size:12px;")
-        sub.setWordWrap(True)
-        outer.addWidget(sub)
+        outer.setContentsMargins(14, 14, 14, 12)
+        outer.setSpacing(9)
+        outer.addWidget(_dialog_header(
+            "Command Palette", "Search every action, app, automation, and setting in Ember.",
+            eyebrow="DISCOVER & LAUNCH", mark="⌕"))
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search features…  (try: voice, vpn, organize, malware)")
+        self.search.setPlaceholderText("Search actions… try “voice”, “organize”, or “security”")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter)
+        self.search.returnPressed.connect(self._open_first_visible)
         outer.addWidget(self.search)
+        self._result_label = QLabel("")
+        self._result_label.setObjectName("dialogStatus")
+        outer.addWidget(self._result_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3479,16 +3607,23 @@ class FeaturesDialog(QDialog):
         self._vbox = QVBoxLayout(inner)
         self._vbox.setSpacing(4)
         self._sections = []        # (section_label_widget, [row_widgets])
-        self._rows = []            # (row_widget, haystack, section_label_widget)
+        self._rows = []            # (row_widget, haystack, section_label_widget, action)
         self._build_rows()
         self._vbox.addStretch(1)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
+        footer = QHBoxLayout()
+        foot_hint = QLabel("Enter opens the first result  ·  Esc closes")
+        foot_hint.setObjectName("dialogStatus")
+        footer.addWidget(foot_hint)
+        footer.addStretch()
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
-        outer.addWidget(close)
-        self.setStyleSheet(STYLE)
+        footer.addWidget(close)
+        outer.addLayout(footer)
+        _polish_dialog(self)
+        self._filter("")
         QTimer.singleShot(0, self.search.setFocus)
 
     def _build_rows(self):
@@ -3500,26 +3635,37 @@ class FeaturesDialog(QDialog):
             section_rows = []
             for emoji, name, desc, action in feats:
                 row = QFrame()
-                row.setObjectName("commandAction")
+                row.setObjectName("featureRow")
                 h = QHBoxLayout(row)
-                h.setContentsMargins(10, 7, 10, 7)
-                txt = QLabel(f"<b>{emoji}  {name}</b><br>"
-                             f"<span style='color:#9aa0b5'>{desc}</span>")
-                txt.setTextFormat(Qt.TextFormat.RichText)
-                txt.setWordWrap(True)
-                h.addWidget(txt, 1)
+                h.setContentsMargins(9, 8, 9, 8)
+                h.setSpacing(10)
+                glyph = QLabel(emoji)
+                glyph.setObjectName("featureIcon")
+                glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                glyph.setFixedSize(34, 34)
+                h.addWidget(glyph)
+                copy = QVBoxLayout()
+                copy.setSpacing(1)
+                feat_name = QLabel(name)
+                feat_name.setObjectName("featureName")
+                feat_desc = QLabel(desc)
+                feat_desc.setObjectName("featureDescription")
+                feat_desc.setWordWrap(True)
+                copy.addWidget(feat_name)
+                copy.addWidget(feat_desc)
+                h.addLayout(copy, 1)
                 kind = action[0]
                 btn_label = {"open": "Open", "type": "Try", "settings": "Settings"}.get(kind, "")
                 if btn_label:
                     b = QPushButton(btn_label)
-                    b.setObjectName("send")
+                    b.setObjectName("secondaryBtn")
                     b.setCursor(Qt.CursorShape.PointingHandCursor)
                     b.setFixedWidth(96)
                     b.clicked.connect(lambda _=False, a=action: self._do(a))
                     h.addWidget(b)
                 self._vbox.addWidget(row)
                 section_rows.append(row)
-                self._rows.append((row, f"{name} {desc} {category}".lower(), sec))
+                self._rows.append((row, f"{name} {desc} {category}".lower(), sec, action))
             self._sections.append((sec, section_rows))
 
     def _do(self, action):
@@ -3535,17 +3681,31 @@ class FeaturesDialog(QDialog):
 
     def _filter(self, text):
         q = (text or "").strip().lower()
-        for row, hay, _sec in self._rows:
-            row.setVisible((q in hay) if q else True)
+        visible = 0
+        for row, hay, _sec, _action in self._rows:
+            matches = (q in hay) if q else True
+            row.setVisible(matches)
+            visible += int(matches)
         # Hide a section header when every row under it is filtered out.
         for sec, rows in self._sections:
             sec.setVisible(True if not q else any(r.isVisible() for r in rows))
+        self._result_label.setText(
+            f"{visible} result{'s' if visible != 1 else ''}" + (f" for “{text.strip()}”" if q else ""))
+
+    def _open_first_visible(self):
+        for row, _hay, _sec, action in self._rows:
+            if row.isVisible():
+                self._do(action)
+                return
 
 
 class AntivirusDialog(QDialog):
-    """A standalone graphical Antivirus app: scan, quarantine management, real-time
-    protection toggles, process scan and sandbox — all in one window instead of buried in
-    Settings. Scans run off the UI thread and report back via _scan_done."""
+    """Evidence-first endpoint security console.
+
+    The interface deliberately distinguishes confirmed malware from heuristic findings, keeps
+    destructive actions behind quarantine, exposes actual engine coverage, and never uses a
+    marketing score as a substitute for scan evidence.
+    """
     _scan_done = pyqtSignal(dict)
     _progress_sig = pyqtSignal(int, int, str)
     _reviewed_sig = pyqtSignal(object, object)   # (kept, cleared) after AI false-positive review
@@ -3555,76 +3715,129 @@ class AntivirusDialog(QDialog):
         import antivirus
         self._av = antivirus
         self._settings = getattr(parent, "settings", {}) or {}
-        self._last_flagged = []   # threats from the latest scan (for the actions panel)
-        self.setWindowTitle("Ember Antivirus")
-        self.setMinimumSize(720, 720)
+        self._last_flagged = []   # evidence records from the latest scan
+        self.setWindowTitle("Ember Endpoint Security")
+        self.setMinimumSize(900, 720)
+        self._scan_cancel = threading.Event()
         self._scan_done.connect(self._on_scan_done)
         self._progress_sig.connect(self._on_progress)
         self._reviewed_sig.connect(self._on_reviewed)
-        # AI second opinion: clears heuristic false positives (source code, installers, docs).
+        # AI may add a triage opinion, but it never clears or downgrades engine evidence.
         try:
             self._av.set_ai_judge(self._ai_judge)
         except Exception:
             pass
 
         v = QVBoxLayout(self)
-        title = QLabel("🛡  Ember Antivirus")
-        title.setObjectName("title")
-        v.addWidget(title)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(8)
+        v.addWidget(_dialog_header(
+            "Endpoint Security",
+            "Evidence-led malware defense, behavioral monitoring, containment, and audit history.",
+            eyebrow="PROTECTION CONSOLE", mark="◆"))
+
+        self._health = QLabel("")
+        self._health.setObjectName("securityHealth")
+        self._health.setWordWrap(True)
+        v.addWidget(self._health)
+
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        v.addWidget(self._tabs, 1)
+
+        overview = QWidget()
+        overview_v = QVBoxLayout(overview)
+        overview_v.setContentsMargins(12, 12, 12, 12)
+        overview_v.setSpacing(9)
+        self._tabs.addTab(overview, "Overview")
+
+        findings = QWidget()
+        findings_v = QVBoxLayout(findings)
+        findings_v.setContentsMargins(12, 12, 12, 12)
+        findings_v.setSpacing(8)
+        self._tabs.addTab(findings, "Findings")
+
+        quarantine = QWidget()
+        quarantine_v = QVBoxLayout(quarantine)
+        quarantine_v.setContentsMargins(12, 12, 12, 12)
+        quarantine_v.setSpacing(8)
+        self._tabs.addTab(quarantine, "Quarantine")
+
+        activity = QWidget()
+        activity_v = QVBoxLayout(activity)
+        activity_v.setContentsMargins(12, 12, 12, 12)
+        activity_v.setSpacing(8)
+        self._tabs.addTab(activity, "Activity")
+
         self._status = QLabel("")
-        self._status.setStyleSheet("color:#9aa0b5; font-size:12px;")
+        self._status.setObjectName("dialogStatus")
         self._status.setWordWrap(True)
-        v.addWidget(self._status)
+        overview_v.addWidget(self._status)
 
         scan_row = QHBoxLayout()
-        for label, fn, primary in (("🔍  Scan a folder…", self._scan_folder, True),
-                                   ("⚡  Quick scan", self._quick_scan, False),
-                                   ("🧠  Scan processes", self._scan_processes, False),
-                                   ("📦  Sandbox a file…", self._sandbox, False)):
+        for label, fn, primary in (("Scan a folder…", self._scan_folder, True),
+                                   ("Quick scan", self._quick_scan, False),
+                                   ("Processes", self._scan_processes, False),
+                                   ("Network", lambda: self._investigate_surface("network"), False),
+                                   ("Persistence", lambda: self._investigate_surface("persistence"), False),
+                                   ("Sandbox…", self._sandbox, False)):
             b = QPushButton(label)
             if primary:
                 b.setObjectName("send")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(fn)
             scan_row.addWidget(b)
-        v.addLayout(scan_row)
+        overview_v.addLayout(scan_row)
 
         self._progress = QLabel("")
         self._progress.setStyleSheet("color:#e0af68; font-size:12px;")
-        v.addWidget(self._progress)
+        overview_v.addWidget(self._progress)
         self._bar = QProgressBar()
         self._bar.setTextVisible(False)
         self._bar.setFixedHeight(6)
         self._bar.setVisible(False)
-        v.addWidget(self._bar)
+        overview_v.addWidget(self._bar)
+        self._cancel_btn = QPushButton("Stop scan")
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.clicked.connect(self._cancel_scan)
+        overview_v.addWidget(self._cancel_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
-        # --- Threats found (Norton-style: per-item Quarantine / Delete / Ignore) ---
-        th = QLabel("Threats found")
+        th = QLabel("Findings")
         th.setObjectName("sectionTitle")
-        th.setStyleSheet("color:#ff6b6b; font-weight:600; margin-top:8px;")
-        v.addWidget(th)
+        findings_v.addWidget(th)
+        finding_note = QLabel(
+            "Confirmed malware and heuristic findings are kept separate. “No known threats” "
+            "does not mean a file is provably safe.")
+        finding_note.setObjectName("dialogStatus")
+        finding_note.setWordWrap(True)
+        findings_v.addWidget(finding_note)
         self._threats_list = QListWidget()
-        self._threats_list.setMaximumHeight(150)
-        v.addWidget(self._threats_list)
+        self._threats_list.setObjectName("dialogList")
+        self._threats_list.itemSelectionChanged.connect(self._show_finding_details)
+        findings_v.addWidget(self._threats_list, 1)
+        self._finding_details = QLabel("Select a finding to inspect its evidence and coverage.")
+        self._finding_details.setObjectName("dialogStatus")
+        self._finding_details.setWordWrap(True)
+        self._finding_details.setMinimumHeight(70)
+        findings_v.addWidget(self._finding_details)
         trow = QHBoxLayout()
-        qb = QPushButton("🔒 Quarantine")
+        qb = QPushButton("Quarantine selected")
         qb.clicked.connect(self._quarantine_threat)
-        xb = QPushButton("🗑 Delete")
-        xb.clicked.connect(self._delete_threat)
-        ib = QPushButton("Ignore")
+        ib = QPushButton("Dismiss from view")
         ib.clicked.connect(self._ignore_threat)
-        qa = QPushButton("Quarantine ALL")
+        qa = QPushButton("Contain confirmed malware")
+        qa.setObjectName("primaryBtn")
         qa.clicked.connect(self._quarantine_all)
-        for b in (qb, xb, ib):
+        for b in (qb, ib):
             trow.addWidget(b)
         trow.addStretch()
         trow.addWidget(qa)
-        v.addLayout(trow)
+        findings_v.addLayout(trow)
 
         rt = QLabel("Real-time protection")
         rt.setObjectName("sectionTitle")
         rt.setStyleSheet("color:#cdd3ea; font-weight:600; margin-top:8px;")
-        v.addWidget(rt)
+        overview_v.addWidget(rt)
         self._chk_dl = QCheckBox("Download protection — auto-scan new downloads")
         self._chk_fl = QCheckBox("Fileless / behavioral protection (process monitor)")
         self._chk_sc = QCheckBox("Always-on Security Center (files · network · persistence)")
@@ -3635,42 +3848,130 @@ class AntivirusDialog(QDialog):
         self._chk_fl.stateChanged.connect(lambda s: self._toggle_guard("fileless", bool(s)))
         self._chk_sc.stateChanged.connect(lambda s: self._toggle_guard("center", bool(s)))
         for c in (self._chk_dl, self._chk_fl, self._chk_sc):
-            v.addWidget(c)
+            overview_v.addWidget(c)
+
+        privacy = QLabel("Cloud reputation & data handling")
+        privacy.setObjectName("sectionTitle")
+        overview_v.addWidget(privacy)
+        cfg = self._av.get_config()
+        self._chk_vt_hash = QCheckBox("Check file hashes with VirusTotal reputation")
+        self._chk_vt_hash.setChecked(bool(cfg.get("vt_hash_lookup", True)))
+        self._chk_vt_upload = QCheckBox(
+            "Share unknown file samples with VirusTotal (file contents leave this device)")
+        self._chk_vt_upload.setChecked(bool(cfg.get("vt_upload_unknown", False)))
+        self._chk_vt_upload.setToolTip(
+            "Off by default. Enable only when your organisation permits third-party sample sharing.")
+        self._chk_vt_hash.stateChanged.connect(
+            lambda state: self._toggle_cloud("vt_hash_lookup", bool(state)))
+        self._chk_vt_upload.stateChanged.connect(
+            lambda state: self._toggle_cloud("vt_upload_unknown", bool(state)))
+        overview_v.addWidget(self._chk_vt_hash)
+        overview_v.addWidget(self._chk_vt_upload)
+        privacy_note = QLabel(
+            "Local scanning always runs. Hash lookups share only SHA-256. Sample sharing is "
+            "separate, explicit, and disabled by default.")
+        privacy_note.setObjectName("dialogStatus")
+        privacy_note.setWordWrap(True)
+        overview_v.addWidget(privacy_note)
+        overview_v.addStretch()
 
         q = QLabel("Quarantine")
         q.setObjectName("sectionTitle")
         q.setStyleSheet("color:#cdd3ea; font-weight:600; margin-top:8px;")
-        v.addWidget(q)
+        quarantine_v.addWidget(q)
+        qnote = QLabel(
+            "Contained files are neutralised and retained for investigation. Permanent deletion "
+            "is available only here, after containment.")
+        qnote.setObjectName("dialogStatus")
+        qnote.setWordWrap(True)
+        quarantine_v.addWidget(qnote)
         self._qlist = QListWidget()
-        v.addWidget(self._qlist, 1)
+        self._qlist.setObjectName("dialogList")
+        quarantine_v.addWidget(self._qlist, 1)
         qrow = QHBoxLayout()
         rb = QPushButton("Restore selected")
         rb.clicked.connect(self._restore)
+        vb = QPushButton("Verify integrity")
+        vb.clicked.connect(self._verify_quarantine)
         db = QPushButton("Delete selected")
+        db.setObjectName("dangerBtn")
         db.clicked.connect(self._delete)
         rf = QPushButton("Refresh")
         rf.clicked.connect(self._refresh)
         qrow.addWidget(rb)
+        qrow.addWidget(vb)
         qrow.addWidget(db)
         qrow.addStretch()
         qrow.addWidget(rf)
-        v.addLayout(qrow)
+        quarantine_v.addLayout(qrow)
+
+        audit_head = QLabel("Security activity")
+        audit_head.setObjectName("sectionTitle")
+        activity_v.addWidget(audit_head)
+        self._audit_status = QLabel("")
+        self._audit_status.setObjectName("dialogStatus")
+        self._audit_status.setWordWrap(True)
+        activity_v.addWidget(self._audit_status)
+        self._audit_list = QListWidget()
+        self._audit_list.setObjectName("dialogList")
+        activity_v.addWidget(self._audit_list, 1)
+        audit_actions = QHBoxLayout()
+        refresh_audit = QPushButton("Refresh activity")
+        refresh_audit.clicked.connect(self._refresh)
+        export_report = QPushButton("Export security report…")
+        export_report.clicked.connect(self._export_report)
+        audit_actions.addWidget(refresh_audit)
+        audit_actions.addStretch()
+        audit_actions.addWidget(export_report)
+        activity_v.addLayout(audit_actions)
 
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         v.addWidget(close)
-        self.setStyleSheet(STYLE)
+        _polish_dialog(self)
         self._refresh()
 
     # ---- status / quarantine ----
     def _refresh(self):
         try:
             st = self._av.security_status()
-            eng = ", ".join(st.get("engines_available", []) or []) or "built-in heuristics"
+            state = st.get("protection_state", "attention")
+            state_title = {
+                "protected": "Protection active",
+                "limited": "Local protection active — coverage is limited",
+                "attention": "Protection needs attention",
+                "off": "Protection is off",
+            }.get(state, "Protection status unavailable")
+            providers = st.get("providers") or {}
+            active = [label for key, label in (
+                ("local_static", "local static analysis"),
+                ("platform_antivirus", "platform antivirus"),
+                ("cloud_reputation", "cloud reputation"),
+                ("behavior_monitor", "behavior monitoring"),
+                ("security_center", "continuous monitoring"),
+            ) if providers.get(key)]
+            self._health.setText(
+                f"{state_title}   ·   {len(active)} active protection layer(s)   ·   "
+                f"{st.get('quarantine_count', 0)} contained item(s)")
+            self._health.setProperty("state", state)
+            self._health.style().unpolish(self._health)
+            self._health.style().polish(self._health)
+            gaps = st.get("coverage_gaps") or []
             self._status.setText(
-                f"Engines: {eng}    ·    Sandbox: {st.get('sandbox_available')}    ·    "
-                f"Quarantine: {st.get('quarantine_count', 0)} item(s)")
+                "Active layers: " + (", ".join(active) or "none") +
+                f"\nIsolation: {st.get('sandbox_available', 'none')}" +
+                ("\nCoverage notes: " + " ".join(gaps) if gaps else ""))
+            if not st.get("vt_api_key_configured"):
+                self._chk_vt_hash.setText(
+                    "Check file hashes with VirusTotal reputation (API key required in Settings)")
+                self._chk_vt_upload.setText(
+                    "Share unknown file samples with VirusTotal (API key required; contents leave device)")
+            else:
+                self._chk_vt_hash.setText("Check file hashes with VirusTotal reputation")
+                self._chk_vt_upload.setText(
+                    "Share unknown file samples with VirusTotal (file contents leave this device)")
         except Exception as e:
+            self._health.setText("Protection status unavailable")
             self._status.setText(f"status unavailable: {e}")
         self._qlist.clear()
         try:
@@ -3682,6 +3983,93 @@ class AntivirusDialog(QDialog):
                 self._qlist.addItem(item)
         except Exception:
             pass
+        self._audit_list.clear()
+        try:
+            audit = self._av.security_audit(250)
+            self._audit_status.setText(
+                ("Audit chain verified" if audit.get("integrity_ok") else
+                 "Audit integrity warning — records may have been altered or damaged") +
+                f"   ·   {audit.get('total', 0)} event(s)")
+            for event in reversed(audit.get("events", [])):
+                details = event.get("details") or {}
+                summary = (details.get("original_path") or details.get("root") or
+                           details.get("restored_to") or "")
+                item = QListWidgetItem(
+                    f"{event.get('time', '?')}   {str(event.get('action', '')).replace('_', ' ')}"
+                    + (f"   ·   {summary}" if summary else ""))
+                item.setToolTip(json.dumps(details, indent=2, ensure_ascii=False))
+                self._audit_list.addItem(item)
+        except Exception as exc:
+            self._audit_status.setText(f"Activity unavailable: {exc}")
+
+    def _toggle_cloud(self, key: str, enabled: bool):
+        try:
+            if key == "vt_upload_unknown" and enabled:
+                if QMessageBox.question(
+                        self, "Enable file sample sharing?",
+                        "Unknown files may be uploaded to VirusTotal and shared with security "
+                        "vendors. Do not enable this for confidential or regulated data unless "
+                        "your organisation permits it.",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                        ) != QMessageBox.StandardButton.Yes:
+                    self._chk_vt_upload.blockSignals(True)
+                    self._chk_vt_upload.setChecked(False)
+                    self._chk_vt_upload.blockSignals(False)
+                    return
+            self._av.set_config(**{key: enabled})
+            self._refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Cloud reputation", str(exc))
+
+    def _cancel_scan(self):
+        self._scan_cancel.set()
+        self._cancel_btn.setEnabled(False)
+        self._progress.setText("Stopping after the current file…")
+
+    def _export_report(self):
+        default = str(Path.home() / f"Ember-Security-Report-{time.strftime('%Y%m%d-%H%M')}.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export security report", default, "JSON report (*.json)")
+        if not path:
+            return
+        try:
+            report = self._av.security_report()
+            Path(path).write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", "utf-8")
+            self._av.audit_event("security_report_exported", {"destination": path})
+            QMessageBox.information(self, "Security report", "Report exported successfully.")
+            self._refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Security report", f"Could not export report: {exc}")
+
+    def _show_finding_details(self):
+        path = self._selected_threat_path()
+        finding = next((f for f in self._last_flagged if f.get("path") == path), None)
+        if not finding:
+            self._finding_details.setText("Select a finding to inspect its evidence and coverage.")
+            return
+        reasons = "\n".join(f"• {r}" for r in (finding.get("reasons") or []))
+        engines = ", ".join(finding.get("engines") or []) or "local analysis"
+        advisory = finding.get("ai_assessment")
+        self._finding_details.setText(
+            f"{finding.get('classification', finding.get('verdict', 'finding'))}   ·   "
+            f"confidence {finding.get('confidence', 'unknown')}   ·   "
+            f"ID {finding.get('detection_id', 'pending')}\n"
+            f"Engines: {engines}\n{reasons}"
+            + (f"\nAI triage (advisory only): {advisory}" if advisory else ""))
+
+    def _investigate_surface(self, surface: str):
+        self._progress.setText(f"Inspecting {surface} activity…")
+        self._bar.setRange(0, 0)
+        self._bar.setVisible(True)
+        def work():
+            try:
+                import security_center
+                result = (security_center.scan_network() if surface == "network"
+                          else security_center.scan_persistence())
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            self._scan_done.emit({"_surface": surface, "result": result})
+        threading.Thread(target=work, daemon=True).start()
 
     def _selected_quarantine_id(self):
         it = self._qlist.currentItem()
@@ -3699,9 +4087,27 @@ class AntivirusDialog(QDialog):
         QMessageBox.information(self, "Restore", "Restored." if r.get("ok") else f"Failed: {r.get('error')}")
         self._refresh()
 
+    def _verify_quarantine(self):
+        qid = self._selected_quarantine_id()
+        if not qid:
+            return
+        result = self._av.verify_quarantined(qid)
+        if result.get("ok") and result.get("integrity_ok"):
+            QMessageBox.information(self, "Evidence integrity", result.get("message"))
+        else:
+            QMessageBox.warning(
+                self, "Evidence integrity warning",
+                result.get("error") or result.get("message") or "Integrity verification failed.")
+        self._refresh()
+
     def _delete(self):
         qid = self._selected_quarantine_id()
         if not qid:
+            return
+        if QMessageBox.question(
+                self, "Delete quarantined file",
+                "Permanently delete the selected quarantined file? This cannot be undone."
+                ) != QMessageBox.StandardButton.Yes:
             return
         r = self._av.delete_quarantined(qid)
         QMessageBox.information(self, "Delete", "Deleted." if r.get("ok") else f"Failed: {r.get('error')}")
@@ -3720,7 +4126,10 @@ class AntivirusDialog(QDialog):
             self._run_scan(roots)
 
     def _run_scan(self, paths):
-        self._progress.setText("🔄 Starting scan…")
+        self._scan_cancel.clear()
+        self._cancel_btn.setEnabled(True)
+        self._cancel_btn.setVisible(True)
+        self._progress.setText("Starting scan…")
         self._bar.setRange(0, 0)          # indeterminate until first progress tick
         self._bar.setVisible(True)
         self._threats_list.clear()
@@ -3729,14 +4138,21 @@ class AntivirusDialog(QDialog):
         def _prog(scanned, flagged, cur):
             self._progress_sig.emit(scanned, flagged, cur)
 
+        cloud = bool(self._chk_vt_hash.isChecked() or self._chk_vt_upload.isChecked())
         def work():
-            agg = {"scanned": 0, "flagged": [], "errors": []}
+            agg = {"scanned": 0, "flagged": [], "errors": [], "cancelled": False}
             for p in paths:
+                if self._scan_cancel.is_set():
+                    agg["cancelled"] = True
+                    break
                 try:
-                    r = self._av.scan_directory(p, deep=True, max_files=100000, progress=_prog)
+                    r = self._av.scan_directory(
+                        p, deep=cloud, max_files=100000, progress=_prog,
+                        cancel=self._scan_cancel.is_set)
                     if r.get("ok"):
                         agg["scanned"] += r.get("scanned", 0)
                         agg["flagged"] += r.get("flagged", []) or []
+                        agg["cancelled"] = agg["cancelled"] or bool(r.get("cancelled"))
                     else:
                         agg["errors"].append(r.get("error", "scan failed"))
                 except Exception as e:
@@ -3748,10 +4164,33 @@ class AntivirusDialog(QDialog):
         # Live progress data instead of a beachball.
         self._bar.setRange(0, 0)
         name = Path(cur).name if cur else ""
-        self._progress.setText(f"🔄 Scanned {scanned} files · {flagged} flagged   {name[:48]}")
+        self._progress.setText(f"Scanned {scanned} files · {flagged} finding(s)   {name[:48]}")
 
     def _on_scan_done(self, agg):
         self._progress.setText("")
+        self._bar.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setEnabled(True)
+        if "_surface" in agg:
+            surface = agg.get("_surface", "security")
+            result = agg.get("result") or {}
+            if not result.get("ok"):
+                QMessageBox.warning(self, f"{surface.title()} inspection",
+                                    result.get("error", "Inspection failed."))
+                return
+            flagged = result.get("flagged") or result.get("findings") or []
+            count = len(flagged) if isinstance(flagged, list) else int(flagged or 0)
+            self._av.audit_event(f"{surface}_inspection_completed", {
+                "findings": count,
+                "observed": result.get("connections_seen") or result.get("entries_seen") or 0,
+            })
+            QMessageBox.information(
+                self, f"{surface.title()} inspection",
+                f"Inspection complete. {count} finding(s) require review.\n\n"
+                "Open Activity for the recorded operation; detailed Security Center events "
+                "remain available to Ember's security tools.")
+            self._refresh()
+            return
         # Process-scan result.
         if "_processes" in agg:
             r = agg["_processes"]
@@ -3780,31 +4219,35 @@ class AntivirusDialog(QDialog):
                     f"Ran via {r.get('method', 'sandbox')} · verdict: {r.get('verdict_hint', '?')} · "
                     f"exit {r.get('exit_code')}")
             return
-        # Folder scan finished — populate the Threats panel (Norton-style) with actions.
-        self._bar.setVisible(False)
+        # Folder scan finished — populate the evidence-led Findings panel.
         flagged = agg.get("flagged", [])
         self._last_flagged = list(flagged)
         self._threats_list.clear()
         mal = [f for f in flagged if f.get("verdict") == "malicious"]
         if flagged:
             self._progress.setText(
-                f"⚠ {len(flagged)} threat(s) found in {agg.get('scanned', 0)} files "
-                f"({len(mal)} malicious). Select one and choose an action below.")
+                f"{len(flagged)} finding(s) in {agg.get('scanned', 0)} files: "
+                f"{len(mal)} confirmed malware, {len(flagged) - len(mal)} require review.")
             for f in flagged:
                 reasons = "; ".join(f.get("reasons", []) or [])[:90]
-                icon = "🟥" if f.get("verdict") == "malicious" else "🟧"
-                item = QListWidgetItem(f"{icon} {Path(f['path']).name}  —  {f.get('verdict')}  ·  {reasons}")
+                label = "CONFIRMED" if f.get("verdict") == "malicious" else "REVIEW"
+                item = QListWidgetItem(
+                    f"{label}   {Path(f['path']).name}   ·   {reasons}")
                 item.setData(Qt.ItemDataRole.UserRole, f["path"])
                 item.setToolTip(f["path"])
                 self._threats_list.addItem(item)
+            self._tabs.setCurrentIndex(1)
         else:
-            self._progress.setText(f"✓ Scanned {agg.get('scanned', 0)} files — no threats found.")
+            self._progress.setText(
+                f"Scanned {agg.get('scanned', 0)} files — no known indicators found.")
+        if agg.get("cancelled"):
+            self._progress.setText(self._progress.text() + " Scan stopped by user.")
         if agg.get("errors"):
             self._progress.setText(self._progress.text() + "  (some errors occurred)")
         self._refresh()
-        # AI second opinion on the heuristic 'suspicious' flags — clears false positives.
+        # AI adds advisory analyst context; it never clears engine findings.
         if any(f.get("verdict") == "suspicious" for f in flagged) and self._ai_available():
-            self._progress.setText(self._progress.text() + "   🤖 AI is reviewing flagged files…")
+            self._progress.setText(self._progress.text() + " AI triage is adding context…")
             items = list(flagged)
             def review():
                 try:
@@ -3826,29 +4269,13 @@ class AntivirusDialog(QDialog):
         return ai_detect.judge_harmful(items, self._settings)
 
     def _on_reviewed(self, kept, cleared):
-        """AI review came back: drop cleared (false-positive) rows + un-quarantine any that were
-        auto-quarantined, and show how many were cleared."""
-        cleared_paths = {f["path"] for f in (cleared or [])}
-        # Un-quarantine any cleared file that real-time protection had auto-quarantined.
-        for f in (cleared or []):
-            try:
-                for it in self._av.list_quarantine().get("items", []):
-                    if it.get("original_path") == f["path"]:
-                        self._av.restore_quarantined(it["id"])
-            except Exception:
-                pass
+        """Attach AI triage context without clearing, restoring, or downgrading a finding."""
         self._last_flagged = list(kept or [])
-        # Remove cleared rows from the list.
-        for row in range(self._threats_list.count() - 1, -1, -1):
-            it = self._threats_list.item(row)
-            if it and it.data(Qt.ItemDataRole.UserRole) in cleared_paths:
-                self._threats_list.takeItem(row)
-        n = len(cleared_paths)
-        base = self._progress.text().split("   🤖")[0]
-        if n:
-            self._progress.setText(base + f"   ✓ AI cleared {n} false positive(s).")
-        else:
-            self._progress.setText(base + "   ✓ AI confirmed the flags.")
+        advisory = sum(bool(f.get("ai_assessment")) for f in self._last_flagged)
+        base = self._progress.text().split(" AI triage")[0]
+        self._progress.setText(
+            base + f" AI triage added advisory context to {advisory} finding(s); verdicts unchanged.")
+        self._show_finding_details()
         self._refresh()
 
     def _selected_threat_path(self):
@@ -3859,7 +4286,18 @@ class AntivirusDialog(QDialog):
         path = self._selected_threat_path()
         if not path:
             return
-        r = self._av.quarantine_file(path, reasons=["quarantined from Antivirus app"])
+        finding = next((f for f in self._last_flagged if f.get("path") == path), {})
+        if finding.get("verdict") != "malicious":
+            if QMessageBox.question(
+                    self, "Contain item under review?",
+                    "This is a heuristic finding, not confirmed malware. Move it into quarantine "
+                    "for investigation anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    ) != QMessageBox.StandardButton.Yes:
+                return
+        r = self._av.quarantine_file(
+            path, reasons=finding.get("reasons") or ["contained from Endpoint Security"],
+            sha256=finding.get("sha256", ""))
         if r.get("ok"):
             self._take_threat_row()
             self._refresh()
@@ -3867,31 +4305,45 @@ class AntivirusDialog(QDialog):
             QMessageBox.warning(self, "Quarantine", r.get("error", "could not quarantine"))
 
     def _quarantine_all(self):
-        if not self._last_flagged:
+        confirmed = [f for f in self._last_flagged if f.get("verdict") == "malicious"
+                     and Path(f.get("path", "")).exists()]
+        if not confirmed:
+            QMessageBox.information(
+                self, "Contain confirmed malware",
+                "There is no uncontained confirmed malware. Review findings remain untouched.")
+            return
+        if QMessageBox.question(
+                self, "Contain confirmed malware",
+                f"Move {len(confirmed)} confirmed-malware item(s) into quarantine?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                ) != QMessageBox.StandardButton.Yes:
             return
         n = 0
-        for f in list(self._last_flagged):
-            if self._av.quarantine_file(f["path"], reasons=f.get("reasons")).get("ok"):
+        contained_paths = set()
+        for f in confirmed:
+            if self._av.quarantine_file(
+                    f["path"], reasons=f.get("reasons"), sha256=f.get("sha256", "")).get("ok"):
                 n += 1
-        self._threats_list.clear()
-        self._last_flagged = []
+                contained_paths.add(f["path"])
+        self._last_flagged = [f for f in self._last_flagged if f.get("path") not in contained_paths]
+        for row in range(self._threats_list.count() - 1, -1, -1):
+            if self._threats_list.item(row).data(Qt.ItemDataRole.UserRole) in contained_paths:
+                self._threats_list.takeItem(row)
         self._refresh()
-        QMessageBox.information(self, "Quarantine", f"Quarantined {n} item(s).")
+        QMessageBox.information(self, "Containment", f"Contained {n} confirmed item(s).")
 
     def _delete_threat(self):
-        path = self._selected_threat_path()
-        if not path:
-            return
-        if QMessageBox.question(self, "Delete file",
-                f"Permanently delete this file?\n\n{path}") != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            Path(path).unlink()
-            self._take_threat_row()
-        except Exception as e:
-            QMessageBox.warning(self, "Delete", f"Could not delete: {e}")
+        # Kept as a compatibility method for older UI callers. Findings are never directly
+        # deleted: contain first, preserve evidence, then delete from the Quarantine tab.
+        QMessageBox.information(
+            self, "Contain before deletion",
+            "Direct deletion is disabled. Quarantine the item first, review its evidence, then "
+            "delete it from the Quarantine tab if your response policy permits.")
 
     def _ignore_threat(self):
+        path = self._selected_threat_path()
+        if path:
+            self._av.audit_event("finding_dismissed_from_view", {"path": path})
         self._take_threat_row()
 
     def _take_threat_row(self):
@@ -3900,6 +4352,7 @@ class AntivirusDialog(QDialog):
             it = self._threats_list.takeItem(row)
             p = it.data(Qt.ItemDataRole.UserRole) if it else None
             self._last_flagged = [f for f in self._last_flagged if f.get("path") != p]
+            self._show_finding_details()
 
     def _scan_processes(self):
         self._progress.setText("🔄 Scanning running processes…")
@@ -3963,15 +4416,11 @@ class AdBlockerDialog(QDialog):
         self._done_sig.connect(self._on_done)
 
         v = QVBoxLayout(self)
-        title = QLabel("🚫  Ember Ad Blocker")
-        title.setObjectName("title")
-        v.addWidget(title)
-        sub = QLabel("Blocks ads & trackers for EVERY app (like Pi-hole) by sinkholing their "
-                     "domains in your computer's hosts file. Turning it on or off asks for your "
-                     "password once.")
-        sub.setStyleSheet("color:#9aa0b5; font-size:12px;")
-        sub.setWordWrap(True)
-        v.addWidget(sub)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(8)
+        v.addWidget(_dialog_header(
+            "Network Blocking", "Manage system-wide ad and tracker blocking for every app.",
+            eyebrow="PRIVACY", mark="⊘"))
         # Honest caveat: this is a DNS-level (hosts file) blocker, which browsers using "Secure
         # DNS" / DNS-over-HTTPS (now the default in Chrome/Firefox for a lot of users) bypass
         # entirely - the browser never asks the OS to resolve the domain, so a hosts-file
@@ -4040,12 +4489,14 @@ class AdBlockerDialog(QDialog):
         bl.setStyleSheet("color:#cdd3ea; font-weight:600; margin-top:8px;")
         v.addWidget(bl)
         self._blocked_list = QListWidget()
+        self._blocked_list.setObjectName("dialogList")
         v.addWidget(self._blocked_list, 1)
 
         al = QLabel("Allowed (whitelisted)")
         al.setStyleSheet("color:#cdd3ea; font-weight:600; margin-top:8px;")
         v.addWidget(al)
         self._allow_list = QListWidget()
+        self._allow_list.setObjectName("dialogList")
         self._allow_list.setMaximumHeight(110)
         v.addWidget(self._allow_list)
 
@@ -4060,7 +4511,7 @@ class AdBlockerDialog(QDialog):
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         v.addWidget(close)
-        self.setStyleSheet(STYLE)
+        _polish_dialog(self)
         self._refresh()
 
     # -- helpers ----------------------------------------------------------
@@ -4167,6 +4618,392 @@ class AdBlockerDialog(QDialog):
                     return
 
 
+class StorageInspectorDialog(QDialog):
+    """Read-first storage browser with safe, reversible cleanup actions."""
+
+    _scan_done = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Storage Inspector")
+        self.setMinimumSize(760, 590)
+        self._scan_done.connect(self._on_scan_done)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(9)
+        v.addWidget(_dialog_header(
+            "Storage Inspector", "Find space-hungry files and duplicate copies before removing anything.",
+            eyebrow="FILES", mark="▤"))
+
+        path_row = QHBoxLayout()
+        self.path_input = QLineEdit(str(Path.home() / "Downloads"))
+        self.path_input.setPlaceholderText("Folder to inspect")
+        path_row.addWidget(self.path_input, 1)
+        browse = QPushButton("Choose folder…")
+        browse.clicked.connect(self._browse)
+        path_row.addWidget(browse)
+        v.addLayout(path_row)
+
+        options = QHBoxLayout()
+        self.mode = QComboBox()
+        self.mode.addItem("Largest files", "large")
+        self.mode.addItem("Duplicate files", "duplicates")
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+        options.addWidget(self.mode)
+        self.threshold = QComboBox()
+        for label, value in (("10 MB+", 10), ("100 MB+", 100), ("500 MB+", 500), ("1 GB+", 1024)):
+            self.threshold.addItem(label, value)
+        self.threshold.setCurrentIndex(1)
+        options.addWidget(self.threshold)
+        options.addStretch()
+        self.scan_btn = QPushButton("Scan")
+        self.scan_btn.setObjectName("primaryBtn")
+        self.scan_btn.clicked.connect(self._scan)
+        options.addWidget(self.scan_btn)
+        v.addLayout(options)
+
+        self.status = QLabel("Scanning is read-only. Nothing moves until you choose an item.")
+        self.status.setObjectName("dialogStatus")
+        v.addWidget(self.status)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        v.addWidget(self.progress)
+
+        self.results = QListWidget()
+        self.results.setObjectName("dialogList")
+        self.results.itemSelectionChanged.connect(self._selection_changed)
+        v.addWidget(self.results, 1)
+
+        actions = QHBoxLayout()
+        self.copy_btn = QPushButton("Copy path")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy_path)
+        self.reveal_btn = QPushButton("Show in folder")
+        self.reveal_btn.setEnabled(False)
+        self.reveal_btn.clicked.connect(self._reveal)
+        self.trash_btn = QPushButton("Move to Trash")
+        self.trash_btn.setObjectName("dangerBtn")
+        self.trash_btn.setEnabled(False)
+        self.trash_btn.clicked.connect(self._trash)
+        actions.addWidget(self.copy_btn)
+        actions.addWidget(self.reveal_btn)
+        actions.addStretch()
+        actions.addWidget(self.trash_btn)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        actions.addWidget(close)
+        v.addLayout(actions)
+        _polish_dialog(self)
+
+    def _mode_changed(self):
+        if self.mode.currentData() == "duplicates" and self.threshold.currentData() == 100:
+            self.threshold.setCurrentIndex(0)
+
+    def _browse(self):
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder", self.path_input.text())
+        if chosen:
+            self.path_input.setText(chosen)
+
+    def _scan(self):
+        path = self.path_input.text().strip()
+        if not path or not Path(path).expanduser().is_dir():
+            QMessageBox.warning(self, "Storage Inspector", "Choose a folder that exists.")
+            return
+        self.results.clear()
+        self.scan_btn.setEnabled(False)
+        self.progress.setVisible(True)
+        self.status.setText("Scanning…")
+        mode = self.mode.currentData()
+        threshold = int(self.threshold.currentData() or 100)
+
+        def work():
+            try:
+                import file_ops
+                if mode == "duplicates":
+                    result = file_ops.find_duplicate_files(path, min_size_kb=max(1, threshold * 1024))
+                else:
+                    result = file_ops.find_large_files(path, min_mb=threshold, max_results=200)
+                result["_mode"] = mode
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc), "_mode": mode}
+            self._scan_done.emit(result)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_scan_done(self, result: dict):
+        self.scan_btn.setEnabled(True)
+        self.progress.setVisible(False)
+        if not result.get("ok"):
+            self.status.setText("Scan failed: " + str(result.get("error", "unknown error")))
+            return
+        if result.get("_mode") == "duplicates":
+            groups = result.get("groups") or []
+            for n, group in enumerate(groups, 1):
+                for file_path in group.get("files") or []:
+                    item = QListWidgetItem(
+                        f"Duplicate group {n}  ·  {group.get('size_mb', 0):,.2f} MB  ·  {file_path}")
+                    item.setData(Qt.ItemDataRole.UserRole, file_path)
+                    self.results.addItem(item)
+            self.status.setText(
+                f"{len(groups)} duplicate group(s) · about {result.get('wasted_mb', 0):,.1f} MB recoverable")
+        else:
+            files = result.get("files") or []
+            for entry in files:
+                item = QListWidgetItem(f"{entry.get('size_mb', 0):,.2f} MB  ·  {entry.get('path', '')}")
+                item.setData(Qt.ItemDataRole.UserRole, entry.get("path"))
+                self.results.addItem(item)
+            self.status.setText(f"{len(files)} file(s) found")
+        if not self.results.count():
+            self.status.setText("No matching files found in this folder.")
+
+    def _selected_path(self) -> str:
+        item = self.results.currentItem()
+        return str(item.data(Qt.ItemDataRole.UserRole) or "") if item else ""
+
+    def _selection_changed(self):
+        enabled = bool(self._selected_path())
+        for button in (self.copy_btn, self.reveal_btn, self.trash_btn):
+            button.setEnabled(enabled)
+
+    def _copy_path(self):
+        path = self._selected_path()
+        if path:
+            QApplication.clipboard().setText(path)
+            self.status.setText("Path copied.")
+
+    def _reveal(self):
+        path = self._selected_path()
+        if not path:
+            return
+        try:
+            import subprocess
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", "/select,", str(Path(path))])
+            else:
+                subprocess.Popen(["xdg-open", str(Path(path).parent)])
+        except Exception as exc:
+            QMessageBox.warning(self, "Show in folder", str(exc))
+
+    def _trash(self):
+        path = self._selected_path()
+        if not path:
+            return
+        if QMessageBox.question(
+                self, "Move file to Trash", f"Move this file to Trash?\n\n{path}"
+                ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            from send2trash import send2trash
+            send2trash(path)
+            row = self.results.currentRow()
+            self.results.takeItem(row)
+            self.status.setText("Moved to Trash. You can restore it from the system Trash.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Move to Trash", str(exc))
+
+
+class NetworkInspectorDialog(QDialog):
+    """Cross-platform, read-only view of the network information Ember already exposes."""
+
+    _result = pyqtSignal(str, dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Network Inspector")
+        self.setMinimumSize(760, 560)
+        self._result.connect(self._show_result)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(9)
+        v.addWidget(_dialog_header(
+            "Network Inspector", "Review local network activity without changing system settings.",
+            eyebrow="NETWORK", mark="⌁"))
+
+        actions = QHBoxLayout()
+        for label, key in (("Wi-Fi", "wifi"), ("Active connections", "connections"),
+                           ("Listening ports", "ports"), ("Nearby devices", "devices")):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, k=key: self._load(k))
+            actions.addWidget(button)
+        actions.addStretch()
+        v.addLayout(actions)
+
+        self.status = QLabel("Choose a view above.")
+        self.status.setObjectName("dialogStatus")
+        v.addWidget(self.status)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        v.addWidget(self.progress)
+        self.results = QListWidget()
+        self.results.setObjectName("dialogList")
+        v.addWidget(self.results, 1)
+
+        footer = QHBoxLayout()
+        privacy = QLabel("Read-only · no information is uploaded")
+        privacy.setObjectName("dialogStatus")
+        footer.addWidget(privacy)
+        footer.addStretch()
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        v.addLayout(footer)
+        _polish_dialog(self)
+
+    def _load(self, key: str):
+        self.results.clear()
+        self.progress.setVisible(True)
+        self.status.setText("Loading…")
+
+        def work():
+            try:
+                if key == "ports":
+                    import utilities
+                    result = utilities.list_open_ports()
+                else:
+                    import nettools
+                    result = {"wifi": nettools.wifi_info,
+                              "connections": nettools.network_connections,
+                              "devices": nettools.network_devices}[key]()
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            self._result.emit(key, result)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_result(self, key: str, result: dict):
+        self.progress.setVisible(False)
+        if not result.get("ok"):
+            self.status.setText(str(result.get("error", "Could not read network information.")))
+            return
+        rows = []
+        if key == "wifi":
+            rows = [f"{name.replace('_', ' ').title()}: {value}" for name, value in result.items()
+                    if name != "ok" and value not in (None, "")]
+        elif key == "connections":
+            rows = [f"{r.get('process') or 'Unknown process'}  ·  {r.get('remote', '')}"
+                    for r in result.get("connections", [])]
+        elif key == "ports":
+            rows = [f"{r.get('proto', '').upper()}  {r.get('addr', '')}  ·  "
+                    f"{r.get('process') or 'Unknown process'}  ·  PID {r.get('pid') or '—'}"
+                    for r in result.get("listening", [])]
+        else:
+            rows = [f"{r.get('ip', '')}  ·  {r.get('mac', '')}" for r in result.get("devices", [])]
+        for text in rows:
+            self.results.addItem(text)
+        self.status.setText(f"{len(rows)} item(s)" if rows else "No items found.")
+
+
+class ClipboardHistoryDialog(QDialog):
+    """Ephemeral, window-scoped clipboard history. Nothing is persisted or uploaded."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Clipboard History")
+        self.setMinimumSize(720, 540)
+        self._items: list[str] = []
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(9)
+        v.addWidget(_dialog_header(
+            "Clipboard History", "Reuse recently copied text while this window remains open.",
+            eyebrow="PRODUCTIVITY", mark="▣"))
+
+        self.capture = QCheckBox("Capture clipboard changes while this window is open")
+        self.capture.setChecked(True)
+        v.addWidget(self.capture)
+
+        split = QHBoxLayout()
+        self.list = QListWidget()
+        self.list.setObjectName("dialogList")
+        self.list.setMaximumWidth(300)
+        self.list.currentRowChanged.connect(self._show_selected)
+        split.addWidget(self.list)
+        self.preview = QPlainTextEdit()
+        self.preview.setObjectName("codeSurface")
+        self.preview.setReadOnly(True)
+        self.preview.setPlaceholderText("Select an item to preview it.")
+        split.addWidget(self.preview, 1)
+        v.addLayout(split, 1)
+
+        footer = QHBoxLayout()
+        clear = QPushButton("Clear history")
+        clear.setObjectName("dangerBtn")
+        clear.clicked.connect(self._clear)
+        footer.addWidget(clear)
+        footer.addStretch()
+        self.use_btn = QPushButton("Copy selected")
+        self.use_btn.setObjectName("primaryBtn")
+        self.use_btn.setEnabled(False)
+        self.use_btn.clicked.connect(self._use_selected)
+        footer.addWidget(self.use_btn)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        v.addLayout(footer)
+
+        note = QLabel("History is kept in memory only and is cleared when this window closes.")
+        note.setObjectName("dialogStatus")
+        v.addWidget(note)
+        _polish_dialog(self)
+
+        self._clipboard = QApplication.clipboard()
+        self._clipboard.dataChanged.connect(self._capture)
+        self._capture()
+
+    def _capture(self):
+        if not self.capture.isChecked():
+            return
+        text = (self._clipboard.text() or "").strip()
+        if not text or (self._items and self._items[0] == text):
+            return
+        self._items.insert(0, text[:10000])
+        self._items = self._items[:50]
+        self._refresh()
+
+    def _refresh(self):
+        current = self.list.currentRow()
+        self.list.blockSignals(True)
+        self.list.clear()
+        for text in self._items:
+            one_line = " ".join(text.split())
+            self.list.addItem(one_line[:70] + ("…" if len(one_line) > 70 else ""))
+        if self._items:
+            self.list.setCurrentRow(max(0, min(current, len(self._items) - 1)))
+        self.list.blockSignals(False)
+        self._show_selected(self.list.currentRow())
+
+    def _show_selected(self, row: int):
+        valid = 0 <= row < len(self._items)
+        self.preview.setPlainText(self._items[row] if valid else "")
+        self.use_btn.setEnabled(valid)
+
+    def _use_selected(self):
+        row = self.list.currentRow()
+        if 0 <= row < len(self._items):
+            self.capture.setChecked(False)
+            self._clipboard.setText(self._items[row])
+            self.capture.setChecked(True)
+
+    def _clear(self):
+        self._items.clear()
+        self._refresh()
+
+    def closeEvent(self, event):
+        try:
+            self._clipboard.dataChanged.disconnect(self._capture)
+        except Exception:
+            pass
+        self._items.clear()
+        super().closeEvent(event)
+
+
 class SetupTourDialog(QDialog):
     """A friendly first-run wizard for people new to AI. Asks how comfortable they are, then
     sets up an AI brain in plain language — including a one-click install of the free offline
@@ -4181,10 +5018,28 @@ class SetupTourDialog(QDialog):
         self._on_finish = on_finish
         self._level = (settings.get("experience_level") or "beginner")
         self.setWindowTitle("Welcome to Ember")
-        self.setMinimumSize(560, 480)
-        self.setStyleSheet(STYLE)
+        self.setMinimumSize(620, 540)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 12)
+        root.setSpacing(10)
+        root.addWidget(_dialog_header(
+            "Set up Ember", "Four quick choices, then your computer assistant is ready.",
+            eyebrow="WELCOME", mark="E"))
+
+        step_rail = QFrame()
+        step_rail.setObjectName("stepRail")
+        step_row = QHBoxLayout(step_rail)
+        step_row.setContentsMargins(8, 0, 8, 0)
+        self._step_labels = []
+        for i, label in enumerate(("1  About you", "2  AI model", "3  Email", "4  Ready")):
+            step = QLabel(label)
+            step.setObjectName("stepDot")
+            self._step_labels.append(step)
+            step_row.addWidget(step)
+            if i < 3:
+                step_row.addStretch(1)
+        root.addWidget(step_rail)
         self._stack = QStackedWidget()
         root.addWidget(self._stack, 1)
 
@@ -4192,8 +5047,8 @@ class SetupTourDialog(QDialog):
         p0 = QWidget(); l0 = QVBoxLayout(p0)
         t = QLabel("👋  Welcome to Ember"); t.setObjectName("title")
         l0.addWidget(t)
-        l0.addWidget(self._wrap("Ember is your computer's AI assistant. Let's get you set up in "
-                                "under a minute — first, how comfortable are you with this stuff?"))
+        l0.addWidget(self._wrap("Setup takes about a minute. First, choose how much detail you "
+                                "want Ember to show while you work."))
         self._level_group = QButtonGroup(self)
         for lvl in setup_tour.LEVELS:
             rb = QRadioButton(setup_tour.LEVEL_LABELS[lvl])
@@ -4279,16 +5134,17 @@ class SetupTourDialog(QDialog):
         nav = QHBoxLayout()
         self._back_btn = QPushButton("Back")
         self._back_btn.clicked.connect(lambda: self._goto(self._stack.currentIndex() - 1))
-        skip = QPushButton("Skip")
-        skip.clicked.connect(self.reject)
+        self._skip_btn = QPushButton("Set up later")
+        self._skip_btn.clicked.connect(self.reject)
         self._next_btn = QPushButton("Next")
         self._next_btn.setObjectName("send")
         self._next_btn.clicked.connect(self._next)
         nav.addWidget(self._back_btn)
-        nav.addWidget(skip)
+        nav.addWidget(self._skip_btn)
         nav.addStretch(1)
         nav.addWidget(self._next_btn)
         root.addLayout(nav)
+        _polish_dialog(self)
         self._refresh_offline_status()
         self._goto(0)
 
@@ -4303,6 +5159,11 @@ class SetupTourDialog(QDialog):
         self._back_btn.setEnabled(idx > 0)
         last = idx == self._stack.count() - 1
         self._next_btn.setText("Finish" if last else "Next")
+        self._skip_btn.setVisible(not last)
+        for i, step in enumerate(self._step_labels):
+            step.setProperty("active", i == idx)
+            step.style().unpolish(step)
+            step.style().polish(step)
         if last:
             self._finish_note.setText(self._summary())
 
@@ -4398,18 +5259,16 @@ class TerminalDialog(QDialog):
         self._busy = False
 
         v = QVBoxLayout(self)
-        head = QLabel("⌨️  Terminal & Python")
-        head.setObjectName("title")
-        v.addWidget(head)
-        hint = QLabel("Run shell commands or Python in-app. Prefix a line with ! for shell or >>> "
-                      "for Python, or use the selector. The Python session persists between runs.")
-        hint.setStyleSheet("color:#565f89;font-size:11px;")
-        hint.setWordWrap(True)
-        v.addWidget(hint)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(9)
+        v.addWidget(_dialog_header(
+            "Terminal", "Run shell commands or use a persistent Python session without leaving Ember.",
+            eyebrow="DEVELOPER TOOL", mark=">_"))
 
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
-        self.output.setStyleSheet("font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;")
+        self.output.setObjectName("codeSurface")
+        self.output.setPlaceholderText("Command output appears here.")
         v.addWidget(self.output, 1)
 
         row = QHBoxLayout()
@@ -4421,15 +5280,17 @@ class TerminalDialog(QDialog):
         self.input.returnPressed.connect(self._run)
         row.addWidget(self.input, 1)
         self.run_btn = QPushButton("Run")
-        self.run_btn.setObjectName("send")
+        self.run_btn.setObjectName("primaryBtn")
         self.run_btn.clicked.connect(self._run)
         row.addWidget(self.run_btn)
         v.addLayout(row)
 
         btns = QHBoxLayout()
         clr = QPushButton("Clear")
+        clr.setObjectName("secondaryBtn")
         clr.clicked.connect(self.output.clear)
         rst = QPushButton("Reset Python")
+        rst.setObjectName("secondaryBtn")
         rst.clicked.connect(self._reset)
         btns.addWidget(clr)
         btns.addWidget(rst)
@@ -4441,6 +5302,7 @@ class TerminalDialog(QDialog):
 
         self._out_sig.connect(self._append)
         self._busy_sig.connect(self._set_busy)
+        _polish_dialog(self)
         self.input.setFocus()
 
     def _append(self, text: str):
@@ -4510,21 +5372,17 @@ class AgentsDialog(QDialog):
 
     def __init__(self, manager, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Ember Agent Tasks")
+        self.setWindowTitle("Parallel Runs")
         self.setMinimumSize(780, 560)
         self._m = manager
         self._ids: list = []
 
         v = QVBoxLayout(self)
-        head = QLabel("🧠  Parallel agent tasks")
-        head.setObjectName("title")
-        v.addWidget(head)
-        hint = QLabel("Kick off multiple tasks at once and let them run in the background. Select a "
-                      "task to watch its live output. Actions needing confirmation are skipped in "
-                      "background tasks — run those in the main chat.")
-        hint.setStyleSheet("color:#565f89;font-size:11px;")
-        hint.setWordWrap(True)
-        v.addWidget(hint)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(9)
+        v.addWidget(_dialog_header(
+            "Parallel Runs", "Start independent background tasks and inspect each live result.",
+            eyebrow="AGENT ORCHESTRATION", mark="⇶"))
 
         row = QHBoxLayout()
         self.input = QLineEdit()
@@ -4532,26 +5390,30 @@ class AgentsDialog(QDialog):
         self.input.returnPressed.connect(self._start)
         row.addWidget(self.input, 1)
         self.start_btn = QPushButton("Start")
-        self.start_btn.setObjectName("send")
+        self.start_btn.setObjectName("primaryBtn")
         self.start_btn.clicked.connect(self._start)
         row.addWidget(self.start_btn)
         v.addLayout(row)
 
         split = QHBoxLayout()
         self.list = QListWidget()
+        self.list.setObjectName("dialogList")
         self.list.setMaximumWidth(300)
         self.list.currentRowChanged.connect(lambda _i: self._refresh_output())
         split.addWidget(self.list)
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
-        self.output.setStyleSheet("font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;")
+        self.output.setObjectName("codeSurface")
+        self.output.setPlaceholderText("Select a run to inspect its output.")
         split.addWidget(self.output, 1)
         v.addLayout(split, 1)
 
         btns = QHBoxLayout()
         self.stop_btn = QPushButton("Stop selected")
+        self.stop_btn.setObjectName("dangerBtn")
         self.stop_btn.clicked.connect(self._stop)
         clr = QPushButton("Clear finished")
+        clr.setObjectName("secondaryBtn")
         clr.clicked.connect(self._clear)
         btns.addWidget(self.stop_btn)
         btns.addWidget(clr)
@@ -4564,6 +5426,7 @@ class AgentsDialog(QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(700)
+        _polish_dialog(self)
         self._refresh()
         self.input.setFocus()
 
@@ -4653,25 +5516,40 @@ class RemoteLinkDialog(QDialog):
         self._busy = False
 
         v = QVBoxLayout(self)
-        head = QLabel("📱  Ember Link")
-        head.setObjectName("title")
-        v.addWidget(head)
+        v.setContentsMargins(14, 14, 14, 12)
+        v.setSpacing(10)
+        v.addWidget(_dialog_header(
+            "Ember Link", "Use this computer securely from your phone or tablet.",
+            eyebrow="REMOTE CONTROL", mark="↗"))
+
+        local_card = QFrame()
+        local_card.setObjectName("surfaceCard")
+        local_layout = QVBoxLayout(local_card)
+        local_layout.setContentsMargins(12, 9, 12, 11)
+        local_title = QLabel("ON THIS WI-FI")
+        local_title.setObjectName("fieldLabel")
+        local_layout.addWidget(local_title)
 
         self.local_info = QLabel("")
         self.local_info.setWordWrap(True)
         self.local_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        v.addWidget(self.local_info)
+        local_layout.addWidget(self.local_info)
 
-        v.addWidget(self._hint(
-            "On the same Wi-Fi: open the address above in your phone browser and enter the PIN.\n"
-            "From anywhere else: turn on 'Connect from anywhere' below and open the private link "
-            "it gives you — no PIN needed on that link."))
+        local_layout.addWidget(self._hint(
+            "Open the address above on a nearby device, then enter the one-time PIN."))
+        v.addWidget(local_card)
 
-        line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); v.addWidget(line)
+        remote_card = QFrame()
+        remote_card.setObjectName("surfaceCard")
+        remote_layout = QVBoxLayout(remote_card)
+        remote_layout.setContentsMargins(12, 9, 12, 11)
+        remote_title = QLabel("AWAY FROM HOME")
+        remote_title.setObjectName("fieldLabel")
+        remote_layout.addWidget(remote_title)
 
         self.remote_check = QCheckBox("Connect from anywhere (beyond this Wi-Fi)")
         self.remote_check.toggled.connect(self._toggle_remote)
-        v.addWidget(self.remote_check)
+        remote_layout.addWidget(self.remote_check)
 
         self._remote_url = ""   # the raw URL behind remote_info's HTML, for the Copy button
         remote_row = QHBoxLayout()
@@ -4683,20 +5561,22 @@ class RemoteLinkDialog(QDialog):
         self.copy_link_btn.setVisible(False)
         self.copy_link_btn.clicked.connect(self._copy_remote_url)
         remote_row.addWidget(self.copy_link_btn)
-        v.addLayout(remote_row)
+        remote_layout.addLayout(remote_row)
 
-        v.addWidget(self._hint(
+        remote_layout.addWidget(self._hint(
             "Uses an outbound Cloudflare Tunnel (free, no account) — nothing is opened on your "
             "router. The link carries a long, unguessable token instead of the short PIN, so the "
             "PIN is never exposed to the internet. Treat the link like a password; 'Revoke all "
             "pairings' below invalidates every issued link instantly."))
 
         self.paired_label = QLabel("")
-        self.paired_label.setStyleSheet("color:#565f89;font-size:11px;")
-        v.addWidget(self.paired_label)
+        self.paired_label.setObjectName("dialogStatus")
+        remote_layout.addWidget(self.paired_label)
+        v.addWidget(remote_card, 1)
 
         btns = QHBoxLayout()
         self.revoke_btn = QPushButton("Revoke all pairings")
+        self.revoke_btn.setObjectName("dangerBtn")
         self.revoke_btn.clicked.connect(self._revoke)
         btns.addWidget(self.revoke_btn)
         btns.addStretch()
@@ -4705,12 +5585,13 @@ class RemoteLinkDialog(QDialog):
         btns.addWidget(close)
         v.addLayout(btns)
 
+        _polish_dialog(self)
         self._refresh()
 
     def _hint(self, text: str) -> QLabel:
         lab = QLabel(text)
         lab.setWordWrap(True)
-        lab.setStyleSheet("color:#565f89;font-size:11px;")
+        lab.setObjectName("muted")
         return lab
 
     def _set_remote_url_display(self, link: str):
@@ -4798,6 +5679,11 @@ class RemoteLinkDialog(QDialog):
             pass
 
     def _revoke(self):
+        if QMessageBox.question(
+                self, "Revoke remote access",
+                "Revoke every paired device and private link? Devices will need to pair again."
+                ) != QMessageBox.StandardButton.Yes:
+            return
         r = self._rs.revoke_pairings()
         QMessageBox.information(self, "Ember Link", f"Revoked {r.get('revoked', 0)} paired device(s). "
                                 "They'll need to re-pair on your Wi-Fi.")
@@ -4874,6 +5760,7 @@ class DownloadGuardDialog(QDialog):
         self._quar_btn = QPushButton("🔒  Quarantine")
         self._quar_btn.clicked.connect(self._quarantine)
         self._del_btn = QPushButton("🗑  Delete")
+        self._del_btn.setObjectName("dangerBtn")
         self._del_btn.clicked.connect(self._delete)
         self._keep_btn = QPushButton("Keep")
         self._keep_btn.clicked.connect(self.reject)
@@ -4891,6 +5778,7 @@ class DownloadGuardDialog(QDialog):
                                           "second opinion. Scans use local engines meanwhile.")
         except Exception:
             pass
+        _polish_dialog(self)
 
     # -- scan (off the UI thread) --
     def _start_scan(self):
@@ -4947,13 +5835,13 @@ class DownloadGuardDialog(QDialog):
             return
         # Clean.
         if ai.get("available"):
-            self._status.setText("<span style='color:#6cc07a'>Clean — the engines and an AI "
-                                 "review found nothing malicious.</span> Still, only open files "
-                                 "you trust.")
+            self._status.setText("<span style='color:#6cc07a'>No known indicators found; AI "
+                                 "triage also found no obvious malicious intent.</span> AI is "
+                                 "advisory, not a malware engine. Only open files you trust.")
         else:
-            self._status.setText("<span style='color:#6cc07a'>No threats found by the local "
-                                 "engines.</span> Add an API key in Settings for an AI second "
-                                 "opinion. Only open files you trust.")
+            self._status.setText("<span style='color:#6cc07a'>No known indicators found by the "
+                                 "local engines.</span> This is not proof the file is safe. Only "
+                                 "open files you trust.")
 
     # -- actions --
     def _do_quarantine(self, reason="user quarantined a download") -> bool:
@@ -4973,6 +5861,11 @@ class DownloadGuardDialog(QDialog):
             QMessageBox.warning(self, "Quarantine", "Could not quarantine the file.")
 
     def _delete(self):
+        if QMessageBox.question(
+                self, "Delete download",
+                f"Permanently delete ‘{self._name}’? This cannot be undone."
+                ) != QMessageBox.StandardButton.Yes:
+            return
         try:
             Path(self._path).unlink()
             self.accept()
@@ -5036,19 +5929,20 @@ class UpdateDialog(QDialog):
         v.addWidget(self.auto_check)
 
         row = QHBoxLayout()
-        skip = QPushButton("Skip This Version")
+        skip = QPushButton("Skip this version")
         skip.clicked.connect(lambda: self._pick("skip"))
         row.addWidget(skip)
         row.addStretch()
-        on_quit = QPushButton("Install on Quit")
+        on_quit = QPushButton("Install when I quit")
         on_quit.clicked.connect(lambda: self._pick("on_quit"))
         row.addWidget(on_quit)
-        relaunch = QPushButton("Install and Relaunch")
+        relaunch = QPushButton("Install and relaunch")
         relaunch.setObjectName("primaryBtn")
         relaunch.setDefault(True)
         relaunch.clicked.connect(lambda: self._pick("relaunch"))
         row.addWidget(relaunch)
         v.addLayout(row)
+        _polish_dialog(self)
 
     def _pick(self, choice: str):
         self.choice = choice
@@ -5337,6 +6231,7 @@ class EmberWindow(QWidget):
         self._bridge.chat_title.connect(self._on_chat_title)
         self._bridge.agent_ready.connect(self._build_agent)
         self._bridge.update_available.connect(self._on_update_available)
+        self._bridge.update_progress.connect(self._on_update_progress)
         self._bridge.notice.connect(lambda m: self._add_bubble("system", m))
         self._bridge.source_updated.connect(self._on_source_updated)
         self._bridge.wake_detected.connect(self._on_wake_word)
@@ -5376,6 +6271,9 @@ class EmberWindow(QWidget):
         self._title_jobs: set[str] = set()
         self._build_ui()
         self._restore_position()
+        # A successful replacement keeps its .old backup until this new build reaches the UI.
+        # Confirm the result here, then clean up; failed swaps are reported after rollback.
+        QTimer.singleShot(1200, self._report_update_result)
         if not _SAFE_MODE:
             self._install_hotkey()
             self._install_ptt()
@@ -5937,7 +6835,7 @@ class EmberWindow(QWidget):
             import voice
         except ImportError:
             QMessageBox.warning(self, "Voice not available",
-                "Voice deps missing. Run: pip install SpeechRecognition pyttsx3 pyaudio")
+                "Voice deps missing. Run: pip install SpeechRecognition sounddevice pyttsx3")
             return
         # Fail loudly + helpfully instead of silently looping "no speech" forever when the
         # mic can't be opened (the #1 cause: macOS microphone permission not granted).
@@ -6159,7 +7057,7 @@ class EmberWindow(QWidget):
             import voice
         except ImportError:
             QMessageBox.warning(self, "Voice not available",
-                "Voice deps missing. Run: pip install SpeechRecognition pyttsx3 pyaudio")
+                "Voice deps missing. Run: pip install SpeechRecognition sounddevice pyttsx3")
             return
         if mode == "voice_chat" and not self._voice_chat_enabled:
             return
@@ -6308,9 +7206,9 @@ class EmberWindow(QWidget):
             else:
                 accent = self.settings.get("accent_color", "#6c9eff")
                 col = QColor(accent)
-                alpha = 150
+                alpha = 72
             glow = QGraphicsDropShadowEffect()
-            glow.setBlurRadius(34 if self.settings.get("liquid_glass", False) else 30)
+            glow.setBlurRadius(34 if self.settings.get("liquid_glass", False) else 22)
             glow.setColor(QColor(col.red(), col.green(), col.blue(), alpha))
             glow.setOffset(0, 0)
             root.setGraphicsEffect(glow)
@@ -6337,7 +7235,8 @@ QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border: 1px solid {a};
 QComboBox:focus, QComboBox:hover {{ border-color: {a}; }}
 QComboBox QAbstractItemView {{ selection-background-color: {a}; }}
 QPushButton#chip:hover {{ border-color: {a}; background-color: {a_soft}; color: #ffffff; }}
-QListWidget::item:selected, QListWidget#historyList::item:selected {{ background-color: {a}; color: #ffffff; }}
+QListWidget::item:selected {{ background-color: {a}; color: #ffffff; }}
+QListWidget#historyList::item:selected {{ background-color: {a_soft}; color: #ffffff; }}
 QListWidget#historyList::item:hover {{ background-color: {a_soft}; }}
 /* selected settings tab + hover get the accent underline/tint */
 QTabBar::tab:selected {{ color: #ffffff; border-bottom: 2px solid {a}; }}
@@ -6363,7 +7262,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         """Set the main window stylesheet = base theme (glass or flat) + accent/font overrides.
         Central place so accent + chat text size always apply, glass on or off."""
         try:
-            self.setStyleSheet(STYLE + self._theme_overrides())
+            self.setStyleSheet(STYLE + WORKSPACE_POLISH + self._theme_overrides())
         except Exception:
             self.setStyleSheet(STYLE)
 
@@ -6421,7 +7320,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                                 see_through=blur_level, blurred=blurred)
         else:
             base = STYLE
-        self.setStyleSheet(base + self._theme_overrides())
+        self.setStyleSheet(base + WORKSPACE_POLISH + self._theme_overrides())
         self.update()
 
     def _toggle_max(self):
@@ -6440,9 +7339,19 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         compact = (mode == "chatbot")
         # Relax the minimum width for the narrow chat widget; restore it for the full layout
         # (the 3-column layout needs the room).
-        self.setMinimumSize(300, 420) if compact else self.setMinimumSize(640, 540)
+        self.setMinimumSize(320, 480) if compact else self.setMinimumSize(780, 600)
         # The side panels don't fit a narrow chat-widget width, so hide them in compact mode.
-        for w in (getattr(self, "_sidebar", None), getattr(self, "_command_panel", None)):
+        sidebar = getattr(self, "_sidebar", None)
+        if sidebar is not None:
+            sidebar.setVisible(not compact)
+        command_panel = getattr(self, "_command_panel", None)
+        if command_panel is not None:
+            command_panel.setVisible(not compact and bool(getattr(self, "_tools_open", False)))
+        for w in (getattr(self, "workspace_info", None), getattr(self, "mode_widget", None),
+                  getattr(self, "composer_hint", None), getattr(self, "quick_chips", None),
+                  getattr(self, "status_label", None), getattr(self, "reset_btn", None),
+                  getattr(self, "settings_btn", None), getattr(self, "min_btn", None),
+                  getattr(self, "empty_hint", None)):
             if w is not None:
                 w.setVisible(not compact)
         if mode == "full":
@@ -6460,7 +7369,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             if g is not None:
                 self.setGeometry(g)
             else:
-                self.resize(1040, 760)
+                self.resize(1180, 800)
             self.max_btn.setText("□")
             self.max_btn.setToolTip("Window: normal — click for full screen")
         self._size_mode = mode
@@ -6479,7 +7388,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(1040, 760)
+        self.resize(1180, 800)
+        self.setMinimumSize(780, 600)
         # Apply liquid-glass acrylic backdrop if enabled
         if not _SAFE_MODE:
             QTimer.singleShot(100, self._apply_glass_effect)
@@ -6503,31 +7413,57 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._apply_glow()
 
         root_row = QHBoxLayout(root)
-        root_row.setContentsMargins(8, 6, 8, 8)
-        root_row.setSpacing(8)
+        root_row.setContentsMargins(10, 10, 10, 10)
+        root_row.setSpacing(10)
 
         sidebar = QFrame()
         sidebar.setObjectName("historyPanel")
-        sidebar.setFixedWidth(196)
+        sidebar.setFixedWidth(248)
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(8, 8, 8, 8)
-        side_layout.setSpacing(7)
+        side_layout.setContentsMargins(10, 11, 10, 10)
+        side_layout.setSpacing(9)
 
-        side_title = QLabel("Chats")
-        side_title.setObjectName("sideTitle")
-        side_layout.addWidget(side_title)
+        brand = QFrame()
+        brand.setObjectName("brandRow")
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(1, 0, 1, 5)
+        brand_row.setSpacing(9)
+        mark = QLabel("E")
+        mark.setObjectName("brandMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFixedSize(34, 34)
+        brand_row.addWidget(mark)
+        brand_copy = QVBoxLayout()
+        brand_copy.setContentsMargins(0, 0, 0, 0)
+        brand_copy.setSpacing(0)
+        brand_name = QLabel("Ember")
+        brand_name.setObjectName("brandName")
+        brand_copy.addWidget(brand_name)
+        brand_row.addLayout(brand_copy, 1)
+        side_layout.addWidget(brand)
 
-        self.new_chat_btn = QPushButton("+ New chat")
-        self.new_chat_btn.setObjectName("chip")
+        self.new_chat_btn = QPushButton("＋  New task")
+        self.new_chat_btn.setObjectName("newTask")
         self.new_chat_btn.clicked.connect(self._new_chat)
         side_layout.addWidget(self.new_chat_btn)
+
+        self.history_search = QLineEdit()
+        self.history_search.setObjectName("historySearch")
+        self.history_search.setPlaceholderText("Search tasks…")
+        self.history_search.setClearButtonEnabled(True)
+        self.history_search.textChanged.connect(self._filter_history)
+        side_layout.addWidget(self.history_search)
+
+        side_title = QLabel("RECENT")
+        side_title.setObjectName("sideHint")
+        side_layout.addWidget(side_title)
 
         self.history_list = QListWidget()
         self.history_list.setObjectName("historyList")
         self.history_list.currentItemChanged.connect(self._on_history_selected)
         side_layout.addWidget(self.history_list, 1)
 
-        self.history_hint = QLabel("Recent context is sent automatically.")
+        self.history_hint = QLabel("Task history stays on this device.")
         self.history_hint.setObjectName("sideHint")
         self.history_hint.setWordWrap(True)
         side_layout.addWidget(self.history_hint)
@@ -6540,51 +7476,54 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Center column: a top-center Work/Chat segmented toggle, then a stack that swaps between
-        # the agent view ("Work") and the offline local-model chat ("Chat"). The Chat panel is
-        # created lazily the first time you switch to it.
+        # One conversation-first workspace. Local/cloud models and capability modes all operate
+        # inside this same view; there is deliberately no competing Work/Chat tab.
         center = QWidget()
         center_col = QVBoxLayout(center)
         center_col.setContentsMargins(0, 0, 0, 0)
-        center_col.setSpacing(6)
-
-        seg_row = QHBoxLayout()
-        seg_row.addStretch()
-        seg = QFrame()
-        seg.setObjectName("segToggle")
-        seg_inner = QHBoxLayout(seg)
-        seg_inner.setContentsMargins(3, 3, 3, 3)
-        seg_inner.setSpacing(3)
-        self.work_tab_btn = QPushButton("Work")
-        self.chat_tab_btn = QPushButton("Chat")
-        for b in (self.work_tab_btn, self.chat_tab_btn):
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setObjectName("segBtn")
-            seg_inner.addWidget(b)
-        self.work_tab_btn.setChecked(True)
-        self.work_tab_btn.clicked.connect(lambda: self._switch_main_view("work"))
-        self.chat_tab_btn.clicked.connect(lambda: self._switch_main_view("chat"))
-        seg_row.addWidget(seg)
-        seg_row.addStretch()
-        center_col.addLayout(seg_row)
-
-        self.main_stack = QStackedWidget()
-        self.main_stack.addWidget(main_panel)     # index 0 = Work
-        self._chat_panel = None                   # index 1 = Chat, built on first switch
-        center_col.addWidget(self.main_stack, 1)
+        center_col.setSpacing(0)
+        center_col.addWidget(main_panel, 1)
         root_row.addWidget(center, 1)
+
+        # Agent behavior remains a lightweight control in the unified header.
+        self.mode_widget = QWidget()
+        mode_box = QHBoxLayout(self.mode_widget)
+        mode_box.setContentsMargins(0, 0, 0, 0)
+        mode_box.setSpacing(0)
+        self.main_mode_combo = QComboBox()
+        self.main_mode_combo.setObjectName("modePicker")
+        self.main_mode_combo.addItem("Autopilot", "auto")
+        self.main_mode_combo.addItem("Plan first", "plan")
+        self.main_mode_combo.addItem("Conversation", "chat")
+        self.main_mode_combo.addItem("Read only", "read_only")
+        try:
+            import agents as _ag
+            current_mode = _ag.get_run_mode()
+            for i in range(self.main_mode_combo.count()):
+                if self.main_mode_combo.itemData(i) == current_mode:
+                    self.main_mode_combo.setCurrentIndex(i)
+                    break
+        except Exception:
+            pass
+        self.main_mode_combo.currentIndexChanged.connect(self._on_main_mode_changed)
+        mode_box.addWidget(self.main_mode_combo)
 
         command_panel = QFrame()
         command_panel.setObjectName("commandPanel")
-        command_panel.setFixedWidth(226)
+        command_panel.setFixedWidth(278)
         command_layout = QVBoxLayout(command_panel)
         command_layout.setContentsMargins(10, 10, 10, 10)
         command_layout.setSpacing(7)
 
-        command_title = QLabel("Command Center")
+        command_title = QLabel("TOOLS & CONTROLS")
         command_title.setObjectName("sectionTitle")
         command_layout.addWidget(command_title)
+
+        palette_btn = QPushButton("⌕  Find anything                         ⌘K")
+        palette_btn.setObjectName("commandPalette")
+        palette_btn.setToolTip("Search every Ember capability (Ctrl/Cmd+K)")
+        palette_btn.clicked.connect(lambda: self._run_slash("__features__"))
+        command_layout.addWidget(palette_btn)
 
         self.voice_chat_btn = QPushButton("Voice Chat")
         self.voice_chat_btn.setObjectName("voiceToggle")
@@ -6597,16 +7536,63 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.voice_status_label.setObjectName("panelHint")
         command_layout.addWidget(self.voice_status_label)
 
+        pointer_card = QFrame()
+        pointer_card.setObjectName("pointerCard")
+        pointer_layout = QVBoxLayout(pointer_card)
+        pointer_layout.setContentsMargins(10, 8, 10, 9)
+        pointer_layout.setSpacing(5)
+        pointer_title = QLabel("POINTER CONTROL")
+        pointer_title.setObjectName("controlTitle")
+        pointer_layout.addWidget(pointer_title)
+        try:
+            import human_mouse
+            pointer_opts = human_mouse.get_options()
+        except Exception:
+            pointer_opts = {"enabled": True, "speed": 1.0}
+        self.main_mouse_toggle = QCheckBox("Human motion")
+        self.main_mouse_toggle.setObjectName("pointerToggle")
+        self.main_mouse_toggle.setChecked(bool(self.settings.get(
+            "mouse_humanize", pointer_opts.get("enabled", True))))
+        self.main_mouse_toggle.setToolTip("Curved, eased pointer paths that move like a careful person")
+        self.main_mouse_toggle.toggled.connect(self._on_main_mouse_toggled)
+        pointer_layout.addWidget(self.main_mouse_toggle)
+        pointer_speed_row = QHBoxLayout()
+        pointer_speed_row.setContentsMargins(0, 0, 0, 0)
+        self.main_mouse_speed = QSlider(Qt.Orientation.Horizontal)
+        self.main_mouse_speed.setObjectName("pointerSpeed")
+        self.main_mouse_speed.setRange(25, 300)
+        _speed = float(self.settings.get("mouse_speed", pointer_opts.get("speed", 1.0)))
+        self.main_mouse_speed.setValue(int(round(max(0.25, min(3.0, _speed)) * 100)))
+        self.main_mouse_speed.setToolTip("Pointer travel speed")
+        self.main_mouse_speed.valueChanged.connect(self._on_main_mouse_speed_changed)
+        self.main_mouse_speed.sliderReleased.connect(self._persist_main_mouse_speed)
+        self.main_mouse_speed_value = QLabel(f"{self.main_mouse_speed.value() / 100:.2f}×")
+        self.main_mouse_speed_value.setObjectName("speedValue")
+        pointer_speed_row.addWidget(self.main_mouse_speed, 1)
+        pointer_speed_row.addWidget(self.main_mouse_speed_value)
+        pointer_layout.addLayout(pointer_speed_row)
+        command_layout.addWidget(pointer_card)
+
         status_strip = QFrame()
         status_strip.setObjectName("statusStrip")
         status_layout = QVBoxLayout(status_strip)
         status_layout.setContentsMargins(10, 8, 10, 8)
         status_layout.setSpacing(3)
-        self.capability_metric = QLabel("Computer + web + files + apps")
+        live_row = QHBoxLayout()
+        live_row.setContentsMargins(0, 0, 0, 2)
+        live_dot = QLabel("●")
+        live_dot.setObjectName("liveDot")
+        live_label = QLabel("STATUS")
+        live_label.setObjectName("liveLabel")
+        live_row.addWidget(live_dot)
+        live_row.addWidget(live_label)
+        live_row.addStretch()
+        status_layout.addLayout(live_row)
+        self.capability_metric = QLabel("Screen · pointer · keyboard available")
         self.capability_metric.setObjectName("statusMetric")
         self.model_metric = QLabel("Model warming up")
         self.model_metric.setObjectName("statusMetric")
-        self.tool_metric = QLabel("Approvals stay visible")
+        self.tool_metric = QLabel("Risky actions require approval")
         self.tool_metric.setObjectName("statusMetric")
         status_layout.addWidget(self.capability_metric)
         status_layout.addWidget(self.model_metric)
@@ -6624,7 +7610,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(7)
 
-        action_title = QLabel("Actions")
+        action_title = QLabel("LAUNCHERS & QUICK TASKS")
         action_title.setObjectName("sectionTitle")
         actions_layout.addWidget(action_title)
 
@@ -6651,23 +7637,56 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         actions_scroll.setWidget(actions_inner)
         command_layout.addWidget(actions_scroll, 1)
         self._command_panel = command_panel
+        self._tools_open = False
+        command_panel.hide()
         root_row.addWidget(command_panel)
 
         # Title bar
         title_row = QHBoxLayout()
-        title = QLabel("● Ember")
-        title.setObjectName("title")
-        # Let clicks on the title text fall through to the window so the WHOLE bar drags,
-        # not just the empty gaps between the label and the buttons.
-        title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        title_row.addWidget(title)
+        self.sidebar_btn = QPushButton("☰")
+        self.sidebar_btn.setObjectName("titleBtn")
+        self.sidebar_btn.setFixedSize(30, 30)
+        self.sidebar_btn.setToolTip("Show or hide task history")
+        self.sidebar_btn.clicked.connect(self._toggle_history_panel)
+        title_row.addWidget(self.sidebar_btn)
+
+        self.workspace_info = QWidget()
+        workspace_copy = QVBoxLayout(self.workspace_info)
+        workspace_copy.setContentsMargins(4, 0, 8, 0)
+        workspace_copy.setSpacing(0)
+        self.workspace_title = QLabel("New task")
+        self.workspace_title.setObjectName("workspaceTitle")
+        self.workspace_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.status_label = QLabel("Ready")
+        self.status_label.setObjectName("statusBar")
+        self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        workspace_copy.addWidget(self.workspace_title)
+        workspace_copy.addWidget(self.status_label)
+        title_row.addWidget(self.workspace_info)
         title_row.addStretch()
+
+        model_name = (self.settings.get("model_id") or self.settings.get("gemini_model")
+                      or "Choose model")
+        self.model_btn = QPushButton(str(model_name))
+        self.model_btn.setObjectName("modelPickerBtn")
+        self.model_btn.setMaximumWidth(180)
+        self.model_btn.setToolTip("Change the model, including local Ollama")
+        self.model_btn.clicked.connect(lambda: self._open_settings("Models"))
+        title_row.addWidget(self.model_btn)
+
+        title_row.addWidget(self.mode_widget)
+
+        self.tools_btn = QPushButton("Tools")
+        self.tools_btn.setObjectName("toolsBtn")
+        self.tools_btn.setToolTip("Open tools and computer controls (Ctrl/Cmd+K searches all)")
+        self.tools_btn.clicked.connect(self._toggle_tools_panel)
+        title_row.addWidget(self.tools_btn)
 
         BTN = 30
         self.reset_btn = QPushButton("↺")
         self.reset_btn.setObjectName("titleBtn")
         self.reset_btn.setFixedSize(BTN, BTN)
-        self.reset_btn.setToolTip("Reset conversation")
+        self.reset_btn.setToolTip("Reset this task")
         self.reset_btn.clicked.connect(self._reset_chat)
         title_row.addWidget(self.reset_btn)
 
@@ -6702,45 +7721,11 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         title_row.addWidget(self.close_btn)
 
         layout.addLayout(title_row)
-
-        self.status_label = QLabel("Ready")
-        self.status_label.setObjectName("statusBar")
-        self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.status_label)
-
-        # Quick action chips — wrap onto multiple rows instead of scrolling off-screen.
-        chip_holder = QWidget()
-        chip_flow = FlowLayout(chip_holder, margin=2, hspacing=6, vspacing=6)
-        # Keep the header clean: only the essentials. Everything else is available by typing
-        # (e.g. "organize my downloads") or via /help, which lists all commands.
-        _chips = [
-            ("✨ Features", "__features__"),
-            ("Autopilot", "/autopilot"),
-            ("Voice", "__voice_chat__"),
-            ("Screen", "/shot"),
-            ("Browser", "/web"),
-            ("Files", "/downloads"),
-            ("Demo", "Create a cluttered demo folder on my Desktop, then show me how you would organize it with a dry run."),
-            ("Help", "/help"),
-        ]
-        for label, cmd in _chips:
-            b = QPushButton(label)
-            b.setObjectName("chip")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            # Make it obvious whether a chip opens a feature or sends an example request.
-            if cmd == "__voice_chat__":
-                b.setToolTip("Toggle hands-free voice chat")
-            else:
-                sent = SLASH_COMMANDS.get(cmd, cmd)
-                if isinstance(sent, str) and not sent.startswith("__"):
-                    b.setToolTip("Sends this request to Ember:\n"
-                                 + sent[:160] + ("…" if len(sent) > 160 else ""))
-            b.clicked.connect(lambda _=False, c=cmd: self._run_slash(c))
-            chip_flow.addWidget(b)
-        layout.addWidget(chip_holder)
+        self.quick_chips = None
 
         # Chat area
         self.chat_scroll = QScrollArea()
+        self.chat_scroll.setObjectName("chatScroll")
         self.chat_scroll.setWidgetResizable(True)
         self.chat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -6749,10 +7734,11 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         # what was causing the rogue horizontal scrollbar.
         self.chat_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.chat_container = QWidget()
+        self.chat_container.setObjectName("chatViewport")
         self.chat_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.chat_layout = QVBoxLayout(self.chat_container)
-        self.chat_layout.setContentsMargins(8, 8, 8, 8)
-        self.chat_layout.setSpacing(6)
+        self.chat_layout.setContentsMargins(24, 18, 24, 20)
+        self.chat_layout.setSpacing(2)
         # Stretch at end keeps bubbles top-aligned when chat isn't full yet.
         self.chat_layout.addStretch(1)
         self.chat_scroll.setWidget(self.chat_container)
@@ -6767,73 +7753,358 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         _csb.rangeChanged.connect(lambda _mn, _mx: self._chat_follow_bottom())
         _csb.valueChanged.connect(self._on_chat_scrolled)
 
-        # Input row
-        input_row = QHBoxLayout()
-        # ChatInput accepts pasted/dropped files + images (Cmd/Ctrl+V), not just text.
-        self.input_box = ChatInput(on_attach=self._attach_paths)
-        self.input_box.setMaximumHeight(70)
-        self.input_box.setPlaceholderText("What should I do?  (paste or drop files / photos too)")
-        self.input_box.installEventFilter(self)
-        input_row.addWidget(self.input_box)
+        # Expandable run activity: collapsed by default, detailed enough to understand the
+        # agent when opened. Tool arguments/results are sanitized before they reach this view.
+        activity_shell = QWidget()
+        activity_shell.setObjectName("activityShell")
+        activity_shell_layout = QHBoxLayout(activity_shell)
+        activity_shell_layout.setContentsMargins(24, 2, 24, 2)
+        activity_shell_layout.addStretch(1)
+        self.activity_card = QFrame()
+        self.activity_card.setObjectName("taskActivity")
+        self.activity_card.setMaximumWidth(860)
+        self.activity_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        activity_layout = QVBoxLayout(self.activity_card)
+        activity_layout.setContentsMargins(10, 6, 10, 8)
+        activity_layout.setSpacing(5)
+        activity_header = QHBoxLayout()
+        activity_header.setContentsMargins(0, 0, 0, 0)
+        self.activity_toggle = QPushButton("▸  Task activity")
+        self.activity_toggle.setObjectName("activityToggle")
+        self.activity_toggle.clicked.connect(self._toggle_activity_details)
+        activity_header.addWidget(self.activity_toggle, 1)
+        self.activity_progress = QProgressBar()
+        self.activity_progress.setObjectName("activityProgress")
+        self.activity_progress.setTextVisible(False)
+        self.activity_progress.setFixedSize(74, 4)
+        activity_header.addWidget(self.activity_progress)
+        activity_layout.addLayout(activity_header)
+        self.activity_details = QPlainTextEdit()
+        self.activity_details.setObjectName("activityDetails")
+        self.activity_details.setReadOnly(True)
+        self.activity_details.setMaximumHeight(0)
+        self.activity_details.hide()
+        activity_layout.addWidget(self.activity_details)
+        activity_shell_layout.addWidget(self.activity_card, 6)
+        activity_shell_layout.addStretch(1)
+        self.activity_card.hide()
+        self._activity_entries = []
+        self._activity_expanded = False
+        self._activity_count = 0
+        layout.addWidget(activity_shell)
 
-        # Upload button - up arrow (mono)
-        self.upload_btn = QPushButton("↑")
-        self.upload_btn.setObjectName("titleBtn")
-        self.upload_btn.setFixedSize(36, 36)
+        # Composer: one calm, unified surface instead of a text box plus a stack of floating
+        # controls. ChatInput still accepts pasted/dropped files + images (Cmd/Ctrl+V).
+        composer_shell = QWidget()
+        composer_shell.setObjectName("composerShell")
+        composer_shell_layout = QHBoxLayout(composer_shell)
+        composer_shell_layout.setContentsMargins(24, 6, 24, 6)
+        composer_shell_layout.setSpacing(0)
+        composer_shell_layout.addStretch(1)
+        composer = QFrame()
+        composer.setObjectName("composer")
+        composer.setMaximumWidth(860)
+        composer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(6, 4, 6, 6)
+        composer_layout.setSpacing(2)
+        self.input_box = ChatInput(on_attach=self._attach_paths)
+        self.input_box.setObjectName("composerInput")
+        self.input_box.setMinimumHeight(46)
+        self.input_box.setMaximumHeight(96)
+        self.input_box.setPlaceholderText("Message Ember or describe a task…")
+        self.input_box.installEventFilter(self)
+        self.input_box.textChanged.connect(self._resize_composer)
+        composer_layout.addWidget(self.input_box)
+
+        composer_bar = QHBoxLayout()
+        composer_bar.setContentsMargins(4, 0, 2, 0)
+        composer_bar.setSpacing(5)
+
+        self.upload_btn = QPushButton("＋")
+        self.upload_btn.setObjectName("composerTool")
+        self.upload_btn.setFixedSize(34, 34)
         self.upload_btn.setToolTip("Upload files for Ember to read (images, PDFs, text, etc.)")
         self.upload_btn.clicked.connect(self._open_upload_dialog)
-        input_row.addWidget(self.upload_btn)
+        composer_bar.addWidget(self.upload_btn)
 
-        # Mic button (mono - circle for idle, red when listening)
         self.mic_btn = QPushButton("◉")
-        self.mic_btn.setObjectName("titleBtn")
-        self.mic_btn.setFixedSize(36, 36)
+        self.mic_btn.setObjectName("composerTool")
+        self.mic_btn.setFixedSize(34, 34)
         self.mic_btn.setToolTip("Click to dictate (auto-stops on silence)")
         self.mic_btn.clicked.connect(self._toggle_mic)
-        input_row.addWidget(self.mic_btn)
+        composer_bar.addWidget(self.mic_btn)
 
-        send_col = QVBoxLayout()
-        self.send_btn = QPushButton("▶")
-        self.send_btn.setObjectName("send")
-        self.send_btn.setFixedSize(36, 36)
-        self.send_btn.clicked.connect(self._on_send)
-        send_col.addWidget(self.send_btn)
+        self.composer_hint = QLabel("Shift+Enter for a new line")
+        self.composer_hint.setObjectName("composerHint")
+        composer_bar.addWidget(self.composer_hint, 1)
+
         self.stop_btn = QPushButton("■")
-        self.stop_btn.setFixedSize(36, 26)
-        self.stop_btn.setToolTip("Stop")
+        self.stop_btn.setObjectName("stopAgent")
+        self.stop_btn.setFixedSize(34, 34)
+        self.stop_btn.setToolTip("Stop the current agent run")
         self.stop_btn.clicked.connect(self._on_stop)
-        send_col.addWidget(self.stop_btn)
-        input_row.addLayout(send_col)
-        layout.addLayout(input_row)
+        composer_bar.addWidget(self.stop_btn)
 
-        self.setStyleSheet(STYLE + self._theme_overrides())
+        self.send_btn = QPushButton("↑")
+        self.send_btn.setObjectName("send")
+        self.send_btn.setFixedSize(42, 38)
+        self.send_btn.setToolTip("Run task")
+        self.send_btn.clicked.connect(self._on_send)
+        composer_bar.addWidget(self.send_btn)
+        composer_layout.addLayout(composer_bar)
+        composer_shell_layout.addWidget(composer, 6)
+        composer_shell_layout.addStretch(1)
+        layout.addWidget(composer_shell)
+
+        self.setStyleSheet(STYLE + WORKSPACE_POLISH + self._theme_overrides())
         # Mark root widget so the stylesheet applies
         root.setProperty("class", "root")
 
         self._refresh_history_sidebar()
         self._load_active_chat_into_view()
         self._update_voice_chat_ui()
+        self._install_workspace_shortcuts()
+        QTimer.singleShot(0, self._resize_composer)
 
-    def _switch_main_view(self, which: str):
-        """Toggle the center area between 'work' (the agent view) and 'chat' (offline local-model
-        chat). The Chat panel is built on first use so it never slows launch."""
-        chat = (which == "chat")
+    def _install_workspace_shortcuts(self):
+        """Fast paths for the two things people do most: find a capability and start fresh."""
+        self._workspace_shortcuts = []
+        for sequence, handler in (("Ctrl+K", self._open_features),
+                                  ("Meta+K", self._open_features),
+                                  ("Ctrl+N", self._new_chat),
+                                  ("Meta+N", self._new_chat)):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(handler)
+            self._workspace_shortcuts.append(shortcut)
+
+    def _toggle_history_panel(self):
+        sidebar = getattr(self, "_sidebar", None)
+        if sidebar is None:
+            return
+        if getattr(self, "_size_mode", "normal") == "chatbot":
+            self._apply_size_mode("normal")
+            sidebar.show()
+            return
+        opening = not sidebar.isVisible()
+        self._animate_drawer(sidebar, opening, 248)
+        self.sidebar_btn.setToolTip("Hide task history" if opening else "Show task history")
+        QTimer.singleShot(0, self._clamp_bubble_widths)
+
+    def _motion_mode(self) -> str:
+        if not bool(self.settings.get("animations_enabled", True)):
+            return "off"
+        return str(self.settings.get("motion_level", "dynamic") or "dynamic").lower()
+
+    def _motion_duration(self, base: int = 220) -> int:
+        return {"dynamic": int(base * 1.15), "smooth": base,
+                "reduced": max(80, int(base * 0.45)), "off": 0}.get(
+                    self._motion_mode(), base)
+
+    def _keep_animation(self, animation) -> None:
+        if not hasattr(self, "_anims"):
+            self._anims = []
+        self._anims.append(animation)
+        self._anims = self._anims[-80:]
+
+    def _start_ambient_pulse(self, widget) -> None:
+        """Give focal marks a slow living glow without changing layout geometry."""
+        if self._motion_mode() not in ("dynamic", "smooth"):
+            return
         try:
-            self.work_tab_btn.setChecked(not chat)
-            self.chat_tab_btn.setChecked(chat)
+            effect = QGraphicsDropShadowEffect(widget)
+            effect.setColor(QColor(self.settings.get("accent_color", "#7aa2f7")))
+            effect.setOffset(0, 0)
+            effect.setBlurRadius(8)
+            widget.setGraphicsEffect(effect)
+            animation = QPropertyAnimation(effect, b"blurRadius", widget)
+            animation.setDuration(self._motion_duration(1500))
+            animation.setStartValue(8.0)
+            animation.setKeyValueAt(0.5, 30.0 if self._motion_mode() == "dynamic" else 20.0)
+            animation.setEndValue(8.0)
+            animation.setLoopCount(-1)
+            animation.setEasingCurve(QEasingCurve.Type.InOutSine)
+            animation.start()
+            self._keep_animation(animation)
         except Exception:
             pass
-        if chat and self._chat_panel is None:
-            try:
-                self._chat_panel = OllamaChatPanel(self.settings, self)
-                self.main_stack.addWidget(self._chat_panel)
-            except Exception as e:
-                traceback.print_exc()
-                self._chat_panel = None
-                QMessageBox.warning(self, "Chat", f"Couldn't open local chat: {e}")
-                self._switch_main_view("work")
-                return
-        self.main_stack.setCurrentWidget(self._chat_panel if chat else self.main_stack.widget(0))
+
+    def _animate_drawer(self, widget, opening: bool, width: int) -> None:
+        """Animate a layout-owned side panel without graphics effects or ghost surfaces."""
+        duration = self._motion_duration(230)
+        if duration <= 0:
+            widget.setFixedWidth(width)
+            widget.setVisible(opening)
+            return
+        widget.setMinimumWidth(0)
+        if opening:
+            widget.setMaximumWidth(0)
+            widget.show()
+            start, end = 0, width
+        else:
+            start, end = max(1, widget.width()), 0
+        animation = QPropertyAnimation(widget, b"maximumWidth", self)
+        animation.setDuration(duration)
+        animation.setStartValue(start)
+        animation.setEndValue(end)
+        animation.setEasingCurve(
+            QEasingCurve.Type.OutBack if opening and self._motion_mode() == "dynamic"
+            else QEasingCurve.Type.InOutCubic)
+
+        def finish():
+            if opening:
+                widget.setMinimumWidth(width)
+                widget.setMaximumWidth(width)
+            else:
+                widget.hide()
+                widget.setMinimumWidth(width)
+                widget.setMaximumWidth(width)
+            QTimer.singleShot(0, self._clamp_bubble_widths)
+
+        animation.finished.connect(finish)
+        animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._keep_animation(animation)
+
+    def _toggle_tools_panel(self):
+        """Reveal secondary tools only on demand so the conversation remains the canvas."""
+        panel = getattr(self, "_command_panel", None)
+        if panel is None:
+            return
+        if getattr(self, "_size_mode", "normal") == "chatbot":
+            self._apply_size_mode("normal")
+        self._tools_open = not bool(getattr(self, "_tools_open", False))
+        self._animate_drawer(panel, self._tools_open, 278)
+        if hasattr(self, "tools_btn"):
+            self.tools_btn.setText("Close tools" if self._tools_open else "Tools")
+            self.tools_btn.setProperty("open", self._tools_open)
+            self.tools_btn.style().unpolish(self.tools_btn)
+            self.tools_btn.style().polish(self.tools_btn)
+        QTimer.singleShot(0, self._clamp_bubble_widths)
+
+    def _toggle_activity_details(self):
+        details = getattr(self, "activity_details", None)
+        if details is None:
+            return
+        opening = not bool(getattr(self, "_activity_expanded", False))
+        self._activity_expanded = opening
+        self.activity_toggle.setText(
+            ("▾  " if opening else "▸  ") + self.activity_toggle.text()[3:])
+        duration = self._motion_duration(190)
+        if opening:
+            details.show()
+        if duration <= 0:
+            details.setMaximumHeight(156 if opening else 0)
+            details.setVisible(opening)
+            return
+        animation = QPropertyAnimation(details, b"maximumHeight", self)
+        animation.setDuration(duration)
+        animation.setStartValue(details.maximumHeight() if details.isVisible() else 0)
+        animation.setEndValue(156 if opening else 0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if not opening:
+            animation.finished.connect(details.hide)
+        animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._keep_animation(animation)
+
+    def _activity_reset(self):
+        self._activity_entries = []
+        self._activity_count = 0
+        self._activity_expanded = False
+        if hasattr(self, "activity_details"):
+            self.activity_details.clear()
+            self.activity_details.setMaximumHeight(0)
+            self.activity_details.hide()
+        if hasattr(self, "activity_card"):
+            self.activity_card.hide()
+
+    def _activity_refresh_text(self):
+        if hasattr(self, "activity_details"):
+            self.activity_details.setPlainText("\n\n".join(self._activity_entries[-80:]))
+            cursor = self.activity_details.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.activity_details.setTextCursor(cursor)
+
+    def _activity_tool_call(self, name: str, args: dict):
+        try:
+            import redaction
+            safe_args = redaction.scrub_obj(args or {})
+        except Exception:
+            safe_args = args or {}
+        try:
+            args_text = json.dumps(safe_args, ensure_ascii=False, default=str, indent=2)
+        except Exception:
+            args_text = str(safe_args)
+        if len(args_text) > 1800:
+            args_text = args_text[:1800] + "\n…"
+        self._activity_count += 1
+        self._activity_entries.append(f"{self._activity_count}. RUNNING  {name}\n{args_text}")
+        self.activity_toggle.setText(f"▸  Working · {name}")
+        self.activity_progress.setRange(0, 0)
+        self.activity_card.show()
+        self._activity_refresh_text()
+
+    def _activity_tool_result(self, name: str, result: dict, summary: str):
+        state = "DONE" if result.get("ok", True) else "FAILED"
+        self._activity_entries.append(f"   {state}  {name}\n{summary[:1200]}")
+        self.activity_toggle.setText(f"▸  {state.title()} · {name}")
+        self._activity_refresh_text()
+
+    def _activity_complete(self):
+        if not getattr(self, "_activity_count", 0):
+            return
+        self.activity_progress.setRange(0, 1)
+        self.activity_progress.setValue(1)
+        self.activity_toggle.setText(
+            f"{'▾' if self._activity_expanded else '▸'}  Completed · "
+            f"{self._activity_count} action{'s' if self._activity_count != 1 else ''}")
+
+    def _filter_history(self, query: str):
+        """Filter locally without mutating saved task history or losing the active selection."""
+        needle = (query or "").strip().casefold()
+        for i in range(self.history_list.count()):
+            item = self.history_list.item(i)
+            item.setHidden(bool(needle and needle not in item.text().casefold()))
+
+    def _on_main_mode_changed(self, _index: int):
+        mode = self.main_mode_combo.currentData() or "auto"
+        try:
+            import agents
+            result = agents.set_run_mode(mode)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error", "Couldn't change agent mode"))
+            agent = getattr(self, "agent", None)
+            if agent is not None:
+                agent.run_mode = mode
+            labels = {
+                "auto": "Autopilot can operate the computer end-to-end",
+                "plan": "Plan first · Ember waits before acting",
+                "chat": "Chat only · computer controls are paused",
+                "read_only": "Read only · inspect without changing anything",
+            }
+            self._set_status(labels.get(mode, "Agent mode updated"))
+        except Exception as exc:
+            QMessageBox.warning(self, "Agent mode", str(exc))
+
+    def _on_main_mouse_toggled(self, enabled: bool):
+        self.settings["mouse_humanize"] = bool(enabled)
+        self._apply_mouse_options()
+        save_settings(self.settings)
+        self._set_status("Human pointer motion on" if enabled else "Direct pointer motion on")
+
+    def _on_main_mouse_speed_changed(self, value: int):
+        speed = max(0.25, min(3.0, value / 100.0))
+        self.settings["mouse_speed"] = speed
+        self.main_mouse_speed_value.setText(f"{speed:.2f}×")
+        self._apply_mouse_options()
+
+    def _persist_main_mouse_speed(self):
+        save_settings(self.settings)
+        self._set_status(f"Pointer speed · {self.settings.get('mouse_speed', 1.0):.2f}×")
+
+    def _switch_main_view(self, which: str):
+        """Compatibility shim: cloud and local models now share the unified conversation."""
+        if which == "chat":
+            self._open_settings("Models")
 
     def _active_chat(self) -> dict:
         sessions = self.chat_history.setdefault("sessions", [])
@@ -6882,14 +8153,20 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             count = len([m for m in (chat.get("messages") or [])
                          if m.get("role") in ("user", "assistant")])
             title = chat.get("title") or "New chat"
-            item = QListWidgetItem(f"{title}\n{count} message{'s' if count != 1 else ''}")
+            item = QListWidgetItem(title)
             item.setData(Qt.ItemDataRole.UserRole, chat.get("id"))
+            item.setToolTip(f"{title}\n{count} message{'s' if count != 1 else ''}")
             self.history_list.addItem(item)
             if chat.get("id") == self.active_chat_id:
                 active_row = i
         if self.history_list.count():
             self.history_list.setCurrentRow(active_row)
         self._history_loading = False
+        active = self._active_chat()
+        if hasattr(self, "workspace_title"):
+            self.workspace_title.setText((active.get("title") or "New task")[:44])
+        if hasattr(self, "history_search"):
+            self._filter_history(self.history_search.text())
 
     def _clear_chat_view(self):
         # A fresh/loaded chat should land at the bottom (latest message visible).
@@ -6907,22 +8184,71 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._typing_label = None
         self._streaming_bubble_label = None
         self._streaming_buffer = ""
+        self.empty_hint = None
 
     def _load_active_chat_into_view(self):
         self._clear_chat_view()
         chat = self._active_chat()
         messages = chat.get("messages") or []
         if not messages:
-            hk = (self.settings.get("hotkey") or "ctrl+shift+space").upper().replace("+", "+")
-            self._add_bubble("system",
-                "Hi — I'm Ember, your computer's AI agent.\n"
-                "I can organize files, browse the web, use desktop apps, debug crashes, automate tasks, "
-                "control the mouse and keyboard, read the screen, create local files, and recover context from chat history.\n"
-                "Use Voice Chat for hands-free work, the Command Center for common tasks, or just tell me the outcome you want.\n"
-                f"**{hk}** summons me from anywhere · drop files into chat to discuss them.")
+            self._add_empty_state()
             return
         for msg in messages[-120:]:
             self._add_bubble(msg.get("role", "assistant"), msg.get("text", ""), meta=msg.get("meta"))
+
+    def _add_empty_state(self):
+        """A calm conversation-first welcome with useful prompts, not a dashboard card."""
+        frame = QFrame()
+        frame.setObjectName("emptyState")
+        frame.setMaximumWidth(820)
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        content = QVBoxLayout(frame)
+        content.setContentsMargins(28, 54, 28, 28)
+        content.setSpacing(10)
+        mark = QLabel("✦")
+        mark.setObjectName("emptyMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFixedSize(46, 46)
+        self._start_ambient_pulse(mark)
+        title = QLabel("What can I help you get done?")
+        title.setObjectName("emptyTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(True)
+        body = QLabel(
+            "Ask a question or describe an outcome. Ember can work with your apps, browser, "
+            "files, and screen—and pauses before sensitive actions.")
+        body.setObjectName("emptyBody")
+        body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.setWordWrap(True)
+        content.addWidget(mark, 0, Qt.AlignmentFlag.AlignHCenter)
+        content.addWidget(title)
+        content.addWidget(body)
+        suggestions = QWidget()
+        suggestion_grid = QGridLayout(suggestions)
+        suggestion_grid.setContentsMargins(8, 8, 8, 8)
+        suggestion_grid.setHorizontalSpacing(8)
+        suggestion_grid.setVerticalSpacing(8)
+        for index, (label, command) in enumerate((
+                ("Help me use this app", "/apps"),
+                ("Research and compare", "/research"),
+                ("Organize my files", "/organize"),
+                ("Create something new", "/create"))):
+            button = QPushButton(label)
+            button.setObjectName("promptCard")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, c=command: self._run_slash(c))
+            suggestion_grid.addWidget(button, index // 2, index % 2)
+        content.addSpacing(3)
+        content.addWidget(suggestions)
+        hk = (self.settings.get("hotkey") or "ctrl+shift+space").upper()
+        self.empty_hint = QLabel(f"{hk} summons Ember anywhere  ·  ⌘/Ctrl K finds tools")
+        self.empty_hint.setObjectName("composerHint")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setVisible(getattr(self, "_size_mode", "normal") != "chatbot")
+        content.addWidget(self.empty_hint)
+        self.chat_layout.insertWidget(
+            self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
+        QTimer.singleShot(0, self._clamp_bubble_widths)
 
     def _append_history(self, role: str, text: str, meta: str | None = None):
         if not text:
@@ -7127,12 +8453,13 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         # during init (welcome / history) so they don't render at a stale width and end
         # up visually off to the side.
         QTimer.singleShot(0, self._clamp_bubble_widths)
-        if not bool(self.settings.get("animations_enabled", True)):
+        duration = self._motion_duration(180)
+        if duration <= 0:
             return
         try:
             self.setWindowOpacity(0.0)
             anim = QPropertyAnimation(self, b"windowOpacity", self)
-            anim.setDuration(180)
+            anim.setDuration(duration)
             anim.setStartValue(0.0)
             anim.setEndValue(1.0)
             anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -7184,9 +8511,22 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 return True
         return super().eventFilter(obj, ev)
 
+    def _resize_composer(self):
+        """Grow the prompt naturally for multi-line input, while keeping one-line chat compact."""
+        box = getattr(self, "input_box", None)
+        if box is None:
+            return
+        try:
+            document_height = int(box.document().size().height())
+            box.setFixedHeight(max(46, min(96, document_height + 12)))
+        except Exception:
+            pass
+
     # --- chat bubbles ---
     def _add_bubble(self, kind: str, text: str, meta: str | None = None) -> QFrame:
         frame = QFrame()
+        frame.setProperty("messageKind", kind)
+        frame.setProperty("plainText", text or "")
         if kind == "user":
             frame.setObjectName("bubbleUser")
             # The user just spoke — they want to see it + the reply, so re-follow the bottom
@@ -7198,10 +8538,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             frame.setObjectName("bubbleError")
         elif kind == "confirm":
             frame.setObjectName("bubbleConfirm")
+        elif kind == "system":
+            frame.setObjectName("bubbleSystem")
         else:
             frame.setObjectName("bubble")
-        # Bubble fills horizontal width and expands vertically for long responses.
-        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # Assistant replies read like a document; user/system messages hug their content.
+        horizontal_policy = (QSizePolicy.Policy.Preferred if kind in ("user", "system")
+                             else QSizePolicy.Policy.Expanding)
+        frame.setSizePolicy(horizontal_policy, QSizePolicy.Policy.Preferred)
         # Hard cap so it never exceeds the visible chat area (scrollbar reserved), even mid-resize.
         try:
             frame_w, _ = self._chat_widths()
@@ -7228,8 +8572,11 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         body.setMinimumWidth(50)
         v.addWidget(body)
-        # Insert before the trailing stretch so bubbles stay top-aligned.
-        self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame)
+        # ChatGPT-like rhythm: user messages sit right; assistant and notices share a centered
+        # readable column instead of every message becoming a full-width dashboard card.
+        alignment = (Qt.AlignmentFlag.AlignRight if kind == "user"
+                     else Qt.AlignmentFlag.AlignHCenter)
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame, 0, alignment)
         self._fade_in(frame, 180)
         QTimer.singleShot(35, self._scroll_to_bottom_smooth)
         # Re-clamp once layout settles so a bubble added before geometry is known
@@ -7258,25 +8605,19 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         try:
             # Lock THIS bubble's width (and its labels' wrap width) and force the layout to
             # compute the real wrapped height NOW, so we animate to the final height.
-            try:
-                frame_w, lbl_w = self._chat_widths()
-                if frame_w > 0:
-                    frame.setMaximumWidth(frame_w)
-                    from PyQt6.QtWidgets import QLabel
-                    for lbl in frame.findChildren(QLabel):
-                        lbl.setFixedWidth(lbl_w)
-            except Exception:
-                pass
+            self._clamp_bubble_widths()
             lay = frame.layout()
             if lay is not None:
                 lay.activate()
             frame.adjustSize()
             h = max(1, frame.sizeHint().height())
             anim = QPropertyAnimation(frame, b"maximumHeight", self)
-            anim.setDuration(200)          # snappy
+            anim.setDuration(self._motion_duration(230))
             anim.setStartValue(0)
             anim.setEndValue(h)
-            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.setEasingCurve(
+                QEasingCurve.Type.OutBack if self._motion_mode() == "dynamic"
+                else QEasingCurve.Type.OutCubic)
             anim.finished.connect(lambda f=frame: f.setMaximumHeight(QWIDGET_MAX))
             anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
             if not hasattr(self, "_anims"):
@@ -7299,8 +8640,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 return 0, 0
             sb = self.chat_scroll.verticalScrollBar()
             sb_w = sb.sizeHint().width() or 14
-            frame_w = max(80, W - sb_w - 16)   # 16 = chat_container 8+8 margins
-            lbl_w = max(60, frame_w - 28)      # frame 12+12 margins + 4 safety
+            available = max(80, W - sb_w - 48)  # chat container margins + breathing room
+            frame_w = min(860, available)
+            lbl_w = max(60, frame_w - 28)
             return frame_w, lbl_w
         except Exception:
             return 0, 0
@@ -7319,9 +8661,37 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 w = item.widget() if item else None
                 if w is None:
                     continue
-                w.setMaximumWidth(frame_w)
+                name = w.objectName()
+                if name == "bubbleUser":
+                    body = next((label for label in w.findChildren(QLabel)
+                                 if label.objectName() == "bubbleBody"), None)
+                    plain = str(w.property("plainText") or "")
+                    longest = max(plain.splitlines() or [plain], key=len)
+                    natural = (body.fontMetrics().horizontalAdvance(longest) + 34
+                               if body is not None else 240)
+                    target = max(96, min(660, int(frame_w * 0.76), natural))
+                    w.setMinimumWidth(target)
+                    w.setMaximumWidth(target)
+                elif name == "emptyState":
+                    target = frame_w
+                    w.setMinimumWidth(0)
+                    w.setMaximumWidth(target)
+                elif name in ("bubbleTool", "bubbleSystem"):
+                    target = min(760, frame_w)
+                    w.setMinimumWidth(0)
+                else:
+                    target = frame_w
+                    w.setMinimumWidth(0)
+                    w.setMaximumWidth(target)
+                if name == "emptyState":
+                    w.updateGeometry()
+                    continue
                 for lbl in w.findChildren(QLabel):
-                    lbl.setFixedWidth(lbl_w)
+                    inner = max(60, target - 28)
+                    if name == "bubbleUser":
+                        lbl.setFixedWidth(inner)
+                    else:
+                        lbl.setFixedWidth(inner)
                 w.updateGeometry()
         except Exception:
             pass
@@ -7392,7 +8762,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             if not getattr(self, "_chat_stick_bottom", True):
                 return
             end = bar.maximum()
-            if not bool(self.settings.get("animations_enabled", True)):
+            duration = self._motion_duration(duration)
+            if duration <= 0:
                 bar.setValue(end)
                 return
             anim = QPropertyAnimation(bar, b"value", self)
@@ -7421,6 +8792,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 self._typing_frame = None   # stale (deleted) ref -> recreate below
         frame = QFrame()
         frame.setObjectName("typingIndicator")
+        frame.setMaximumWidth(820)
         h = QHBoxLayout(frame)
         h.setContentsMargins(10, 4, 10, 4)
         h.setSpacing(10)
@@ -7436,10 +8808,11 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             dl.setObjectName("typingDots")
             h.addWidget(dl)
         label = QLabel("Ember is thinking…")
-        label.setStyleSheet("color: #565f89; font-size: 11px;")
+        label.setStyleSheet("color: #8f99ad; font-size: 11px;")
         h.addWidget(label)
         h.addStretch()
-        self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame)
+        self.chat_layout.insertWidget(
+            self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
         self._typing_frame = frame
         self._typing_dots = dots
         QTimer.singleShot(45, self._scroll_to_bottom_smooth)
@@ -7464,9 +8837,12 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
 
     def _set_status(self, text: str):
         self.status_label.setText(text)
+        model = self.settings.get("model_id") or self.settings.get("gemini_model") or "Choose model"
+        model_button = getattr(self, "model_btn", None)
+        if model_button is not None:
+            model_button.setText(str(model))
         metric = getattr(self, "model_metric", None)
         if metric is not None:
-            model = self.settings.get("model_id") or self.settings.get("gemini_model") or "No model"
             metric.setText(f"{model} · {text}")
 
     def _submit_user_text(self, text: str, meta: str | None = None, status: str = "Thinking...") -> bool:
@@ -7503,6 +8879,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         if corrected:
             meta = f"{meta} · autocorrected" if meta else "autocorrected"
         agent_text = self._agent_contextual_text(text)
+        self._activity_reset()
         self._add_bubble("user", text, meta=meta)
         self._append_history("user", text, meta=meta)
         self._set_status(status)
@@ -7552,6 +8929,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return True
         expanded = target + (" " + rest if rest else "")
         agent_text = self._agent_contextual_text(expanded)
+        self._activity_reset()
         self._add_bubble("user", text + f"\n(expanded: {target[:80]}{'…' if len(target) > 80 else ''})")
         self._append_history("user", text)
         self._set_status("Thinking…")
@@ -7588,6 +8966,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             "__setup_tour__": "_open_setup_tour",
             "__terminal__": "_open_terminal",
             "__agents__": "_open_agents",
+            "__storage__": "_open_storage_inspector",
+            "__network_inspector__": "_open_network_inspector",
+            "__clipboard__": "_open_clipboard_history",
         }
         handler = None
         if cmd in feature_methods:
@@ -7623,6 +9004,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
     def _open_agents(self):
         """Open the parallel agent-tasks dashboard."""
         AgentsDialog(self._ensure_task_manager(), self).exec()
+
+    def _open_storage_inspector(self):
+        StorageInspectorDialog(self).exec()
+
+    def _open_network_inspector(self):
+        NetworkInspectorDialog(self).exec()
+
+    def _open_clipboard_history(self):
+        ClipboardHistoryDialog(self).exec()
 
     def _spawn_agent(self):
         """Build a FRESH agent instance for a background parallel task (separate from self.agent).
@@ -7664,7 +9054,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             anthropic_model=s.get("anthropic_model", "claude-opus-4-8"),
             auto_screenshot=bool(s.get("auto_screenshot", True)),
             request_timeout_seconds=int(s.get("request_timeout_seconds", 30)),
-            lean_tools=bool(s.get("lean_tools", True)))
+            lean_tools=bool(s.get("lean_tools", False)))
 
     def _agent_task_runner(self, prompt, emit, stop_event):
         """Drive a fresh agent to completion for one parallel task (called on a worker thread by
@@ -8734,7 +10124,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._add_bubble(
             "system",
             f"📱 Ember Link is live at **{url}** (PIN **{pin}**). "
-            "Open it on a phone on the same Wi-Fi to control this Mac.",
+            "Open it on a phone on the same Wi-Fi to control this computer.",
         )
 
     def _start_mcp_bridge(self, announce: bool = True):
@@ -8769,6 +10159,28 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             print(f"[Ember MCP bridge autostart failed: {r.get('error')}]")
 
     # ------------------------------------------------------------------ updates
+    def _report_update_result(self):
+        try:
+            import updater
+            result = updater.consume_update_result()
+        except Exception:
+            return
+        if not result:
+            return
+        if result.get("ok"):
+            self._add_bubble("system", "✓ Ember updated successfully. You're on the latest build.")
+            self._set_status("Update installed")
+            updater.cleanup_backup()
+        else:
+            self._add_bubble("error", result.get("message") or
+                             "The update failed, so Ember restored the previous version.")
+            self._set_status("Update rolled back safely")
+
+    def _on_update_progress(self, percent: int):
+        ver = (self._pending_update or {}).get("version", "")
+        suffix = f" {ver}" if ver else ""
+        self._set_status(f"Downloading Ember{suffix}… {max(0, min(100, percent))}%")
+
     def _check_for_update_async(self):
         """Background check for a newer release. No-op in dev / when unconfigured.
         Emits update_available (with the manifest) on the UI thread if one is found."""
@@ -9072,12 +10484,20 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         def _work():
             try:
                 import updater
-                staged = updater.download_and_stage(manifest)
+                staged = updater.download_and_stage(
+                    manifest, progress=lambda pct: self._bridge.update_progress.emit(pct))
                 updater.apply_update_and_relaunch(staged)
                 _post(lambda: self._add_bubble("system", "Update ready — restarting Ember…"))
                 _post(lambda: QApplication.instance().quit())
             except Exception as e:
-                _post(lambda: self._add_bubble("error", f"Update failed: {type(e).__name__}: {e}"))
+                try:
+                    import version
+                    manual = version.latest_download_url()
+                except Exception:
+                    manual = "the Ember website"
+                message = (f"Update failed: {type(e).__name__}: {e}\n\n"
+                           f"Your current version is untouched. Manual download: {manual}")
+                _post(lambda m=message: self._add_bubble("error", m))
                 _post(lambda: self._set_status("Update failed"))
 
         threading.Thread(target=_work, daemon=True).start()
@@ -9201,13 +10621,22 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             save_settings(self.settings)
             if self.agent is None or any(self.settings.get(k) != old_agent[k] for k in agent_keys):
                 self._init_agent()
-            # Apply MCP bridge changes live: start/stop/restart to match the new settings.
+            # Apply MCP bridge changes live. Keep an already-correct bridge alive so saving the
+            # dialog does not rotate its token underneath a running ChatGPT MCP endpoint.
             if any(self.settings.get(k) != old_mcp[k] for k in old_mcp):
                 try:
                     import ember_bridge
                     if self.settings.get("mcp_bridge_enabled"):
-                        ember_bridge.stop()          # restart to pick up port/high-risk changes
-                        self._start_mcp_bridge(announce=True)
+                        current = ember_bridge.status()
+                        desired_port = int(self.settings.get("mcp_bridge_port", 8770) or 8770)
+                        desired_high_risk = bool(
+                            self.settings.get("mcp_bridge_allow_high_risk", False))
+                        already_matches = (
+                            current.get("running") and current.get("port") == desired_port and
+                            current.get("allow_high_risk") == desired_high_risk)
+                        if not already_matches:
+                            ember_bridge.stop()
+                            self._start_mcp_bridge(announce=True)
                     else:
                         ember_bridge.stop()
                 except Exception as e:
@@ -9220,6 +10649,27 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self._apply_glow()
             self._apply_glass_effect()
             self._apply_tts_config()   # read-aloud engine may have changed
+            self._apply_mouse_options()
+            if hasattr(self, "main_mouse_toggle"):
+                self.main_mouse_toggle.blockSignals(True)
+                self.main_mouse_toggle.setChecked(bool(self.settings.get("mouse_humanize", True)))
+                self.main_mouse_toggle.blockSignals(False)
+                speed = max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0))))
+                self.main_mouse_speed.blockSignals(True)
+                self.main_mouse_speed.setValue(int(round(speed * 100)))
+                self.main_mouse_speed.blockSignals(False)
+                self.main_mouse_speed_value.setText(f"{speed:.2f}×")
+            try:
+                import agents as _ag
+                run_mode = _ag.get_run_mode()
+                for i in range(self.main_mode_combo.count()):
+                    if self.main_mode_combo.itemData(i) == run_mode:
+                        self.main_mode_combo.blockSignals(True)
+                        self.main_mode_combo.setCurrentIndex(i)
+                        self.main_mode_combo.blockSignals(False)
+                        break
+            except Exception:
+                pass
             new_hotkey = (self.settings.get("hotkey") or "ctrl+shift+space").lower()
             if new_hotkey != old_hotkey:
                 self._install_hotkey()
@@ -9394,9 +10844,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     anthropic_model=self.settings.get("anthropic_model", "claude-opus-4-8"),
                     auto_screenshot=bool(self.settings.get("auto_screenshot", True)),
                     request_timeout_seconds=int(self.settings.get("request_timeout_seconds", 30)),
-                    lean_tools=bool(self.settings.get("lean_tools", True)),
+                    lean_tools=bool(self.settings.get("lean_tools", False)),
                 )
             self.agent.subscribe(lambda ev: self._bridge.event.emit(ev))
+            try:
+                import ember_bridge
+                ember_bridge.set_host_agent(self.agent)
+            except Exception:
+                pass
             # Carry the visible conversation into the fresh agent so switching model/provider
             # mid-chat doesn't wipe context. Best-effort: never let it block agent init.
             try:
@@ -9531,6 +10986,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             elif ev.kind == "tool_call":
                 name = ev.payload["name"]
                 args_short = self._shorten_args(ev.payload["args"])
+                self._activity_tool_call(name, ev.payload["args"])
                 # No separate "calling…" bubble — the status line shows it live and the result
                 # bubble records what ran, so the chat doesn't fill up with activity lines.
                 if _remote:
@@ -9541,6 +10997,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 result = ev.payload["result"]
                 ok = result.get("ok", True)
                 summary = self._summarize_result(name, result)
+                self._activity_tool_result(name, result, summary)
                 if ok:
                     # Completed steps update the live status, NOT the chat — keep the
                     # conversation to real messages, not a wall of task activity.
@@ -9571,11 +11028,13 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             elif ev.kind == "claude_handoff":
                 self._add_bubble("system", "Claude replied (via API):\n" + (ev.payload.get("auto_reply") or "")[:1500])
             elif ev.kind == "error":
+                self._activity_complete()
                 self._add_bubble("error", str(ev.payload))
                 self._append_history("error", str(ev.payload))
                 if _remote:
                     _remote.push_chat("system", "Error: " + str(ev.payload))
             elif ev.kind == "done":
+                self._activity_complete()
                 self.send_btn.setEnabled(True)
                 self._hide_typing_indicator()
                 self._set_status(f"Ready ({self.settings.get('model_id') or self.settings.get('gemini_model')})")

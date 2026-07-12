@@ -131,7 +131,9 @@ class ClaudeAgent:
         self._stop_flag.clear()
         try:
             self._messages.append({"role": "user", "content": self._user_block(user_text)})
-            for _ in range(12):
+            last_call_signature = ""
+            repeated_call_rounds = 0
+            while not self._stop_flag.is_set():
                 if self._stop_flag.is_set():
                     return
                 response = self._call_claude()
@@ -151,6 +153,17 @@ class ClaudeAgent:
                         details = getattr(response, "stop_details", None)
                         why = getattr(details, "explanation", None) or "declined for safety reasons"
                         self._emit(AgentEvent("message", f"[Claude declined: {why}]"))
+                    return
+                call_signature = json.dumps([
+                    {"name": tu.name, "args": tools._to_plain(tu.input) if tu.input else {}}
+                    for tu in tool_uses], sort_keys=True, default=str)
+                repeated_call_rounds = (repeated_call_rounds + 1
+                                        if call_signature == last_call_signature else 1)
+                last_call_signature = call_signature
+                if repeated_call_rounds >= 4:
+                    self._emit(AgentEvent(
+                        "error", "Stopped a repeated-action loop after Claude requested the "
+                        "same operation four times."))
                     return
                 tool_results = []
                 for tu in tool_uses:
@@ -227,7 +240,6 @@ class ClaudeAgent:
                         "content": blocks_out,
                     })
                 self._messages.append({"role": "user", "content": content})
-            self._emit(AgentEvent("message", "[step limit reached - say 'continue' to keep going]"))
         except Exception as e:
             self._emit(AgentEvent("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()[:1500]}"))
         finally:

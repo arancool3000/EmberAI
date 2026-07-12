@@ -18,6 +18,7 @@ common_pkgs = ["google.genai", "google.ai", "google.api_core", "google.auth",
                "openai",   # OpenAI/ChatGPT + OpenAI-compatible providers (openai_agent)
                "mcp",      # Model Context Protocol server so the app can run `--mcp-server`
                "speech_recognition", "pyttsx3", "pyaudio", "pynput",
+               "sounddevice",
                "PyPDF2", "openpyxl", "qrcode",
                "certifi"]   # bundles cacert.pem so HTTPS (auto-updater) verifies in the frozen app
 win_pkgs = ["uiautomation", "comtypes", "keyboard", "pycaw"]

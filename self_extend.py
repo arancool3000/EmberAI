@@ -292,7 +292,9 @@ def _source_root() -> Path:
 
 def _resolve_source(path: str) -> Path | None:
     """Resolve `path` to a .py inside Ember's own source tree, or None if it escapes it."""
-    root = _source_root()
+    # Canonicalise both sides before containment checks. On macOS /var resolves to /private/var;
+    # comparing a resolved child with an unresolved root falsely rejected valid in-tree paths.
+    root = _source_root().resolve()
     p = (root / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
     try:
         p.relative_to(root)

@@ -8,6 +8,63 @@ cd "$(dirname "$0")"
 # verify" prompt. (The very first launch still needs right-click -> Open.)
 xattr -dr com.apple.quarantine "$(pwd)" 2>/dev/null || true
 
+# Live progress for long build steps. The real command writes to a log while the terminal gets
+# an ETA and rotating low-stakes joke; CI/non-TTY runs still preserve the command's exit code.
+JOKES=(
+  "Why do programmers prefer dark mode? Light attracts bugs."
+  "There are 10 kinds of people: those who read binary and those who don't."
+  "A SQL query walks up to two tables: 'Mind if I join you?'"
+  "Why did the dev go broke? He used up all his cache."
+  "I'd tell you a UDP joke, but you might not get it."
+  "Why do Java devs wear glasses? They can't C#."
+  "!false — it's funny because it's true."
+  "Coding is 10% writing it and 90% wondering why it won't run."
+  "There's no place like 127.0.0.1."
+  "Why was the function sad? It never got called back."
+  "Debugging: you're the detective AND the culprit."
+  "To understand recursion, first understand recursion."
+  "It's not a bug — it's an undocumented feature."
+  "Real programmers count from 0."
+  "A good programmer looks both ways before crossing a one-way street."
+  "99 little bugs in the code… patch one… 127 little bugs in the code."
+)
+
+_secs() { printf "%02d:%02d" $(( ${1:-0} / 60 )) $(( ${1:-0} % 60 )); }
+_repeat() { local n=${1:-0} c=${2:-#} out=""; while (( n-- > 0 )); do out+="$c"; done; printf "%s" "$out"; }
+
+run_with_progress() {
+  local est=${1:-240} label=${2:-Working}; shift 2
+  LAST_LOG="$(mktemp "${TMPDIR:-/tmp}/ember_build.XXXXXX")"
+  "$@" >"$LAST_LOG" 2>&1 &
+  local pid=$! start=$SECONDS width=26 cols ji lastj=0
+  cols=$(tput cols 2>/dev/null || echo 80)
+  ji=$(( RANDOM % ${#JOKES[@]} ))
+  if [ ! -t 1 ]; then
+    wait "$pid"; return $?
+  fi
+  printf '\n\n\033[2A'
+  while kill -0 "$pid" 2>/dev/null; do
+    local el=$(( SECONDS - start ))
+    (( el - lastj >= 10 )) && { lastj=$el; ji=$(( (ji + 1) % ${#JOKES[@]} )); }
+    local pct=$(( est > 0 ? el * 100 / est : 99 )); (( pct > 99 )) && pct=99
+    local fill=$(( pct * width / 100 )) eta=$(( est - el )); (( eta < 0 )) && eta=0
+    local bar="$(_repeat "$fill" '#')$(_repeat $(( width - fill )) '-')"
+    local etastr="ETA ~$(_secs "$eta")"; (( eta == 0 )) && etastr="almost there…"
+    local joke="😄 ${JOKES[$ji]}"; joke="${joke:0:$(( cols - 2 ))}"
+    printf '\r\033[K  %s\n\r\033[K  %s [%s] %3d%%  ⏱ %s  %s\033[1A\r' \
+      "$joke" "$label" "$bar" "$pct" "$(_secs "$el")" "$etastr"
+    sleep 1
+  done
+  wait "$pid"; local rc=$? el=$(( SECONDS - start ))
+  if [ "$rc" -eq 0 ]; then
+    printf '\r\033[K  ✅ Nice — that part is done!\n\r\033[K  %s [%s] 100%%  ⏱ took %s\n' \
+      "$label" "$(_repeat "$width" '#')" "$(_secs "$el")"
+  else
+    printf '\r\033[K  ❌ %s failed after %s\n\r\033[K\n' "$label" "$(_secs "$el")"
+  fi
+  return "$rc"
+}
+
 echo "==============================================="
 echo "  Building Ember.app  (first build: 3-6 min)"
 echo "==============================================="
@@ -26,24 +83,13 @@ fi
 PYBIN=".venv/bin/python"
 
 echo "Installing Ember's dependencies…"
-uv pip install -r requirements.txt || { echo "Dependency install failed. Press Enter."; read _; exit 1; }
+run_with_progress 180 "Installing dependencies" uv pip install -r requirements.txt \
+  || { echo "Dependency install failed. Last lines:"; tail -20 "$LAST_LOG"; echo "Press Enter."; read _; exit 1; }
 uv pip install --upgrade pyinstaller
 
-# Microphone INPUT: pyaudio is intentionally OUT of requirements.txt (it compiles against the
-# portaudio C library), but a packaged .app MUST bundle it or "Hey Ember" and voice chat can't
-# hear anything — the #1 "the mic doesn't work in the app" complaint. Install portaudio and point
-# the compiler at it (Apple-Silicon Homebrew lives in /opt/homebrew, which pip doesn't search by
-# default), so the spec's collect_all("pyaudio") actually bundles working mic support.
-if command -v brew >/dev/null 2>&1; then
-  brew list portaudio >/dev/null 2>&1 || { echo "Installing portaudio (microphone support)…"; brew install portaudio; }
-  _pa="$(brew --prefix portaudio 2>/dev/null)"
-  [ -n "$_pa" ] && export CPPFLAGS="-I$_pa/include ${CPPFLAGS}" && export LDFLAGS="-L$_pa/lib ${LDFLAGS}"
-fi
-uv pip install pyaudio \
-  || echo "  WARNING: pyaudio didn't install — the built app won't have mic input. Install Homebrew (brew.sh) + 'brew install portaudio', then rebuild."
-
 rm -rf build dist
-"$PYBIN" -m PyInstaller --noconfirm Ember.spec || { echo "Build failed. Press Enter."; read _; exit 1; }
+run_with_progress 240 "Building Ember.app" "$PYBIN" -m PyInstaller --noconfirm --log-level=WARN Ember.spec \
+  || { echo "Build failed. Last lines:"; tail -30 "$LAST_LOG"; echo "Press Enter."; read _; exit 1; }
 
 # Clean extended-attribute detritus and apply a VALID ad-hoc signature.
 # PyInstaller's own ad-hoc signature is often malformed, which makes macOS

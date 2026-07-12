@@ -120,10 +120,11 @@ SAFE_READONLY = {
     "get_battery", "get_volume", "env_get", "env_list",
     "color_at", "clipboard_get", "clipboard_history_get", "clipboard_history_snapshot",
     "git_status", "git_log", "git_diff",
-    "scan_file", "list_quarantine", "security_status", "list_cleared_files",
+    "scan_file", "list_quarantine", "verify_quarantined", "security_status", "security_audit", "security_report",
+    "list_cleared_files",
     "check_url", "list_web_policy", "web_status",
     "get_audit_log", "verify_audit_log", "get_security_mode",
-    "get_plan", "list_pro_features", "vpn_status", "list_vpn_locations",
+    "get_plan", "list_pro_features", "set_plan", "vpn_status", "list_vpn_locations",
     "disk_usage", "list_open_ports", "password_strength", "system_health",
     "list_startup_items", "scan_host_ports", "network_devices", "wifi_info",
     "file_info", "password_pwned_check", "keychain_get",
@@ -156,7 +157,7 @@ SAFE_READONLY = {
     "list_timers",                                            # countdown timers (read-only)
     "gmail_status", "gmail_list_labels", "gmail_search", "gmail_read",  # Gmail (read-only)
     "folder_report", "bulk_read_documents",                            # bulk productivity (read-only)
-    "security_dashboard", "software_update_check",                     # Norton-style suite (read-only)
+    "security_dashboard", "software_update_check",                     # endpoint-security controls (read-only)
 }
 
 SAFE_INTERACTION = {
@@ -345,8 +346,8 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
         return "high", "changes Ember's capability mode"
     if tool_name == "vpn_connect":
         return "high", "changes your network routing (VPN connect)"
-    if tool_name in {"vpn_disconnect", "add_vpn_location", "remove_vpn_location", "set_plan"}:
-        return "medium", "VPN / plan configuration change"
+    if tool_name in {"vpn_disconnect", "add_vpn_location", "remove_vpn_location"}:
+        return "medium", "VPN configuration change"
     if tool_name == "scan_directory":
         return "medium", "scans a folder and may quarantine malware"
     if tool_name == "secure_delete":
@@ -384,10 +385,10 @@ VALID_MODES = ("full", "restricted", "read_only")
 
 # Non-mutating tools allowed even in read-only mode (in addition to SAFE_READONLY).
 _READ_ONLY_EXTRA = {
-    "scan_file", "list_quarantine", "security_status",
+    "scan_file", "list_quarantine", "verify_quarantined", "security_status", "security_audit", "security_report",
     "check_url", "list_web_policy", "web_status",
     "get_audit_log", "verify_audit_log", "get_security_mode",
-    "get_plan", "list_pro_features", "vpn_status", "list_vpn_locations",
+    "get_plan", "list_pro_features", "set_plan", "vpn_status", "list_vpn_locations",
     "disk_usage", "list_open_ports", "password_strength", "system_health",
 }
 

@@ -6,7 +6,10 @@ running AppImage via $APPIMAGE).
 Run: python test_updater.py"""
 import os
 import sys
+import tempfile
 import urllib.request
+import zipfile
+from pathlib import Path
 
 import updater
 import version
@@ -64,6 +67,112 @@ def test_check_returns_manifest_when_newer():
         version.is_configured = orig_configured
         urllib.request.urlopen = orig_urlopen
         updater.current_version = orig_current
+
+
+def test_check_falls_back_to_independent_manifest_source():
+    original_fetch = updater._fetch_json
+    original_configured = version.is_configured
+    original_urls = version.manifest_urls
+    original_current = updater.current_version
+    calls = []
+    version.is_configured = lambda: True
+    version.manifest_urls = lambda: ["https://first/latest.json", "https://backup/latest.json"]
+    updater.current_version = lambda: "1.0.0"
+    def fake_fetch(url, timeout, attempts=1):
+        calls.append(url)
+        if "first" in url:
+            raise RuntimeError("temporary CDN miss")
+        return {"version": "2.0.0", "downloads": {}}
+    updater._fetch_json = fake_fetch
+    try:
+        manifest = updater.check_for_update(raise_on_error=True)
+        assert manifest["version"] == "2.0.0"
+        assert calls == ["https://first/latest.json", "https://backup/latest.json"]
+        assert updater.last_check_diagnostics()["source"] == "https://backup/latest.json"
+    finally:
+        updater._fetch_json = original_fetch
+        version.is_configured = original_configured
+        version.manifest_urls = original_urls
+        updater.current_version = original_current
+
+
+def test_release_api_can_recover_a_missing_manifest():
+    key = version.platform_key()
+    if not key:
+        return
+    release = {
+        "tag_name": "v9.8.7",
+        "published_at": "2026-07-12T12:00:00Z",
+        "assets": [{
+            "name": version.asset_name(key),
+            "browser_download_url": (
+                f"https://github.com/o/r/releases/download/v9.8.7/{version.asset_name(key)}"),
+            "digest": "sha256:" + "a" * 64,
+        }],
+    }
+    manifest = updater._manifest_from_release_api(release)
+    assert manifest["version"] == "9.8.7"
+    assert manifest["downloads"][key]["sha256"] == "a" * 64
+
+
+def test_download_retries_and_commits_only_complete_file():
+    original_urlopen = urllib.request.urlopen
+    original_sleep = updater.time.sleep
+    calls = []
+    class Response:
+        headers = {"Content-Length": "6"}
+        def __init__(self): self.parts = [b"abc", b"def", b""]
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, _size=-1): return self.parts.pop(0)
+    def fake_urlopen(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("connection reset")
+        return Response()
+    urllib.request.urlopen = fake_urlopen
+    updater.time.sleep = lambda *_: None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "Ember.zip"
+            seen = []
+            updater._download("https://github.com/o/r/Ember.zip", dest,
+                              progress=seen.append, attempts=3)
+            assert dest.read_bytes() == b"abcdef"
+            assert not Path(str(dest) + ".part").exists()
+            assert len(calls) == 2 and seen[-1] == 100
+    finally:
+        urllib.request.urlopen = original_urlopen
+        updater.time.sleep = original_sleep
+
+
+def test_safe_zip_rejects_path_traversal():
+    with tempfile.TemporaryDirectory() as td:
+        archive_path = Path(td) / "bad.zip"
+        extract = Path(td) / "extract"
+        extract.mkdir()
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("../outside.txt", "nope")
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                updater._safe_extract_zip(archive, extract)
+            assert False, "path traversal should be rejected"
+        except RuntimeError as exc:
+            assert "unsafe path" in str(exc)
+        assert not (Path(td) / "outside.txt").exists()
+
+
+def test_update_result_is_consumed_once():
+    original_path = updater.update_result_path
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "result.txt"
+        updater.update_result_path = lambda: path
+        try:
+            path.write_text("ok|Update installed successfully.", encoding="utf-8")
+            assert updater.consume_update_result()["ok"] is True
+            assert updater.consume_update_result() is None
+        finally:
+            updater.update_result_path = original_path
 
 
 # --- Linux AppImage self-update ---------------------------------------------------------

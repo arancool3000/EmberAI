@@ -24,15 +24,20 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
 import version
+
+
+_LAST_CHECK: dict = {}
 
 
 def current_version() -> str:
@@ -52,6 +57,81 @@ def _ssl_context():
             return ssl.create_default_context()
         except Exception:
             return None
+
+
+def last_check_diagnostics() -> dict:
+    """A copy of the latest check result for logs/support without exposing internal mutation."""
+    return dict(_LAST_CHECK)
+
+
+def _fetch_json(url: str, timeout: float, attempts: int = 1) -> dict:
+    """Fetch JSON with short retry/backoff and cache-busting headers."""
+    errors = []
+    for attempt in range(max(1, attempts)):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": f"Ember-Updater/{current_version()}",
+                         "Accept": "application/vnd.github+json, application/json",
+                         "Cache-Control": "no-cache", "Pragma": "no-cache"})
+            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as response:
+                raw = response.read()
+            if not raw:
+                raise RuntimeError("empty response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise RuntimeError("response was not a JSON object")
+            return payload
+        except Exception as exc:
+            errors.append(f"{type(exc).__name__}: {exc}")
+            if attempt + 1 < attempts:
+                time.sleep(0.35 * (attempt + 1))
+    raise RuntimeError("; ".join(errors[-2:]) or "request failed")
+
+
+def _validate_manifest(manifest: dict) -> dict:
+    if not isinstance(manifest, dict):
+        raise RuntimeError("update manifest is not an object")
+    release = str(manifest.get("version") or "").strip().lstrip("v")
+    if not release or version.parse(release) == (0,):
+        raise RuntimeError("update manifest has no valid version")
+    manifest = dict(manifest)
+    manifest["version"] = release
+    return manifest
+
+
+def _manifest_from_release_api(release: dict) -> dict:
+    """Build a normal manifest from GitHub's latest-release API response.
+
+    This is the critical compatibility path for releases where the binaries were published but
+    latest.json was absent. Modern GitHub assets include a `digest` SHA-256; older ones still get
+    TLS-pinned release downloads and the on-device malware scan.
+    """
+    tag = str(release.get("tag_name") or release.get("name") or "").strip().lstrip("v")
+    if not tag:
+        raise RuntimeError("latest GitHub release has no version tag")
+    assets = release.get("assets") or []
+    downloads = {}
+    for platform, asset_name in version.ASSET_NAMES.items():
+        asset = next((a for a in assets if a.get("name") == asset_name), None)
+        if not asset:
+            continue
+        digest = str(asset.get("digest") or "")
+        sha = digest.split(":", 1)[1] if digest.lower().startswith("sha256:") else ""
+        downloads[platform] = {
+            "url": str(asset.get("browser_download_url") or ""),
+            "sha256": sha.lower(),
+        }
+    key = version.platform_key()
+    if not key or not (downloads.get(key) or {}).get("url"):
+        raise RuntimeError(f"latest release does not contain {version.asset_name(key)}")
+    return _validate_manifest({
+        "version": tag,
+        "pub_date": str(release.get("published_at") or "")[:10],
+        "downloads": downloads,
+        "notes": str(release.get("body") or "")[:4000],
+        "source": "github-release-api",
+    })
 
 
 def is_frozen_app() -> bool:
@@ -125,38 +205,93 @@ def check_for_update(timeout: float = 8.0, raise_on_error: bool = False) -> dict
     'up to date' and Ember appears stuck on an old version)."""
     if not version.is_configured():
         return None
-    try:
-        req = urllib.request.Request(version.manifest_url(),
-                                     headers={"User-Agent": "Ember-Updater"})
-        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
-            manifest = json.loads(r.read().decode("utf-8"))
-    except Exception:
+    global _LAST_CHECK
+    errors = []
+    sources = version.manifest_urls() if hasattr(version, "manifest_urls") else [version.manifest_url()]
+    manifest = None
+    source = ""
+    for index, url in enumerate(sources):
+        try:
+            # Retry the canonical release asset because launch-time network readiness and the
+            # release CDN's brief publication window are the most common intermittent failures.
+            manifest = _validate_manifest(
+                _fetch_json(url, timeout, attempts=2 if index == 0 else 1))
+            source = url
+            break
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    if manifest is None:
+        try:
+            api_url = version.release_api_url()
+            manifest = _manifest_from_release_api(_fetch_json(api_url, timeout, attempts=2))
+            source = api_url
+        except Exception as exc:
+            errors.append(f"GitHub release API: {exc}")
+
+    if manifest is None:
+        _LAST_CHECK = {"ok": False, "errors": errors, "checked_at": int(time.time())}
         if raise_on_error:
-            raise
+            raise RuntimeError("all update sources failed:\n" + "\n".join(errors[-4:]))
         return None
+
     latest = str(manifest.get("version", ""))
+    _LAST_CHECK = {"ok": True, "source": source, "latest": latest,
+                   "current": current_version(), "checked_at": int(time.time())}
     if latest and version.is_newer(latest, current_version()):
+        manifest.setdefault("source", source)
         return manifest
     return None
 
 
-def _download(url: str, dest: Path, progress=None, timeout: float = 60.0) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "Ember-Updater"})
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        with open(dest, "wb") as f:
-            while True:
-                chunk = r.read(262144)
-                if not chunk:
-                    break
-                f.write(chunk)
-                done += len(chunk)
-                if progress and total:
-                    try:
-                        progress(min(100, int(done * 100 / total)))
-                    except Exception:
-                        pass
+def _download(url: str, dest: Path, progress=None, timeout: float = 60.0,
+              attempts: int = 3) -> None:
+    """Download atomically, retrying interrupted CDN/network transfers.
+
+    Older code wrote directly to the final path and accepted a short/empty response. That made
+    a transient connection drop look like a completed update until unzip or checksum failed.
+    """
+    partial = dest.with_name(dest.name + ".part")
+    errors = []
+    for attempt in range(max(1, attempts)):
+        try:
+            partial.unlink(missing_ok=True)
+            req = urllib.request.Request(
+                url, headers={"User-Agent": f"Ember-Updater/{current_version()}",
+                              "Cache-Control": "no-cache", "Pragma": "no-cache"})
+            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as response:
+                headers = getattr(response, "headers", {}) or {}
+                total = int(headers.get("Content-Length") or 0)
+                done = 0
+                with open(partial, "wb") as output:
+                    while True:
+                        chunk = response.read(262144)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        done += len(chunk)
+                        if progress and total:
+                            try:
+                                progress(min(99, int(done * 100 / total)))
+                            except Exception:
+                                pass
+            if done <= 0:
+                raise RuntimeError("server returned an empty update")
+            if total and done != total:
+                raise RuntimeError(f"incomplete download ({done} of {total} bytes)")
+            partial.replace(dest)
+            if progress:
+                try:
+                    progress(100)
+                except Exception:
+                    pass
+            return
+        except Exception as exc:
+            partial.unlink(missing_ok=True)
+            errors.append(f"attempt {attempt + 1}: {type(exc).__name__}: {exc}")
+            if attempt + 1 < attempts:
+                time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError("update download failed after retries: " + "; ".join(errors[-3:]))
 
 
 def _sha256(path: Path) -> str:
@@ -180,6 +315,18 @@ def _find_payload(extract_dir: Path) -> Path:
         if exe.exists():
             return exe.parent
     raise RuntimeError(f"update archive did not contain {exe_name}")
+
+
+def _safe_extract_zip(archive: zipfile.ZipFile, extract_dir: Path) -> None:
+    """Extract only members that stay inside the staging directory."""
+    root = extract_dir.resolve()
+    for member in archive.infolist():
+        target = (root / member.filename).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise RuntimeError(f"unsafe path in update archive: {member.filename}")
+    archive.extractall(root)
 
 
 def is_appimage_asset(url: str) -> bool:
@@ -252,7 +399,7 @@ def download_and_stage(manifest: dict, progress=None) -> Path:
             raise RuntimeError(f"could not unpack update: {res.stderr.strip()[:200]}")
     else:
         with zipfile.ZipFile(dlpath) as zf:
-            zf.extractall(extract_dir)
+            _safe_extract_zip(zf, extract_dir)
 
     payload = _find_payload(extract_dir)
     if sys.platform == "darwin":
@@ -278,20 +425,60 @@ def apply_update_and_relaunch(staged: Path) -> None:
         raise RuntimeError("self-update not supported on this platform")
 
 
+def update_result_path() -> Path:
+    return Path(tempfile.gettempdir()) / "ember_update_result.txt"
+
+
+def consume_update_result() -> dict | None:
+    """Return the previous swap result once, so startup can confirm success or explain failure."""
+    path = update_result_path()
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    status, _, message = raw.partition("|")
+    return {"ok": status == "ok", "message": message or status}
+
+
+def cleanup_backup() -> bool:
+    """Remove the old install only after the replacement has successfully reached startup."""
+    root = install_root()
+    if not root:
+        return False
+    backup = Path(f"{root}.old")
+    try:
+        if backup.is_dir():
+            shutil.rmtree(backup)
+        else:
+            backup.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
 def _spawn_macos_swap(staged: Path, target: Path, pid: int) -> None:
     backup = f"{target}.old"
     t, n, b = shlex.quote(str(target)), shlex.quote(str(staged)), shlex.quote(backup)
+    result = shlex.quote(str(update_result_path()))
     helper = (
         "#!/bin/bash\n"
         f"while /bin/kill -0 {pid} 2>/dev/null; do sleep 0.4; done\n"
         "sleep 0.3\n"
+        f"/bin/rm -f {result} 2>/dev/null\n"
         f"/bin/rm -rf {b} 2>/dev/null\n"
-        f"/bin/mv {t} {b} 2>/dev/null\n"
-        f"if /usr/bin/ditto {n} {t}; then\n"
-        f"  /bin/rm -rf {b} 2>/dev/null\n"
-        f"  /usr/bin/xattr -dr com.apple.quarantine {t} 2>/dev/null\n"
+        f"if /bin/mv {t} {b} 2>/dev/null; then\n"
+        f"  if /usr/bin/ditto {n} {t}; then\n"
+        f"    /usr/bin/xattr -dr com.apple.quarantine {t} 2>/dev/null\n"
+        f"    echo 'ok|Update installed successfully.' > {result}\n"
+        "  else\n"
+        f"    /bin/rm -rf {t} 2>/dev/null; /bin/mv {b} {t} 2>/dev/null\n"
+        f"    echo 'error|The update could not be installed; Ember restored the previous version.' > {result}\n"
+        "  fi\n"
         "else\n"
-        f"  /bin/rm -rf {t} 2>/dev/null; /bin/mv {b} {t} 2>/dev/null\n"
+        f"  echo 'error|Ember could not replace the current installation; it was left unchanged.' > {result}\n"
         "fi\n"
         f"/usr/bin/open {t}\n"
     )
@@ -305,6 +492,7 @@ def _spawn_macos_swap(staged: Path, target: Path, pid: int) -> None:
 def _spawn_windows_swap(staged: Path, target: Path, pid: int) -> None:
     exe = Path(sys.executable).name
     backup = f"{target}.old"
+    result = str(update_result_path())
     # Wait for this process to exit, swap the folder (robocopy /MOVE), rollback on failure,
     # relaunch, then delete the helper.
     bat = (
@@ -312,14 +500,20 @@ def _spawn_windows_swap(staged: Path, target: Path, pid: int) -> None:
         ":wait\r\n"
         f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL && (timeout /t 1 /nobreak >NUL & goto wait)\r\n'
         "timeout /t 1 /nobreak >NUL\r\n"
+        f'if exist "{result}" del /Q "{result}"\r\n'
         f'if exist "{backup}" rmdir /S /Q "{backup}"\r\n'
         f'move "{target}" "{backup}" >NUL\r\n'
-        f'robocopy "{staged}" "{target}" /E /MOVE >NUL\r\n'
-        "if %ERRORLEVEL% GEQ 8 (\r\n"
-        f'  if exist "{target}" rmdir /S /Q "{target}"\r\n'
-        f'  move "{backup}" "{target}" >NUL\r\n'
+        "if errorlevel 1 (\r\n"
+        f'  >"{result}" echo error^|Ember could not replace the current installation; it was left unchanged.\r\n'
         ") else (\r\n"
-        f'  if exist "{backup}" rmdir /S /Q "{backup}"\r\n'
+        f'  robocopy "{staged}" "{target}" /E /MOVE >NUL\r\n'
+        "  if errorlevel 8 (\r\n"
+        f'    if exist "{target}" rmdir /S /Q "{target}"\r\n'
+        f'    move "{backup}" "{target}" >NUL\r\n'
+        f'    >"{result}" echo error^|The update could not be installed; Ember restored the previous version.\r\n'
+        "  ) else (\r\n"
+        f'    >"{result}" echo ok^|Update installed successfully.\r\n'
+        "  )\r\n"
         ")\r\n"
         f'start "" "{target}\\{exe}"\r\n'
         'del "%~f0"\r\n'
@@ -337,17 +531,23 @@ def linux_swap_script(staged: str, target: str, pid: int) -> str:
     relaunch, roll back on failure. Pure string-builder so it's unit-tested without subprocess."""
     backup = f"{target}.old"
     t, n, b = shlex.quote(target), shlex.quote(staged), shlex.quote(backup)
+    result = shlex.quote(str(update_result_path()))
     return (
         "#!/bin/bash\n"
         f"while kill -0 {pid} 2>/dev/null; do sleep 0.4; done\n"
         "sleep 0.3\n"
+        f"rm -f {result} 2>/dev/null\n"
         f"rm -f {b} 2>/dev/null\n"
-        f"mv {t} {b} 2>/dev/null\n"
-        f"if cp {n} {t}; then\n"
-        f"  chmod +x {t}\n"
-        f"  rm -f {b} 2>/dev/null\n"
+        f"if mv {t} {b} 2>/dev/null; then\n"
+        f"  if cp {n} {t}; then\n"
+        f"    chmod +x {t}\n"
+        f"    echo 'ok|Update installed successfully.' > {result}\n"
+        "  else\n"
+        f"    rm -f {t} 2>/dev/null; mv {b} {t} 2>/dev/null\n"
+        f"    echo 'error|The update could not be installed; Ember restored the previous version.' > {result}\n"
+        "  fi\n"
         "else\n"
-        f"  rm -f {t} 2>/dev/null; mv {b} {t} 2>/dev/null\n"
+        f"  echo 'error|Ember could not replace the current installation; it was left unchanged.' > {result}\n"
         "fi\n"
         f"setsid {t} >/dev/null 2>&1 &\n"
     )
