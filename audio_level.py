@@ -233,8 +233,15 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
                 stream = factory()
             except Exception as e:
                 msg = str(e).lower()
-                if "pyaudio" in msg:
-                    on_transcript("", "PyAudio is missing. Run: pip install pyaudio")
+                if "permission" in msg or "denied" in msg or "-50" in msg:
+                    on_transcript("", "microphone permission denied — grant Ember mic access, "
+                                      "then try again.")
+                elif ("no microphone backend" in msg or "pyaudio" in msg
+                      or "sounddevice" in msg or "portaudio" in msg):
+                    # open_input_stream tries PyAudio THEN sounddevice; reaching here means neither
+                    # is usable — sounddevice is the default install, so recommend it.
+                    on_transcript("", "no microphone backend is installed. Run: "
+                                      "pip install sounddevice  (PyAudio also works).")
                 else:
                     on_transcript("", f"mic error: {e}")
                 return

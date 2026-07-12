@@ -1,14 +1,21 @@
-# Optional: voice / microphone INPUT for Ember.
+# Optional voice EXTRAS for Ember.
 #
-# pyaudio has no prebuilt wheel on macOS/Linux, so it compiles against the
-# portaudio C library, which you must install first:
-#   macOS:    brew install portaudio
+# You usually don't need anything here for the microphone: the base requirements.txt
+# already installs `sounddevice`, which is Ember's default, cross-platform mic backend
+# (its wheels bundle/locate PortAudio on macOS + Windows). Voice dictation, live voice,
+# and the "Hey Ember" wake word all work on a normal install without this file.
+#
+# Install these only for the specific optional features noted below:
+#   uv pip install -r requirements-voice.txt   (or pip install -r ...)
+
+# Optional: PyAudio — an ALTERNATE microphone backend. Ember tries it FIRST when present
+# (it keeps the OS "mic in use" indicator steady), then falls back to sounddevice, so
+# installing it is purely optional. It has no prebuilt wheel on macOS/Linux and compiles
+# against the PortAudio C library, which you must install first:
+#   macOS:         brew install portaudio
 #   Debian/Ubuntu: sudo apt install portaudio19-dev
-#   Windows:  nothing extra (a prebuilt wheel is used)
-#
-# Then:  uv pip install -r requirements-voice.txt   (or pip install -r ...)
-#
-# Voice OUTPUT (text-to-speech) and everything else in Ember work WITHOUT this.
+#   Windows:       nothing extra (a prebuilt wheel is used)
+# If you skip this, sounddevice (already installed) is used instead.
 pyaudio>=0.2.14
 
 # Optional: offline wake-word ("Hey Ember"). PocketSphinx runs the always-on wake
@@ -24,6 +31,5 @@ edge-tts>=6.1.0
 # Optional: song identification ("what song is this?"). shazamio fingerprints a short
 # mic clip against Shazam with NO API key. Without it, Ember uses AudD instead if you set
 # an AUDD_API_TOKEN (uses only `requests`, already installed) — or the AI can add the
-# capability itself via create_python_tool. Needs the pyaudio mic input above.
+# capability itself via create_python_tool. Uses the default sounddevice mic input.
 shazamio>=0.4.0
-

@@ -463,42 +463,49 @@ def say_text(text: str) -> dict:
 
 
 def record_audio(seconds: float = 5.0, path: str | None = None) -> dict:
-    """Record mic input to a WAV file."""
+    """Record mic input to a WAV file, using Ember's portable microphone backend
+    (sounddevice by default; PyAudio if it's installed)."""
     try:
-        try:
-            import pyaudio
-        except ModuleNotFoundError:
-            # The #1 failure: pyaudio got installed into a DIFFERENT Python than the one
-            # Ember runs. Tell the agent the EXACT interpreter + (on macOS) the portaudio
-            # system lib it needs, so the fix actually lands in the right environment.
-            py = sys.executable
-            if sys.platform == "darwin":
-                fix = (f"brew install portaudio && \"{py}\" -m pip install pyaudio  "
-                       "(pyaudio needs the portaudio system library; install it with Homebrew first)")
-            elif sys.platform.startswith("win"):
-                fix = f"\"{py}\" -m pip install pyaudio"
-            else:
-                fix = f"sudo apt-get install -y portaudio19-dev && \"{py}\" -m pip install pyaudio"
-            return {"ok": False, "error": "pyaudio is not installed in Ember's Python",
-                    "interpreter": py,
-                    "fix": fix,
-                    "note": "Install into THIS interpreter (sys.executable), not a different python."}
         import wave
-        CHUNK = 1024
-        FORMAT = pyaudio.paInt16
-        CHANNELS = 1
-        RATE = 16000
+        import audio_level
+        RATE = audio_level.RATE
+        CHUNK = audio_level.CHUNK
+        WIDTH = audio_level.WIDTH
         dst = Path(path).expanduser() if path else Path.home() / "Downloads" / f"ember_recording_{int(time.time())}.wav"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        pa = pyaudio.PyAudio()
-        stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+        try:
+            # open_input_stream tries PyAudio first, then the sounddevice wheels that ship with
+            # Ember — so recording works out of the box without a manual PyAudio/PortAudio build.
+            stream = audio_level.open_input_stream()
+        except Exception as e:
+            msg = str(e).lower()
+            py = sys.executable
+            if "permission" in msg or "denied" in msg or "-50" in msg:
+                return {"ok": False, "error": "microphone permission denied",
+                        "fix": "Grant Ember microphone access in your OS privacy settings, then retry."}
+            fix = f"\"{py}\" -m pip install sounddevice"
+            if sys.platform == "darwin":
+                fix += "  (or, for PyAudio: brew install portaudio && \"" + py + "\" -m pip install pyaudio)"
+            elif sys.platform.startswith("linux"):
+                fix += "  (or, for PyAudio: sudo apt-get install -y portaudio19-dev && \"" + py + "\" -m pip install pyaudio)"
+            return {"ok": False, "error": "no microphone backend is installed in Ember's Python",
+                    "interpreter": py, "fix": fix,
+                    "note": "Install into THIS interpreter (sys.executable), not a different python."}
         frames = []
-        for _ in range(int(RATE / CHUNK * max(0.5, min(60.0, float(seconds))))):
-            frames.append(stream.read(CHUNK, exception_on_overflow=False))
-        stream.stop_stream(); stream.close(); pa.terminate()
+        try:
+            for _ in range(int(RATE / CHUNK * max(0.5, min(60.0, float(seconds))))):
+                frame = stream.read(CHUNK)
+                if not frame:
+                    break
+                frames.append(frame)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
         with wave.open(str(dst), "wb") as wf:
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(pa.get_sample_size(FORMAT))
+            wf.setnchannels(1)
+            wf.setsampwidth(WIDTH)
             wf.setframerate(RATE)
             wf.writeframes(b"".join(frames))
         return {"ok": True, "path": str(dst), "seconds": seconds,

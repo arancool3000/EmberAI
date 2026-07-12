@@ -218,9 +218,79 @@ def test_mic_is_not_orphaned_when_the_player_fails_to_open():
     # closes the mic on failure.
     import inspect
     src = inspect.getsource(lv.LiveVoice._main)
-    assert "mic, player = _PyAudioMic(), _PyAudioPlayer()" not in src   # buggy tuple form gone
-    assert "mic = _PyAudioMic()" in src and "player = _PyAudioPlayer()" in src
+    assert "mic, player = open_mic(), open_player()" not in src   # buggy tuple form must not return
+    assert "mic = open_mic()" in src and "player = open_player()" in src
     assert "mic.close()" in src                                          # closed on player failure
+
+
+# ---- portable audio backends (sounddevice fallback) -----------------------
+
+class _FakeDev:
+    """A stand-in mic/player backend for exercising open_mic/open_player selection."""
+    backend = "fake"
+
+    def close(self):
+        pass
+
+
+def _raising_backend(name, msg):
+    """A callable backend stand-in that raises when 'constructed' (like a missing PortAudio)."""
+    def _factory():
+        raise RuntimeError(msg)
+    _factory.backend = name
+    return _factory
+
+
+def _make_returning_backend(name, instance):
+    def _factory():
+        return instance
+    _factory.backend = name
+    return _factory
+
+
+def test_open_mic_prefers_pyaudio_then_falls_back_to_sounddevice():
+    # PyAudio broken (not installed) -> open_mic must return the sounddevice backend instead.
+    orig_pa, orig_sd = lv._PyAudioMic, lv._SoundDeviceMic
+    picked = _FakeDev()
+    try:
+        lv._PyAudioMic = _raising_backend("PyAudio", "no pyaudio")
+        lv._SoundDeviceMic = _make_returning_backend("sounddevice", picked)
+        assert lv.open_mic() is picked
+    finally:
+        lv._PyAudioMic, lv._SoundDeviceMic = orig_pa, orig_sd
+
+
+def test_open_player_falls_back_to_sounddevice():
+    orig_pa, orig_sd = lv._PyAudioPlayer, lv._SoundDevicePlayer
+    picked = _FakeDev()
+    try:
+        lv._PyAudioPlayer = _raising_backend("PyAudio", "no pyaudio")
+        lv._SoundDevicePlayer = _make_returning_backend("sounddevice", picked)
+        assert lv.open_player() is picked
+    finally:
+        lv._PyAudioPlayer, lv._SoundDevicePlayer = orig_pa, orig_sd
+
+
+def test_open_mic_raises_combined_reason_when_no_backend():
+    orig_pa, orig_sd = lv._PyAudioMic, lv._SoundDeviceMic
+    try:
+        lv._PyAudioMic = _raising_backend("PyAudio", "pa gone")
+        lv._SoundDeviceMic = _raising_backend("sounddevice", "sd gone")
+        try:
+            lv.open_mic()
+            assert False, "expected RuntimeError"
+        except RuntimeError as e:
+            assert "PyAudio" in str(e) and "sounddevice" in str(e)
+    finally:
+        lv._PyAudioMic, lv._SoundDeviceMic = orig_pa, orig_sd
+
+
+def test_start_error_names_a_backend_option():
+    # The friendly no-deps error should mention BOTH options so users know sounddevice suffices.
+    v = lv.LiveVoice("KEY")
+    r = v.start()
+    assert r["ok"] is False
+    assert "sounddevice" in r["error"].lower() or "pyaudio" in r["error"].lower()
 
 
 def test_looks_like_bad_model_detects_model_not_found_style_errors():

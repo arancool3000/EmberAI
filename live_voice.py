@@ -255,10 +255,17 @@ async def _drive(session, mic, player, handlers: dict, stop_event: "asyncio.Even
 
 
 # ---------------------------------------------------------------------------
-# Real audio devices (lazy pyaudio) — only used on-device
+# Real audio devices — only used on-device. Two interchangeable backends:
+#   * sounddevice (the DEFAULT): Ember ships the sounddevice wheels, which bundle/
+#     locate PortAudio on macOS + Windows, so natural voice works out of the box.
+#   * PyAudio (optional): used first when the user has installed it.
+# open_mic()/open_player() try PyAudio, then sounddevice, and raise only if NEITHER
+# backend can open the device — so we never claim capture without a working stream.
 # ---------------------------------------------------------------------------
 
 class _PyAudioMic:
+    backend = "PyAudio"
+
     def __init__(self):
         import pyaudio
         self._pa = pyaudio.PyAudio()
@@ -277,6 +284,8 @@ class _PyAudioMic:
 
 
 class _PyAudioPlayer:
+    backend = "PyAudio"
+
     def __init__(self):
         import pyaudio
         self._pa = pyaudio.PyAudio()
@@ -302,11 +311,102 @@ class _PyAudioPlayer:
                 pass
 
 
+class _SoundDeviceMic:
+    """Portable microphone via sounddevice.RawInputStream — the default backend, because the
+    sounddevice wheels ship a working PortAudio while PyAudio needs a manual build on macOS/Linux.
+    Same read()/close() contract as _PyAudioMic (16-bit mono @16 kHz)."""
+    backend = "sounddevice"
+
+    def __init__(self):
+        import sounddevice as sd
+        self._stream = sd.RawInputStream(
+            samplerate=AUDIO_IN_RATE, blocksize=CHUNK, channels=1, dtype="int16")
+        self._stream.start()
+
+    async def read(self):
+        return await asyncio.to_thread(self._read)
+
+    def _read(self) -> bytes:
+        data, _overflowed = self._stream.read(CHUNK)
+        return bytes(data)
+
+    def close(self):
+        for fn in (self._stream.stop, self._stream.close):
+            try:
+                fn()
+            except Exception:
+                pass
+
+
+class _SoundDevicePlayer:
+    """Portable speaker via sounddevice.RawOutputStream (24 kHz PCM out from the Live API).
+    Same feed()/clear()/close() contract as _PyAudioPlayer."""
+    backend = "sounddevice"
+
+    def __init__(self):
+        import sounddevice as sd
+        # blocksize=0 (variable) so write() accepts whatever-sized PCM the server sends.
+        self._stream = sd.RawOutputStream(
+            samplerate=AUDIO_OUT_RATE, blocksize=0, channels=1, dtype="int16")
+        self._stream.start()
+
+    async def feed(self, pcm: bytes):
+        await asyncio.to_thread(self._stream.write, pcm)
+
+    def clear(self):
+        # Drop buffered Ember audio for snappy barge-in, then keep the stream ready to play.
+        try:
+            self._stream.abort()
+            self._stream.start()
+        except Exception:
+            pass
+
+    def close(self):
+        for fn in (self._stream.stop, self._stream.close):
+            try:
+                fn()
+            except Exception:
+                pass
+
+
+def open_mic():
+    """Open the best available microphone backend (PyAudio if installed, else sounddevice).
+    Raises RuntimeError with a combined reason only if NEITHER backend is usable."""
+    errors = []
+    for backend in (_PyAudioMic, _SoundDeviceMic):
+        try:
+            return backend()
+        except Exception as exc:
+            errors.append(f"{backend.backend}: {exc}")
+    raise RuntimeError("; ".join(errors) or "no microphone backend is installed")
+
+
+def open_player():
+    """Open the best available speaker backend (PyAudio if installed, else sounddevice)."""
+    errors = []
+    for backend in (_PyAudioPlayer, _SoundDevicePlayer):
+        try:
+            return backend()
+        except Exception as exc:
+            errors.append(f"{backend.backend}: {exc}")
+    raise RuntimeError("; ".join(errors) or "no audio output backend is installed")
+
+
 def available() -> bool:
-    """True only if the real Live-voice path can run (genai + pyaudio present)."""
+    """True only if the real Live-voice path can run: google-genai plus at least ONE audio
+    backend (sounddevice OR pyaudio). We never report availability without a usable capture path
+    — the actual device/permission is verified when open_mic()/open_player() run."""
     try:
         import google.genai  # noqa: F401
-        import pyaudio        # noqa: F401
+    except Exception:
+        return False
+    try:
+        import sounddevice  # noqa: F401
+        return True
+    except Exception:
+        pass
+    try:
+        import pyaudio  # noqa: F401
         return True
     except Exception:
         return False
@@ -362,7 +462,8 @@ class LiveVoice:
         if not self.key:
             return {"ok": False, "error": "Add a Gemini API key in Settings to use natural voice."}
         if not available():
-            return {"ok": False, "error": "Natural voice needs google-genai + pyaudio installed."}
+            return {"ok": False, "error": "Natural voice needs the google-genai SDK plus a "
+                                          "microphone backend (sounddevice or pyaudio) installed."}
         self._stop_requested.clear()
         self._thread = threading.Thread(target=self._thread_main, name="ember-live-voice", daemon=True)
         self._running = True
@@ -438,8 +539,9 @@ class LiveVoice:
                 # stays None, and the already-open input stream is orphaned - the device stays
                 # captured (macOS orange dot on, mic busy for wake-word/push-to-talk) until the
                 # process exits. Building them in order lets the except close the mic it opened.
-                mic = _PyAudioMic()
-                player = _PyAudioPlayer()
+                # open_mic()/open_player() pick PyAudio if present, else the portable sounddevice.
+                mic = open_mic()
+                player = open_player()
             except Exception as e:
                 if mic is not None:
                     try:
