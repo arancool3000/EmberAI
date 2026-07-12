@@ -1,4 +1,4 @@
-"""Hermetic tests for mcp_setup.py — the one-click 'wire Ember into Claude Desktop' logic.
+"""Hermetic tests for mcp_setup.py — the one-click ChatGPT/Claude connection logic.
 Only the config-writing/merging is exercised (never the real pip install). HOME is redirected to
 a temp dir so no real Claude config is touched.
 
@@ -66,6 +66,51 @@ def test_configure_backs_up_corrupt_config():
     assert cfg.with_suffix(".json.bak").exists()
     data = json.loads(open(where).read())
     assert "ember" in data["mcpServers"]
+
+
+def test_chatgpt_status_is_free_and_loopback_only():
+    m.stop_chatgpt_mcp()
+    status = m.chatgpt_mcp_status()
+    assert status["running"] is False
+    assert status["host"] == "127.0.0.1"
+    assert status["all_tools"] and status["all_features_free"]
+
+
+def test_setup_tool_defaults_to_chatgpt():
+    original = m.start_chatgpt_mcp
+    m.start_chatgpt_mcp = lambda: {"ok": True, "client": "chatgpt"}
+    try:
+        assert m._tool_setup_mcp_client()["client"] == "chatgpt"
+    finally:
+        m.start_chatgpt_mcp = original
+
+
+def test_mcp_install_check_rejects_old_sdk_and_requests_upgrade():
+    original_run = m.subprocess.run
+    calls = []
+
+    class Result:
+        def __init__(self, returncode):
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[1:3] == ["-c", calls[0][2]]:
+            return Result(1)  # installed, but too old
+        return Result(0)
+
+    m.subprocess.run = fake_run
+    try:
+        ok, message = m.ensure_mcp_installed()
+    finally:
+        m.subprocess.run = original_run
+    assert ok, message
+    assert "installed" in message
+    install = calls[-1]
+    assert "--upgrade" in install
+    assert m._MCP_DEPENDENCY in install
 
 
 if __name__ == "__main__":

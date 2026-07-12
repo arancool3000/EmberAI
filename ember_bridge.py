@@ -30,15 +30,23 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8770
 BRIDGE_NAME = "ember"
 _MAX_BODY_BYTES = 1_000_000   # cap request bodies (tool args are small); avoids memory DoS
 
-# Host-special tools that need the live agent turn loop (not a plain dispatch entry); never
-# exposed over the bridge even if they appear in declarations.
-_AGENT_ONLY_TOOLS = {"ask_claude", "pause_for_human", "spawn_agent", "agent_run", "run_custom_tool"}
+# Host-special tools need the live agent turn loop rather than a plain dispatch entry. They are
+# still listed over MCP; when the matching live Agent implementation exists, the bridge routes
+# them to it instead of pretending they are unavailable.
+_HOST_SPECIAL_TOOLS = {"ask_claude", "pause_for_human", "spawn_agent", "agent_run", "run_custom_tool"}
+_HOST_AGENT = None
+
+_DESTRUCTIVE_TOOLS = {
+    "delete_quarantined", "secure_delete", "trash_file", "vault_delete_key",
+    "agent_delete", "cancel_scheduled_task", "remove_vpn_location", "delete_file",
+}
 
 # Gemini's uppercase JSON-Schema type names → standard lowercase for MCP inputSchema.
 _TYPE_MAP = {
@@ -85,23 +93,47 @@ def translate_schema(node):
     return node
 
 
+def _tool_title(name: str) -> str:
+    return " ".join(part.capitalize() for part in (name or "tool").split("_"))
+
+
+def tool_annotations(name: str, supplied: dict | None = None) -> dict:
+    """Return the impact hints ChatGPT requires on every MCP tool definition."""
+    read_only = False
+    try:
+        import safety
+        read_only = name in safety.SAFE_READONLY
+    except Exception:
+        pass
+    destructive = name in _DESTRUCTIVE_TOOLS or name.startswith(("delete_", "remove_"))
+    defaults = {
+        "readOnlyHint": bool(read_only),
+        # Conservative for writes: Ember tools can touch the OS, files, apps, or internet.
+        "openWorldHint": False if read_only else True,
+        "destructiveHint": False if read_only else bool(destructive),
+    }
+    if isinstance(supplied, dict):
+        defaults.update({k: bool(v) for k, v in supplied.items() if k in defaults})
+    return defaults
+
+
 def tool_to_mcp(decl: dict) -> dict:
-    """Map one Ember tool declaration to an MCP tool descriptor."""
+    """Map one Ember declaration to a ChatGPT-compatible MCP tool descriptor."""
     schema = translate_schema(decl.get("parameters", {"type": "object"}))
     if not isinstance(schema, dict) or "type" not in schema:
         schema = {"type": "object", "properties": {}}
     schema.setdefault("properties", {})
     return {
         "name": decl["name"],
+        "title": decl.get("title") or _tool_title(decl["name"]),
         "description": decl.get("description", ""),
         "inputSchema": schema,
+        "annotations": tool_annotations(decl["name"], decl.get("annotations")),
     }
 
 
 def list_tools_from(declarations: list, dispatch: dict) -> list:
-    """Build the MCP tool list — EVERY declared Ember tool (deduped). The handful that aren't in
-    the normal dispatch table (run_custom_tool + the agent-loop tools) are handled specially in
-    execute_tool, so they're exposed too. Nothing is filtered out."""
+    """Build the complete MCP tool list, including any dispatch-only extension tools."""
     out = []
     seen = set()
     for decl in declarations:
@@ -110,7 +142,37 @@ def list_tools_from(declarations: list, dispatch: dict) -> list:
             continue
         seen.add(name)
         out.append(tool_to_mcp(decl))
+    # Plugins and runtime extensions occasionally register a callable before a declaration.
+    # Expose it with a safe generic schema rather than silently hiding an available tool.
+    for name in sorted(dispatch):
+        if name not in seen:
+            out.append(tool_to_mcp({
+                "name": name,
+                "description": f"Ember tool: {_tool_title(name)}.",
+                "parameters": {"type": "OBJECT", "properties": {}},
+            }))
     return out
+
+
+def set_host_agent(agent_instance) -> None:
+    """Attach the live UI agent so agent-loop-only tools can also work over MCP."""
+    global _HOST_AGENT
+    _HOST_AGENT = agent_instance
+
+
+def _host_agent_call(name: str, args: dict) -> dict | None:
+    agent_instance = _HOST_AGENT
+    method = {
+        "ask_claude": "_handle_ask_claude",
+        "spawn_agent": "_handle_spawn_agent",
+        "agent_run": "_handle_agent_run",
+    }.get(name)
+    if agent_instance is None or not method or not hasattr(agent_instance, method):
+        return None
+    try:
+        return getattr(agent_instance, method)(args)
+    except Exception as exc:
+        return {"ok": False, "error": f"live agent tool failed: {exc}"}
 
 
 def _run_custom_tool(args: dict, dispatch: dict, *, allow_high_risk: bool = False,
@@ -152,30 +214,14 @@ def execute_tool(name: str, args: dict, dispatch: dict, *,
                  param_types: dict | None = None) -> dict:
     """Safety-gated tool execution shared by the bridge. Mirrors the agent dispatch guard.
 
-    Order: handle host-only tools → classify risk → enforce capability mode →
+    Order: classify risk → enforce capability mode → handle host-only tools →
     block high-risk (unless opted in) → coerce arg types → dispatch. Always returns a dict.
     """
     import safety
     args = args if isinstance(args, dict) else {}
 
-    # Tools that live in Ember's agent loop rather than the plain dispatch table. Expose them all
-    # so MCP has EVERY tool; run the ones that make sense, and give the rest an honest result.
-    if name == "run_custom_tool":
-        return _run_custom_tool(args, dispatch, allow_high_risk=allow_high_risk, param_types=param_types)
-    if name == "ask_claude":
-        return {"ok": True, "note": ("Ember is being driven by your MCP client, which is already "
-                                     "the model — no escalation needed. Continue with the other tools.")}
-    if name == "pause_for_human":
-        return {"ok": True, "resumed": True,
-                "note": ("Running over MCP (unattended); proceeding without a blocking pause. If "
-                         "you need the user, just ask them directly in chat.")}
-    if name in ("spawn_agent", "agent_run"):
-        return {"ok": False, "error": ("Sub-agents run inside Ember's own agent loop, not over MCP. "
-                                       "You're already the driving agent — do the task directly "
-                                       "with Ember's other tools.")}
-
     fn = dispatch.get(name)
-    if not fn:
+    if not fn and name not in _HOST_SPECIAL_TOOLS:
         return {"ok": False, "error": f"unknown tool {name}"}
 
     try:
@@ -190,6 +236,25 @@ def execute_tool(name: str, args: dict, dispatch: dict, *,
                 "error": (f"'{name}' is high-risk ({reason}) and needs confirmation. It is "
                           "blocked over MCP unless you enable 'allow high-risk over MCP' in "
                           "Ember. Run it in the Ember app to approve interactively.")}
+
+    # Agent-loop and composed tools still go through the capability/risk checks above.
+    if name == "run_custom_tool":
+        return _run_custom_tool(args, dispatch, allow_high_risk=allow_high_risk,
+                                param_types=param_types)
+    if name in ("ask_claude", "spawn_agent", "agent_run"):
+        live_result = _host_agent_call(name, args)
+        if live_result is not None:
+            return live_result
+        if name == "ask_claude":
+            return {"ok": True, "note": ("The MCP client is already the driving model; use "
+                                           "Ember's tools directly.")}
+        return {"ok": False, "error": (f"'{name}' needs Ember's live built-in Agent. Start or "
+                                        "configure an Ember model, then retry; all other tools "
+                                        "remain available over MCP.")}
+    if name == "pause_for_human":
+        return {"ok": True, "resumed": True,
+                "note": ("MCP clients own their approval conversation. Ask the user in the "
+                         "client before continuing with the dependent action.")}
 
     if param_types:
         try:
@@ -277,6 +342,8 @@ class _Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -287,16 +354,19 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._client_is_local() or not self._host_ok():
             return self._send(403, {"ok": False, "error": "forbidden"})
-        if self.path.rstrip("/") == "/mcp/ping":
+        path = urlsplit(self.path).path.rstrip("/")
+        if path == "/mcp/ping":
             # Unauthenticated liveness probe (no data disclosed) so the MCP server can wait
             # for the bridge to come up. Still gated on loopback + Host above.
             return self._send(200, {"ok": True, "name": BRIDGE_NAME})
         if not self._authed():
             return self._send(401, {"ok": False, "error": "unauthorized"})
-        if self.path.rstrip("/") == "/mcp/tools":
+        if path == "/mcp/tools":
             try:
                 decls, dispatch, _pt = _registries()
-                return self._send(200, {"ok": True, "tools": list_tools_from(decls, dispatch)})
+                tools = list_tools_from(decls, dispatch)
+                return self._send(200, {"ok": True, "tools": tools, "count": len(tools),
+                                        "all_features_free": True})
             except Exception as e:
                 return self._send(500, {"ok": False, "error": str(e)})
         return self._send(404, {"ok": False, "error": "not found"})
@@ -304,11 +374,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authed():
             return self._send(401, {"ok": False, "error": "unauthorized"})
-        if self.path.rstrip("/") != "/mcp/call":
+        if urlsplit(self.path).path.rstrip("/") != "/mcp/call":
             return self._send(404, {"ok": False, "error": "not found"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            if length > _MAX_BODY_BYTES:
+            if length < 0 or length > _MAX_BODY_BYTES:
                 return self._send(413, {"ok": False, "error": "request too large"})
             raw = self.rfile.read(length) if length else b"{}"
             body = json.loads(raw or b"{}")
@@ -333,11 +403,13 @@ def _write_info():
             "url": f"http://{_STATE.host}:{_STATE.port}"}
     try:
         p = _info_path()
-        p.write_text(json.dumps(info, indent=2))
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(info, indent=2))
         try:
-            os.chmod(p, 0o600)  # token is a secret
+            os.chmod(tmp, 0o600)  # token is a secret
         except Exception:
             pass
+        os.replace(tmp, p)
     except Exception:
         pass
     return info
@@ -395,6 +467,7 @@ def stop() -> dict:
             _info_path().unlink()
         except Exception:
             pass
+        _STATE.token = ""
         return {"ok": True, "stopped": True}
 
 
@@ -423,8 +496,8 @@ def _tool_mcp_bridge_status() -> dict:
 TOOL_DECLARATIONS = [
     {
         "name": "start_mcp_bridge",
-        "description": ("Start Ember's MCP bridge so an external MCP client (Claude Desktop, "
-                        "Cursor) can control Ember's tools. Loopback-only + token-secured. "
+        "description": ("Start Ember's MCP bridge so ChatGPT or another MCP client can control "
+                        "Ember's complete live tool registry. Loopback-only + token-secured. "
                         "Returns the token to paste into the client's config."),
         "parameters": {
             "type": "OBJECT",

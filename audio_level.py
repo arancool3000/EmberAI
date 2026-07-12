@@ -130,14 +130,68 @@ class _PyAudioStream:
             pass
 
 
+class _SoundDeviceStream:
+    """Portable fallback whose wheels work without making users install PyAudio manually."""
+
+    def __init__(self):
+        import sounddevice as sd
+        self._stream = sd.RawInputStream(
+            samplerate=RATE, blocksize=CHUNK, channels=1, dtype="int16")
+        self._stream.start()
+
+    def read(self, n: int) -> bytes:
+        data, _overflowed = self._stream.read(n)
+        return bytes(data)
+
+    def close(self) -> None:
+        try:
+            self._stream.stop()
+        except Exception:
+            pass
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+
+
+def open_input_stream():
+    """Open the best installed microphone backend, falling back when one is broken/missing."""
+    errors = []
+    for backend in (_PyAudioStream, _SoundDeviceStream):
+        try:
+            return backend()
+        except Exception as exc:
+            errors.append(f"{backend.__name__.removeprefix('_').removesuffix('Stream')}: {exc}")
+    raise RuntimeError("; ".join(errors) or "no microphone backend is installed")
+
+
+def probe_microphone() -> tuple[bool, str]:
+    """Actually open and close an input stream so settings can report a truthful status."""
+    stream = None
+    try:
+        stream = open_input_stream()
+        return True, type(stream).__name__.strip("_")
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+
 def available() -> bool:
-    """True if the metered-capture path can run (pyaudio + speech_recognition present),
+    """True if the metered-capture path can run (an input backend + speech recognition),
     or if test hooks are installed."""
     if _STREAM_FACTORY is not None and _RECOGNIZER is not None:
         return True
     try:
-        import pyaudio  # noqa: F401
         import speech_recognition  # noqa: F401
+        try:
+            import pyaudio  # noqa: F401
+        except Exception:
+            import sounddevice  # noqa: F401
         return True
     except Exception:
         return False
@@ -159,7 +213,7 @@ def _capture_and_recognize(on_transcript: Callable[[str, str], None],
                            on_level: Optional[Callable[[float], None]]) -> None:
     """Own the mic for one utterance. Publishes levels live, ends on a silence tail or
     the phrase cap, then recognises. Always calls on_transcript(text, err) exactly once."""
-    factory = _STREAM_FACTORY or _PyAudioStream
+    factory = _STREAM_FACTORY or open_input_stream
     recognizer = _RECOGNIZER or _default_recognizer
     try:
         from voice import MIC_LOCK

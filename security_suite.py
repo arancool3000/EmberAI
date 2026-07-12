@@ -1,15 +1,14 @@
-"""Norton-style security suite for Ember — a "My Norton"-style dashboard, a Software Updater,
-and dark-web monitoring, built on top of Ember's existing protections.
+"""Ember endpoint-security control dashboard and software-update inventory.
 
-Ember already covers most of Norton 360's pillars: real-time antivirus + fileless/behavioral
-protection (antivirus / fileless_guard / security_center), Smart-Firewall-style connection
+It joins Ember's real-time antivirus + fileless/behavioral protection
+(antivirus / fileless_guard / security_center), connection
 scanning (security_center.scan_network), Safe Web (web_policy), Password Manager (key_vault /
 browser_passwords), Secure VPN (vpn), Dark-Web/breach checks (productivity_tools.email_breach_check
 / privacy.password_pwned_check), cleanup/optimisation (cleanup), and an emergency lockdown
 (panic). This module adds the missing pieces and ties them into ONE scored dashboard:
 
-  * Software Updater  — outdated apps + pending OS updates (Norton's Software Updater).
-  * Security Score    — a single 0-100 grade across every protection, with prioritised fixes.
+  * Software inventory — outdated apps + pending OS updates.
+  * Control coverage   — a transparent 0-100 total of enabled controls, with prioritised fixes.
   * Dark-web monitor  — surfaces breach checks for an email in the dashboard.
 
 The score is a PURE function (compute_dashboard) of collected signals, so it's unit-tested
@@ -21,7 +20,8 @@ import re
 import subprocess
 import sys
 
-# Weighted components of the security score (sum = 100), Norton-dashboard style.
+# Weighted controls in the coverage total (sum = 100). The value measures configuration
+# coverage; it is never presented as proof that a device is safe or as a scare-based risk score.
 _WEIGHTS = {
     "realtime_protection": 18,   # always-on Security Center running
     "malware_engine": 12,        # antivirus enabled
@@ -102,7 +102,7 @@ def _brew_outdated(output: str) -> list:
 
 
 def software_update_check() -> dict:
-    """Norton-style Software Updater: list outdated apps + pending OS updates. Best-effort and
+    """List outdated apps + pending OS updates. Best-effort and
     read-only (it never installs anything). Returns {ok, total, os_updates, app_updates}."""
     os_updates: list = []
     app_updates: list = []
@@ -155,7 +155,7 @@ def software_update_check() -> dict:
 # Unified dashboard (pure score + collectors)
 # ---------------------------------------------------------------------------
 def compute_dashboard(signals: dict) -> dict:
-    """PURE: turn a dict of boolean protection signals into a Norton-style score + grade +
+    """PURE: turn a dict of boolean protection signals into a transparent coverage total +
     per-component breakdown + prioritised recommendations. Unit-tested with no OS access."""
     components = []
     score = 0
@@ -167,13 +167,14 @@ def compute_dashboard(signals: dict) -> dict:
     score = max(0, min(100, score))
     grade = ("A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60
              else "D" if score >= 40 else "F")
-    rating = ("excellent" if score >= 90 else "strong" if score >= 75
-              else "fair" if score >= 60 else "weak" if score >= 40 else "at risk")
+    rating = ("complete" if score >= 90 else "strong" if score >= 75
+              else "partial" if score >= 60 else "limited" if score >= 40 else "minimal")
     # recommendations: failing components, worst (highest-weight) first
     recs = [{"key": c["key"], "fix": _FIX[c["key"]], "weight": c["weight"]}
             for c in components if not c["ok"]]
     recs.sort(key=lambda r: r["weight"], reverse=True)
-    return {"ok": True, "score": score, "grade": grade, "rating": rating,
+    return {"ok": True, "score": score, "coverage_score": score,
+            "grade": grade, "rating": rating,
             "components": components,
             "recommendations": [r["fix"] for r in recs],
             # Same recommendations, but with the component "key" kept alongside the fix text
@@ -242,8 +243,9 @@ def security_dashboard(check_updates: bool = True, email: str = "") -> dict:
             dash["dark_web"] = productivity_tools.email_breach_check(email)
         except Exception as e:
             dash["dark_web"] = {"ok": False, "error": str(e)}
-    dash["summary"] = (f"Security score {dash['score']}/100 (grade {dash['grade']}, "
-                       f"{dash['rating']}). " + (upd.get("summary", "") if check_updates else ""))
+    dash["summary"] = (f"Security-control coverage {dash['score']}/100 ({dash['rating']}). "
+                       "This measures enabled controls, not whether the device is threat-free. "
+                       + (upd.get("summary", "") if check_updates else ""))
     return dash
 
 
@@ -252,7 +254,7 @@ def security_dashboard(check_updates: bool = True, email: str = "") -> dict:
 # ---------------------------------------------------------------------------
 TOOL_DECLARATIONS = [
     {"name": "security_dashboard",
-     "description": "Norton-style security overview: a 0-100 score across every protection "
+     "description": "Transparent 0-100 security-control coverage across enabled protections "
                     "(antivirus, firewall/network, web, updates, vault, VPN, lockdown), with "
                     "prioritised fixes, the Software Updater result, and an optional dark-web "
                     "breach check for an email.",

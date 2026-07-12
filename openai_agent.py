@@ -297,7 +297,9 @@ class OpenAIAgent:
                 self._messages.append({"role": "system", "content": self._system_prompt()})
             self._heal_dangling_tool_calls()
             self._messages.append({"role": "user", "content": self._user_text(user_text)})
-            for _ in range(12):
+            last_call_signature = ""
+            repeated_call_rounds = 0
+            while not self._stop_flag.is_set():
                 if self._stop_flag.is_set():
                     return
                 message, finish_reason = self._call_openai()
@@ -314,6 +316,16 @@ class OpenAIAgent:
                     elif finish_reason == "content_filter":
                         self._emit(AgentEvent("message",
                             "[the response was stopped by the provider's content filter]"))
+                    return
+
+                call_signature = json.dumps(tool_calls, sort_keys=True, default=str)
+                repeated_call_rounds = (repeated_call_rounds + 1
+                                        if call_signature == last_call_signature else 1)
+                last_call_signature = call_signature
+                if repeated_call_rounds >= 4:
+                    self._emit(AgentEvent(
+                        "error", "Stopped a repeated-action loop after the model requested the "
+                        "same operation four times."))
                     return
 
                 pending_images: list[str] = []
@@ -395,7 +407,6 @@ class OpenAIAgent:
                         content.append({"type": "image_url", "image_url":
                             {"url": f"data:image/png;base64,{b64}"}})
                     self._messages.append({"role": "user", "content": content})
-            self._emit(AgentEvent("message", "[step limit reached - say 'continue' to keep going]"))
         except Exception as e:
             self._emit(AgentEvent("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()[:1500]}"))
         finally:

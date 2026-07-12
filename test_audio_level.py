@@ -93,6 +93,51 @@ def test_available_with_hooks():
         audio_level._RECOGNIZER = None
 
 
+def test_input_backend_falls_back_when_pyaudio_is_missing():
+    original_primary = audio_level._PyAudioStream
+    original_fallback = audio_level._SoundDeviceStream
+    closed = []
+
+    class BrokenPrimary:
+        def __init__(self):
+            raise ImportError("pyaudio missing")
+
+    class WorkingFallback:
+        def read(self, _n):
+            return _frame(100)
+
+        def close(self):
+            closed.append(True)
+
+    audio_level._PyAudioStream = BrokenPrimary
+    audio_level._SoundDeviceStream = WorkingFallback
+    try:
+        stream = audio_level.open_input_stream()
+        assert isinstance(stream, WorkingFallback)
+        stream.close()
+    finally:
+        audio_level._PyAudioStream = original_primary
+        audio_level._SoundDeviceStream = original_fallback
+    assert closed == [True]
+
+
+def test_probe_microphone_closes_fallback_stream():
+    original = audio_level.open_input_stream
+    closed = []
+
+    class Stream:
+        def close(self):
+            closed.append(True)
+
+    audio_level.open_input_stream = lambda: Stream()
+    try:
+        ok, backend = audio_level.probe_microphone()
+    finally:
+        audio_level.open_input_stream = original
+    assert ok and backend == "Stream"
+    assert closed == [True]
+
+
 def test_capture_ends_on_silence_tail_and_transcribes():
     # 4 quiet calibration frames, a burst of speech, then a long quiet tail.
     frames = [_frame(0)] * 4 + [_frame(9000)] * 10 + [_frame(0)] * 20

@@ -1,5 +1,16 @@
 # Ember — autonomous AI agent for your computer
 
+## Install
+
+Open the folder for your computer. Each contains a visual guide and one installer:
+
+- **Windows:** [`Windows Install/`](Windows%20Install/) → double-click **Install Ember.bat**
+- **macOS:** [`macOS Install/`](macOS%20Install/) → double-click **Install Ember.command**
+
+Both installers keep dependencies in a private `.venv` inside the Ember folder. They do not
+install Ember packages globally. The rest of this repository is source code and developer files;
+new users do not need to open them.
+
 Ember sees your screen, drives the mouse/keyboard, controls a real browser, runs shell
 commands, manages files, organises your Gmail, talks with you hands-free, and can be controlled
 from your phone — online or **fully offline**. macOS + Windows.
@@ -24,6 +35,9 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 - **Learns about you** — long-term memory of facts/preferences so it gets more useful over time.
 
 ### 🆕 Productivity
+- **Standalone utilities** — Storage Inspector finds large and duplicate files with reversible
+  Trash actions; Network Inspector shows Wi-Fi, active connections, listening ports, and nearby
+  devices; Clipboard History temporarily captures copied text while its window is open.
 - **Organise your Gmail** — search (Gmail's own query syntax), label/file, archive, star, mark
   read/unread, create labels, and trash (recoverable) — *"clean up my inbox."* Also sends email.
   One Google **App Password** powers both.
@@ -44,15 +58,16 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   network via a Cloudflare Tunnel — the short PIN never leaves your LAN (only a long pairing
   token, minted after a Wi-Fi pairing, is accepted remotely).
 - **Quit-proof global hotkey** — summon Ember from anywhere, even when it's fully closed.
-- **MCP server** — like the Blender MCP server, Ember can be **controlled from Claude Desktop,
-  Cursor, or any MCP client**: flip on the loopback-only, token-secured **MCP bridge** and your
-  ~290 Ember tools become MCP tools. Off by default; capability modes enforced and high-risk
+- **Complete MCP server** — Ember can be controlled from **ChatGPT**, Claude Desktop, Cursor,
+  or any MCP client. Its live tool registry becomes ChatGPT-compatible MCP tools over stdio or
+  Streamable HTTP, with real schemas and impact annotations. Off by default; capability modes and high-risk
   actions blocked unless you opt in. See **[docs/MCP.md](docs/MCP.md)**.
 
 ### 🌐 Browser & web
 - **Ember Browser** — a secure, AI-first browser: tracker/ad blocking, an AI-answer search page,
   summarize/ask about any page, **AI extension maker**, AI-content check, reader mode, per-site
-  dark mode, saved passwords, bookmarks, history, downloads.
+  dark mode, saved passwords, bookmarks, download history/progress, privacy controls, session
+  recovery, closed-tab restore, duplicate tabs, tab search, and standard browser shortcuts.
 - **System-wide ad blocker** — its own menu; blocks ads/trackers across the whole machine (hosts).
 - **Chrome extension** — summarize / ask / AI-check any page from your browser.
 
@@ -70,11 +85,10 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   Settings → Models.
 
 ### 🛡️ Security
-- **Always-on antivirus** — file scanning **+ real-time fileless/behavioral process protection**,
-  a unified Security Center that continuously scans processes/files/network/persistence, a real
-  run-in-sandbox, **AI safe-open** (holds unconfirmed risky files and AI-scans them until you
-  confirm), quarantine, malicious-site blocking, secret redaction, tamper-evident audit log,
-  read-only/capability modes, and bring-your-own VPN. (Full detail below.)
+- **Endpoint security console** — local file analysis, optional platform/cloud reputation,
+  behavioral process monitoring, network and persistence inspection, containment, sandboxing,
+  web protection, and an evidence-led activity report. Coverage and limitations are shown in
+  the product instead of being hidden behind a marketing “safe” score. (Full detail below.)
 
 ### 🔔 Other
 - **Notifications** — connect **Slack, Telegram, Discord, or a webhook** so agents and security
@@ -87,8 +101,10 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 
 ## ▶️ Run it (easiest)
 
-**macOS:** double-click **`Ember.command`**
-**Windows:** double-click **`Ember.bat`**
+For a first installation, use **`macOS Install/Install Ember.command`** or
+**`Windows Install/Install Ember.bat`**. Each opens its installation guide first.
+
+After setup: **macOS** double-click **`Ember.command`**; **Windows** double-click **`Ember.bat`**.
 
 > **macOS first-launch note:** Ember is free and unsigned, so macOS Gatekeeper
 > blocks the `.command` files on first use with *"Apple could not verify … is free
@@ -246,14 +262,14 @@ every paired device any time from the same panel.
 
 ## 🛡️ Built-in malware defense
 
-Ember scans what it downloads and what you ask it to open, **watches running
-processes in real time for fileless attacks**, isolates anything it can't vouch
-for, and quarantines confirmed threats. Real-time protection is **always active**
-by default.
+Ember scans what it downloads and what you ask it to open, can watch running
+processes for suspicious command-line behaviour, holds unconfirmed risky files,
+and contains confirmed malware. The console reports what is actually running and
+calls out missing providers. A result of **no known indicators** is not proof that
+a device or file is safe.
 
-- **Always-on Security Center** — a unified supervisor scans **every surface
-  malware uses, continuously**, and keeps the individual monitors alive (a watchdog
-  restarts anything that dies, so scanning never silently stops):
+- **Security Center** — a best-effort supervisor monitors several high-value endpoint
+  surfaces and restarts enabled monitors that stop:
   - **Processes** — the fileless-malware monitor (below).
   - **Files** — a real-time **download monitor** scans new files the moment they
     finish downloading, plus periodic sweeps of Downloads/Desktop/Documents/Temp.
@@ -283,7 +299,8 @@ by default.
   **Shannon-entropy packer detection**, **behavioral content signatures**, an
   **extensible signature DB**, known-bad hashes), the platform antivirus
   (**Windows Defender** / **ClamAV** if installed), and **VirusTotal** (hash
-  lookup, plus uploading unknown files when a key is set). Suspicious or malicious
+  lookup when a key is set). Unknown file contents are **not uploaded by default**;
+  sample sharing requires a separate explicit opt-in. Suspicious or malicious
   files are **not opened until the scan finishes**.
 - **Deep static analysis** — beyond hashes and entropy, Ember parses files structurally:
   **PE/ELF/Mach-O** headers for packer sections (UPX/Themida/VMProtect…), writable-and-
@@ -293,16 +310,18 @@ by default.
   Python **AST** pass so `eval`/`exec`/`os.system` are caught through renaming. Works out of the
   box (pure-Python); installing `requirements-security.txt` upgrades it with **YARA**, real
   **olevba** macro extraction, **lief** parsing, **ssdeep** fuzzy hashing and RAR/7z unpacking.
-- **AI safe-open** — anything **unconfirmed and risky** (an executable/script, anything the
-  scanner flags, or a file it couldn't scan) gets an **AI second-opinion** and is **held until
-  you confirm** it's safe to open. Confirmed files are remembered by content hash and open
-  normally afterward; definitive malware is still hard-blocked + quarantined. Toggle in
-  **Settings → Security**.
-- **Quarantine + auto-delete** — confirmed-malicious files are moved to a locked,
-  non-executable vault and automatically deleted after 7 days. Nothing is deleted
-  on a mere hunch — only a definitive detection quarantines a file, so a false
-  positive can't destroy your data. Manage it with the `list_quarantine`,
+- **AI-assisted triage** — anything **unconfirmed and risky** (an executable/script, anything
+  the scanner flags, or a file it couldn't scan) can receive an AI advisory and is **held until
+  you confirm** it. AI never clears, restores, or downgrades engine evidence. Confirmed files
+  are remembered by content hash; definitive malware remains blocked and contained.
+- **Evidence-preserving quarantine** — confirmed-malicious files are moved to a locked,
+  non-executable vault. Findings cannot be directly deleted: containment comes first, then a
+  human may restore or permanently delete from Quarantine. Legacy automatic-delete policy is
+  migrated to retention. Manage it with the `list_quarantine`,
   `restore_quarantined`, and `delete_quarantined` tools.
+- **Activity chain + report export** — scans, containment, restoration, deletion, and policy
+  changes are written to a locally verifiable hash chain. The console exports a redacted JSON
+  report containing protection state, coverage gaps, evidence inventory, and explicit limits.
 - **Sandbox unknown programs** — `run_in_sandbox` runs a file in the strongest
   isolation available (Docker with no network → macOS `sandbox-exec` / Windows
   restricted token → otherwise refuse) so its behaviour can be observed without
@@ -311,7 +330,7 @@ by default.
 
 **Optional, stronger protection** (all auto-detected — none required):
 - **VirusTotal:** set a `VIRUSTOTAL_API_KEY` (free at virustotal.com) for cloud
-  multi-engine scanning. Only file hashes are sent unless upload is enabled.
+  reputation. Only SHA-256 hashes are sent unless sample sharing is explicitly enabled.
 - **ClamAV** (`brew install clamav` / `apt install clamav`) for an on-device engine.
 - **Docker** for the strongest sandbox.
 
@@ -321,21 +340,12 @@ what protection is currently active.
 
 ---
 
-## 💎 Plans — Free & Pro (everyone gets Pro right now)
+## Free, with the complete local toolset
 
-Ember has two tiers, but **every user currently gets the full Pro feature set for
-free** — no paywall, no license, no payment, no Apple Developer account needed.
-`plan.py` keeps the structure so Pro *could* be sold later by flipping one default.
-
-**Pro features (all unlocked today):**
-- Advanced antivirus — `scan_directory` deep folder scans + quarantine
-- Sandbox for running unknown programs safely
-- **VPN** — connect through your own WireGuard locations (below)
-- Live URL reputation, capability modes, tamper-evident audit log
-- Multitool utilities — disk usage, open-port check, password strength, system health
-- Priority models + the full Pro UI
-
-`get_plan` shows what's unlocked; `set_plan free|pro` toggles locally (default **pro**).
+Every local feature and MCP tool is permanently free: antivirus, sandbox, deep scans, agents,
+browser control, utilities, VPN management, reputation integrations, and the full UI. There is
+no licence check or upgrade tier. `get_plan` remains only for older plugins and always reports
+the single free tier. Third-party services may still require their own account or credentials.
 
 ### VPN (bring-your-own WireGuard)
 Ember isn't a VPN provider — it manages WireGuard configs **you** add (Mullvad,
@@ -411,7 +421,7 @@ tunnel up — and it never claims to be connected when it isn't.
 | `web_policy.py` | website blocking + URL reputation |
 | `redaction.py` | strip secrets/PII from logs, audit & screenshots |
 | `audit.py` | tamper-evident action audit log |
-| `plan.py` | Free/Pro plans (everyone is Pro right now) |
+| `plan.py` | compatibility access API; every capability is permanently free |
 | `vpn.py` | VPN location manager (bring-your-own WireGuard) |
 | `utilities.py` | multitool helpers: disk usage, open ports, password strength, health |
 | `cleanup.py` | system cleanup: temp/cache reclaim, startup items |

@@ -37,6 +37,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -65,12 +66,20 @@ def _support_dir() -> Path:
         xdg = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
         base = Path(xdg) / "Ember"
     base.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except Exception:
+        pass
     return base
 
 
 def _quarantine_dir() -> Path:
     d = _support_dir() / "Quarantine"
     d.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except Exception:
+        pass
     return d
 
 
@@ -78,8 +87,10 @@ _CONFIG_LOCK = threading.RLock()
 # Serializes every quarantine-index read-modify-write so concurrent quarantines can't
 # clobber each other (which orphaned malware on disk with no index entry).
 _INDEX_LOCK = threading.RLock()
+_AUDIT_LOCK = threading.RLock()
 
 DEFAULT_CONFIG: dict = {
+    "response_policy_version": 2,
     "enabled": True,
     "scan_downloads": True,        # scan files as they finish downloading
     "scan_before_open": True,      # scan files before opening them
@@ -89,9 +100,11 @@ DEFAULT_CONFIG: dict = {
     "require_confirm_unconfirmed": True,  # hold unconfirmed risky files until the user confirms
     "vt_api_key": "",              # falls back to env VIRUSTOTAL_API_KEY / VT_API_KEY
     "vt_hash_lookup": True,        # query VirusTotal by SHA-256 (only the hash leaves)
-    "vt_upload_unknown": True,     # upload unknown files to VirusTotal for full scanning
-    "on_malware": "quarantine_autodelete",  # quarantine | quarantine_autodelete | delete
-    "autodelete_days": 7,          # grace period before a quarantined file is purged
+    # Privacy boundary: hashes may be checked when configured, but private files are NEVER
+    # uploaded to a third party unless the user explicitly opts in.
+    "vt_upload_unknown": False,
+    "on_malware": "quarantine",    # containment first; deletion requires explicit review
+    "autodelete_days": 30,         # used only if legacy quarantine_autodelete is selected
     "sandbox_mode": "auto",        # auto | docker | native | off
     "max_scan_bytes": 64 * 1024 * 1024,      # files larger than this: hash + heuristics only
     "vt_upload_max_bytes": 32 * 1024 * 1024, # VirusTotal's free upload ceiling
@@ -134,7 +147,20 @@ def get_config() -> dict:
         try:
             p = _config_path()
             if p.exists():
-                cfg.update(json.loads(p.read_text("utf-8")))
+                loaded = json.loads(p.read_text("utf-8"))
+                if isinstance(loaded, dict):
+                    cfg.update(loaded)
+                    # Version 1 shipped auto-delete as a default. Treat an unversioned stored
+                    # value as that old default and migrate it to evidence-preserving containment.
+                    if "response_policy_version" not in loaded and loaded.get("on_malware") in (
+                            "delete", "quarantine_autodelete"):
+                        cfg["on_malware"] = "quarantine"
+                        cfg["response_policy_version"] = 2
+                    if "response_policy_version" not in loaded:
+                        # Version 1 also enabled third-party sample upload by default. Requiring
+                        # a fresh, explicit opt-in is safer than guessing whether that old value
+                        # represented informed consent.
+                        cfg["vt_upload_unknown"] = False
         except Exception:
             pass
         return cfg
@@ -144,6 +170,7 @@ def set_config(**changes) -> dict:
     """Update and persist config values. Returns the new config."""
     with _CONFIG_LOCK:
         cfg = get_config()
+        before = dict(cfg)
         for k, v in changes.items():
             if k in DEFAULT_CONFIG:
                 cfg[k] = v
@@ -151,12 +178,105 @@ def set_config(**changes) -> dict:
             _config_path().write_text(json.dumps(cfg, indent=2), "utf-8")
         except Exception:
             pass
+        changed = sorted(k for k in changes if k in DEFAULT_CONFIG and before.get(k) != cfg.get(k))
+        if changed:
+            # Record names, not values: API keys and other sensitive configuration never enter
+            # the audit trail.
+            audit_event("configuration_changed", {"settings": changed})
         return cfg
 
 
 def _vt_api_key(cfg: dict) -> str:
     return (cfg.get("vt_api_key") or os.environ.get("VIRUSTOTAL_API_KEY")
             or os.environ.get("VT_API_KEY") or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Security audit trail
+# ---------------------------------------------------------------------------
+
+def _audit_path() -> Path:
+    return _support_dir() / "security_audit.jsonl"
+
+
+def _audit_digest(entry: dict) -> str:
+    unsigned = {k: v for k, v in entry.items() if k != "record_hash"}
+    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def audit_event(action: str, details: dict | None = None) -> dict:
+    """Append a structured, hash-chained local security event.
+
+    The chain detects accidental edits and unsophisticated tampering; it is deliberately not
+    marketed as tamper-proof because an administrator with disk access can replace local state.
+    """
+    try:
+        with _AUDIT_LOCK:
+            previous = ""
+            try:
+                lines = _audit_path().read_text("utf-8").splitlines()
+                if lines:
+                    previous = str(json.loads(lines[-1]).get("record_hash") or "")
+            except Exception:
+                pass
+            now = time.time()
+            entry = {
+                "event_id": hashlib.sha256(
+                    f"{time.time_ns()}:{os.getpid()}:{threading.get_ident()}".encode()).hexdigest()[:20],
+                "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "epoch": now,
+                "action": str(action),
+                "details": details or {},
+                "previous_hash": previous,
+            }
+            entry["record_hash"] = _audit_digest(entry)
+            path = _audit_path()
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n")
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+            try:
+                os.chmod(path, 0o600)
+            except Exception:
+                pass
+            return {"ok": True, "event": entry}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def security_audit(limit: int = 200) -> dict:
+    """Read recent security operations and verify the retained hash chain."""
+    try:
+        try:
+            wanted = max(1, min(5000, int(limit)))
+        except (TypeError, ValueError):
+            wanted = 200
+        events, malformed = [], 0
+        with _AUDIT_LOCK:
+            for line in (_audit_path().read_text("utf-8").splitlines()
+                         if _audit_path().exists() else []):
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    malformed += 1
+        integrity = malformed == 0
+        previous = None
+        for event in events:
+            if event.get("record_hash") != _audit_digest(event):
+                integrity = False
+            if previous is not None and event.get("previous_hash") != previous:
+                integrity = False
+            previous = event.get("record_hash")
+        return {"ok": True, "events": events[-wanted:], "total": len(events),
+                "integrity_ok": integrity, "malformed_records": malformed,
+                "integrity_note": ("Hash chain valid for the local audit file."
+                                   if integrity else "The local audit file has been altered or damaged.")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "events": [], "integrity_ok": False}
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +366,12 @@ def set_ai_judge(fn) -> None:
 
 
 def ai_review_flagged(flagged: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Second-opinion pass over flagged files. ONLY heuristic 'suspicious' items are reviewed
-    (definitive 'malicious' — EICAR / signature / AV / VT — are NEVER downgraded). The AI judge
-    reads a text excerpt of each and decides if it could cause REAL harm; items judged harmless
-    are returned as `cleared` (false positives) — the caller drops them and un-quarantines any
-    that were auto-quarantined. Returns (kept, cleared). One batched call, so it's rate-cheap."""
+    """Add an AI triage opinion to heuristic findings without changing the security verdict.
+
+    Language models are not malware engines and must never silently clear evidence. The second
+    return value remains for API compatibility but is always empty; callers should display the
+    opinion as analyst context and keep the finding until a human dismisses or quarantines it.
+    """
     judge = _AI_JUDGE
     review = [f for f in flagged if f.get("verdict") == "suspicious"]
     definite = [f for f in flagged if f.get("verdict") != "suspicious"]
@@ -269,12 +390,15 @@ def ai_review_flagged(flagged: list[dict]) -> tuple[list[dict], list[dict]]:
         verdicts = judge(items)
     except Exception:
         return flagged, []
-    kept, cleared = [], []
+    kept = []
     for f, harmful in zip(review, verdicts):
-        (kept if harmful else cleared).append(f)
-    # Anything unjudged (short list) stays flagged, to be safe.
+        enriched = dict(f)
+        enriched["ai_assessment"] = "potentially-harmful" if harmful else "likely-benign"
+        enriched["ai_assessment_advisory"] = True
+        kept.append(enriched)
+    # Anything unjudged stays flagged.
     kept += review[len(verdicts):]
-    return definite + kept, cleared
+    return definite + kept, []
 
 
 # ---------------------------------------------------------------------------
@@ -1022,6 +1146,52 @@ _VERDICT_ORDER = {"clean": 0, "suspicious": 1, "malicious": 2}
 _SUSPICIOUS_SCORE = 45
 
 
+def _explain_result(path: Path, sha: str, verdict: str, score: int, reasons: list[str],
+                    engines: list[str], scan_error: bool = False) -> dict:
+    """Translate raw scanner output into an honest incident record for UI/export/API callers."""
+    definitive = verdict == "malicious"
+    review = verdict == "suspicious"
+    platform_or_reputation = any(
+        e in engines for e in ("windows-defender", "clamav", "virustotal"))
+    if scan_error:
+        assurance, confidence = "incomplete", "unknown"
+    elif definitive:
+        assurance, confidence = "confirmed-threat", "high"
+    elif review:
+        assurance, confidence = "review-required", "medium"
+    else:
+        assurance = "no-known-threats"
+        confidence = "moderate" if platform_or_reputation else "limited"
+    classification = {
+        "malicious": "confirmed-malware",
+        "suspicious": "suspicious-behavior",
+        "clean": "no-known-threats",
+    }.get(verdict, "unknown")
+    detection_id = f"EMB-{sha[:16].upper()}" if sha else ""
+    coverage = {
+        "local_static": any(e in engines for e in
+                            ("heuristics", "entropy", "ioc-signatures", "deep-static")),
+        "known_bad_hashes": bool(sha),
+        "platform_antivirus": any(e in engines for e in ("windows-defender", "clamav")),
+        "cloud_reputation": "virustotal" in engines,
+        "archive_inspection": "archive" in engines,
+    }
+    return {
+        "detection_id": detection_id,
+        "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "classification": classification,
+        "assurance": assurance,
+        "confidence": confidence,
+        "requires_review": review or scan_error,
+        "evidence": [{"kind": "indicator", "detail": r} for r in reasons],
+        "coverage": coverage,
+        "privacy": {
+            "file_uploaded": False,
+            "note": "File contents are uploaded only when sample sharing is explicitly enabled.",
+        },
+    }
+
+
 def scan_file(path: str, deep: bool = True) -> dict:
     """Classify a single file.
 
@@ -1038,9 +1208,13 @@ def scan_file(path: str, deep: bool = True) -> dict:
         # Never flag Ember's own code / signature DB / tests (they legitimately CONTAIN the
         # very indicator strings the scanner looks for).
         if _is_ember_own(p):
+            reasons = ["Ember's own component (trusted, excluded from scanning)"]
             return {"ok": True, "path": str(p), "sha256": "", "verdict": "clean", "score": 0,
-                    "reasons": ["Ember's own component (trusted, excluded from scanning)"],
-                    "engines": ["self-exclude"], "size": size}
+                    "reasons": reasons, "engines": ["self-exclude"], "size": size,
+                    "scan_error": False, "classification": "trusted-component",
+                    "assurance": "excluded", "confidence": "policy",
+                    "requires_review": False, "detection_id": "", "evidence": [],
+                    "coverage": {}, "privacy": {"file_uploaded": False}}
         reasons: list[str] = []
         engines: list[str] = []
         verdict = "clean"
@@ -1095,6 +1269,7 @@ def scan_file(path: str, deep: bool = True) -> dict:
                                (f": {res['detail']}" if res.get("detail") else ""))
 
         # 4) VirusTotal (hash lookup, then upload of unknowns).
+        vt = None
         if deep:
             vt = _scan_virustotal(p, sha, cfg)
             if vt is not None:
@@ -1115,30 +1290,37 @@ def scan_file(path: str, deep: bool = True) -> dict:
                 if arch["verdict"] != "clean":
                     reasons += arch["reasons"]
 
+        reasons = reasons or ["no indicators found"]
+        explained = _explain_result(p, sha, verdict, score, reasons, engines, scan_errored)
+        explained["privacy"]["file_uploaded"] = bool(vt and vt.get("source") == "upload")
         return {"ok": True, "path": str(p), "sha256": sha, "verdict": verdict,
-                "score": score, "reasons": reasons or ["no indicators found"],
-                "engines": engines, "size": size, "scan_error": scan_errored}
+                "score": score, "reasons": reasons, "engines": engines, "size": size,
+                "scan_error": scan_errored, **explained}
     except Exception as e:
         return {"ok": False, "error": f"scan failed: {e}", "verdict": "unknown"}
 
 
-def scan_directory(path: str, deep: bool = False, max_files: int = 2000, progress=None) -> dict:
-    """Recursively scan a folder (Pro 'deep scan'). Confirmed-malicious files are
+def scan_directory(path: str, deep: bool = False, max_files: int = 2000, progress=None,
+                   cancel=None) -> dict:
+    """Recursively scan a folder. Confirmed-malicious files are
     quarantined; suspicious files are reported. deep=True also consults VirusTotal.
-    `progress(scanned, flagged, current_path)` is called periodically for a live UI bar."""
-    try:
-        import plan
-        if deep and plan.require("deep_directory_scan"):
-            deep = False  # not entitled -> fall back to local scan (everyone is Pro now)
-    except Exception:
-        pass
+    `progress(scanned, flagged, current_path)` is called periodically for a live UI bar.
+    `cancel()` may stop a long scan without killing the worker thread."""
     try:
         root = Path(path).expanduser()
         if not root.exists() or not root.is_dir():
             return {"ok": False, "error": f"not a directory: {path}"}
         scanned = 0
         flagged = []
+        cancelled = False
         for p in root.rglob("*"):
+            if cancel is not None:
+                try:
+                    if cancel():
+                        cancelled = True
+                        break
+                except Exception:
+                    pass
             if scanned >= max_files:
                 break
             try:
@@ -1151,7 +1333,11 @@ def scan_directory(path: str, deep: bool = False, max_files: int = 2000, progres
             scanned += 1
             r = scan_file(str(p), deep=deep)
             if r.get("verdict") in ("suspicious", "malicious"):
-                item = {"path": str(p), "verdict": r["verdict"], "reasons": r.get("reasons")}
+                item = {k: r.get(k) for k in (
+                    "path", "sha256", "verdict", "score", "reasons", "engines",
+                    "scan_error", "detection_id", "scanned_at", "classification",
+                    "assurance", "confidence", "requires_review", "evidence", "coverage",
+                    "privacy")}
                 if r["verdict"] == "malicious":
                     item["handled"] = _handle_malicious(str(p), r)
                 flagged.append(item)
@@ -1160,9 +1346,16 @@ def scan_directory(path: str, deep: bool = False, max_files: int = 2000, progres
                     progress(scanned, len(flagged), str(p))
                 except Exception:
                     pass
-        return {"ok": True, "root": str(root), "scanned": scanned,
-                "flagged_count": len(flagged), "flagged": flagged[:200],
-                "reached_limit": scanned >= max_files}
+        result = {"ok": True, "root": str(root), "scanned": scanned,
+                  "flagged_count": len(flagged), "flagged": flagged[:200],
+                  "reached_limit": scanned >= max_files, "cancelled": cancelled,
+                  "scan_mode": "cloud-reputation" if deep else "local-only"}
+        audit_event("directory_scan_completed", {
+            "root": str(root), "scanned": scanned, "findings": len(flagged),
+            "confirmed_malware": sum(f.get("verdict") == "malicious" for f in flagged),
+            "cancelled": cancelled, "mode": result["scan_mode"],
+        })
+        return result
     except Exception as e:
         return {"ok": False, "error": f"directory scan failed: {e}"}
 
@@ -1196,6 +1389,10 @@ def _save_index(entries: list[dict]) -> bool:
         p = _index_path()
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(entries, indent=2), "utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except Exception:
+            pass
         os.replace(tmp, p)   # atomic on POSIX & Windows (same directory)
         return True
     except Exception:
@@ -1215,7 +1412,9 @@ def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "
             return {"ok": False, "error": f"file not found: {path}"}
         cfg = get_config()
         sha = sha256 or sha256_file(p)   # full-file digest (identity / known-bad / VT)
-        qid = f"{int(time.time())}_{sha[:8]}"
+        # Nanosecond time + random suffix prevents two identical files quarantined in the same
+        # second from colliding and overwriting evidence.
+        qid = f"{time.time_ns()}_{sha[:12]}_{secrets.token_hex(3)}"
         stored = _quarantine_dir() / f"{qid}_{p.name}.quarantine"
         now = time.time()
         entry = {
@@ -1249,7 +1448,11 @@ def quarantine_file(path: str, reasons: list[str] | None = None, sha256: str = "
                     pass
                 return {"ok": False, "error": "could not write the quarantine index (file left in place)"}
         return {"ok": True, "quarantined": True, "id": qid, "stored_path": str(stored),
-                "original_path": str(p), "delete_after": entry["delete_after"]}
+                "original_path": str(p), "delete_after": entry["delete_after"],
+                "audit": audit_event("file_quarantined", {
+                    "quarantine_id": qid, "original_path": str(p), "sha256": sha,
+                    "reasons": (reasons or [])[:12],
+                }).get("event", {}).get("event_id")}
     except Exception as e:
         return {"ok": False, "error": f"quarantine failed: {e}"}
 
@@ -1278,6 +1481,35 @@ def list_quarantine() -> dict:
     return {"ok": True, "count": len(items), "items": items}
 
 
+def verify_quarantined(id: str) -> dict:
+    """Verify that a contained payload still matches the SHA-256 recorded at intake."""
+    try:
+        with _INDEX_LOCK:
+            entry = next((e for e in _load_index() if e.get("id") == id), None)
+            if not entry:
+                return {"ok": False, "error": f"no quarantine entry with id {id}"}
+            stored = Path(entry.get("stored_path", ""))
+            if not stored.is_file():
+                return {"ok": False, "integrity_ok": False,
+                        "error": "quarantined payload is missing", "id": id}
+            expected = str(entry.get("sha256") or "").lower()
+            if not expected:
+                return {"ok": False, "integrity_ok": False,
+                        "error": "legacy quarantine entry has no recorded SHA-256", "id": id}
+            actual = sha256_file(stored).lower()
+            valid = secrets.compare_digest(actual, expected)
+        if not valid:
+            audit_event("quarantine_integrity_failed", {
+                "quarantine_id": id, "expected_sha256": expected, "actual_sha256": actual})
+        return {"ok": True, "id": id, "integrity_ok": valid,
+                "sha256": actual, "expected_sha256": expected,
+                "message": ("Contained payload matches its intake hash."
+                            if valid else "Contained payload does not match its intake hash.")}
+    except Exception as exc:
+        return {"ok": False, "integrity_ok": False,
+                "error": f"quarantine verification failed: {exc}", "id": id}
+
+
 def restore_quarantined(id: str, destination: str = "") -> dict:
     """Move a quarantined file back to its original location (or `destination`).
     This re-arms a file you previously deemed dangerous, so callers should confirm."""
@@ -1290,6 +1522,11 @@ def restore_quarantined(id: str, destination: str = "") -> dict:
             stored = Path(entry["stored_path"])
             if not stored.exists():
                 return {"ok": False, "error": "quarantined payload is missing"}
+            verification = verify_quarantined(id)
+            if not verification.get("ok") or not verification.get("integrity_ok"):
+                return {"ok": False, "error": (
+                    "refusing to restore: contained payload integrity could not be verified"),
+                    "verification": verification}
             target = Path(destination).expanduser() if destination else Path(entry["original_path"])
             if target.is_dir():
                 target = target / Path(entry["original_path"]).name
@@ -1306,8 +1543,22 @@ def restore_quarantined(id: str, destination: str = "") -> dict:
             except Exception:
                 pass
             shutil.move(str(stored), str(target))
-            _save_index([e for e in entries if e.get("id") != id])
-        return {"ok": True, "restored_to": str(target), "id": id}
+            if not _save_index([e for e in entries if e.get("id") != id]):
+                try:
+                    shutil.move(str(target), str(stored))
+                    os.chmod(stored, stat.S_IRUSR)
+                    return {"ok": False, "error": (
+                        "could not update the quarantine index; restore was rolled back")}
+                except Exception:
+                    return {"ok": True, "restored_to": str(target), "id": id,
+                            "warning": ("file restored, but the quarantine index could not be "
+                                        "updated; the stale entry will show as missing")}
+        event = audit_event("quarantine_restored", {
+            "quarantine_id": id, "restored_to": str(target),
+            "sha256": entry.get("sha256", ""),
+        })
+        return {"ok": True, "restored_to": str(target), "id": id,
+                "audit": event.get("event", {}).get("event_id")}
     except Exception as e:
         return {"ok": False, "error": f"restore failed: {e}"}
 
@@ -1322,21 +1573,43 @@ def delete_quarantined(id: str) -> dict:
                 return {"ok": False, "error": f"no quarantine entry with id {id}"}
             try:
                 Path(entry["stored_path"]).unlink(missing_ok=True)
-            except Exception:
-                pass
-            _save_index([e for e in entries if e.get("id") != id])
-        return {"ok": True, "deleted": id}
+            except Exception as exc:
+                # Never drop the index when payload deletion failed; that would orphan malware.
+                return {"ok": False, "error": f"could not delete quarantined payload: {exc}"}
+            if not _save_index([e for e in entries if e.get("id") != id]):
+                return {"ok": False, "error": (
+                    "payload was deleted but the quarantine index could not be updated; retry "
+                    "Refresh/Delete to repair the stale record")}
+        event = audit_event("quarantine_deleted", {
+            "quarantine_id": id, "original_path": entry.get("original_path", "?"),
+            "sha256": entry.get("sha256", ""),
+        })
+        return {"ok": True, "deleted": id,
+                "audit": event.get("event", {}).get("event_id")}
     except Exception as e:
         return {"ok": False, "error": f"delete failed: {e}"}
 
 
 def purge_expired() -> dict:
-    """Delete quarantined files whose grace period has elapsed (the 7-day auto-delete).
+    """Delete quarantined files only when an explicit retention policy enables auto-delete.
     An entry is dropped ONLY once its file is confirmed gone — otherwise it's kept so a
     later run retries (never leave orphaned malware on disk with no index record)."""
     now = time.time()
     with _INDEX_LOCK:
         entries = _load_index()
+        if get_config().get("on_malware") != "quarantine_autodelete":
+            # Cancel deadlines inherited from the old default. Containment evidence is retained
+            # until a human deletes it from Quarantine.
+            changed = False
+            for entry in entries:
+                if entry.get("delete_after") is not None:
+                    entry["delete_after"] = None
+                    changed = True
+            if changed:
+                _save_index(entries)
+                audit_event("legacy_auto_delete_cancelled", {"items": len(entries)})
+            return {"ok": True, "purged": [], "remaining": len(entries), "failed": [],
+                    "retention": "manual-review"}
         kept, removed, failed = [], [], []
         for e in entries:
             if e.get("delete_after") and now >= e["delete_after"]:
@@ -1369,11 +1642,10 @@ def _handle_malicious(path: str, scan: dict) -> dict:
     cfg = get_config()
     action = cfg.get("on_malware", "quarantine_autodelete")
     if action == "delete":
-        try:
-            Path(path).expanduser().unlink(missing_ok=True)
-            return {"action": "deleted", "ok": True}
-        except Exception as e:
-            return {"action": "delete_failed", "ok": False, "error": str(e)}
+        # Legacy configurations could delete immediately. Modern incident handling always
+        # contains first so evidence is recoverable and a false positive cannot destroy data.
+        audit_event("unsafe_response_policy_overridden", {
+            "requested": "delete", "applied": "quarantine", "path": path})
     q = quarantine_file(path, reasons=scan.get("reasons"), sha256=scan.get("sha256", ""))
     q["action"] = "quarantined"
     return q
@@ -1388,8 +1660,11 @@ def gate_download(path: str) -> dict:
     scan = scan_file(path, deep=True)
     if not scan.get("ok"):
         return {"ok": True, "scanned": False, "verdict": "unknown", "error": scan.get("error")}
-    out = {"ok": True, "scanned": True, "verdict": scan["verdict"],
-           "reasons": scan["reasons"], "engines": scan["engines"], "sha256": scan["sha256"]}
+    out = {k: scan.get(k) for k in (
+        "verdict", "reasons", "engines", "sha256", "detection_id", "scanned_at",
+        "classification", "assurance", "confidence", "requires_review", "evidence",
+        "coverage", "privacy", "scan_error")}
+    out.update({"ok": True, "scanned": True})
     if scan["verdict"] == "malicious":
         out["handled"] = _handle_malicious(path, scan)
         out["blocked"] = True
@@ -1720,6 +1995,35 @@ def security_status() -> dict:
         fileless_running = fileless_guard.is_running()
     except Exception:
         pass
+    center_running = False
+    try:
+        import security_center
+        center_running = security_center.is_running()
+    except Exception:
+        pass
+    platform_engine = any(e in engines for e in ("windows-defender", "clamav"))
+    reputation_engine = any(e.startswith("virustotal") for e in engines)
+    gaps = []
+    if not platform_engine:
+        gaps.append("No independent platform signature engine is available.")
+    if cfg.get("vt_hash_lookup", True) and not _vt_api_key(cfg):
+        gaps.append("Cloud reputation is configured but no VirusTotal API key is available.")
+    if cfg.get("fileless_protection", True) and not fileless_running:
+        gaps.append("Behavioral process monitoring is configured but not running.")
+    if cfg.get("realtime_security_center", True) and not center_running:
+        gaps.append("The continuous Security Center is configured but not running.")
+    if not cfg.get("scan_before_open", True):
+        gaps.append("Pre-open scanning is disabled.")
+    if not cfg.get("enabled", True):
+        protection_state = "off"
+    elif (cfg.get("fileless_protection", True) and not fileless_running) or (
+            cfg.get("realtime_security_center", True) and not center_running):
+        protection_state = "attention"
+    elif not platform_engine and not reputation_engine:
+        protection_state = "limited"
+    else:
+        protection_state = "protected"
+    audit = security_audit(limit=1)
     return {
         "ok": True,
         "enabled": cfg.get("enabled"),
@@ -1734,6 +2038,42 @@ def security_status() -> dict:
         "engines_available": engines,
         "sandbox_available": sandbox,
         "quarantine_count": len(_load_index()),
+        "protection_state": protection_state,
+        "coverage_gaps": gaps,
+        "providers": {
+            "local_static": True,
+            "known_bad_hashes": True,
+            "platform_antivirus": platform_engine,
+            "cloud_reputation": reputation_engine,
+            "cloud_sample_upload": bool(reputation_engine and cfg.get("vt_upload_unknown", False)),
+            "behavior_monitor": fileless_running,
+            "security_center": center_running,
+        },
+        "vt_api_key_configured": bool(_vt_api_key(cfg)),
+        "audit_integrity_ok": audit.get("integrity_ok", False),
+    }
+
+
+def security_report(audit_limit: int = 500) -> dict:
+    """Build a portable incident/protection report without exposing credentials."""
+    cfg = get_config()
+    safe_cfg = {k: v for k, v in cfg.items() if k != "vt_api_key"}
+    safe_cfg["vt_api_key_configured"] = bool(_vt_api_key(cfg))
+    quarantine = list_quarantine()
+    audit = security_audit(audit_limit)
+    return {
+        "schema": "ember.endpoint-security-report.v1",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "host": {"platform": sys.platform, "hostname": os.environ.get("COMPUTERNAME") or
+                 os.environ.get("HOSTNAME") or "local-host"},
+        "status": security_status(),
+        "policy": safe_cfg,
+        "quarantine": quarantine,
+        "audit": audit,
+        "limitations": [
+            "This report describes Ember's observable controls; it is not a compliance certification.",
+            "A clean result means no known indicators were found, not that a file is provably safe.",
+        ],
     }
 
 

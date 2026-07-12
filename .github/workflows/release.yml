@@ -206,6 +206,20 @@ jobs:
           (out/"latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
           print(json.dumps(manifest, indent=2))
           PY
+      - name: Verify updater metadata before publishing
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          manifest = json.loads(pathlib.Path("out/latest.json").read_text())
+          assert re.fullmatch(r"\d+\.\d+\.\d+", str(manifest["version"])), "invalid version"
+          for platform, asset in (("macos", "Ember-macOS.zip"),
+                                  ("windows", "Ember-Windows.zip")):
+              item = manifest["downloads"][platform]
+              assert pathlib.Path("out", asset).stat().st_size > 0, f"missing {asset}"
+              assert item["url"].startswith("https://github.com/"), f"unsafe {platform} URL"
+              assert re.fullmatch(r"[0-9a-f]{64}", item["sha256"]), f"bad {platform} checksum"
+          print("latest.json and required desktop assets are valid")
+          PY
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:

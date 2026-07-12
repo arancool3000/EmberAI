@@ -62,6 +62,26 @@ def manifest_url() -> str:
             f"/releases/latest/download/{MANIFEST_NAME}")
 
 
+def manifest_urls() -> list[str]:
+    """Independent manifest locations, ordered from canonical to fallback.
+
+    GitHub's `releases/latest/download` asset can briefly 404 while a release is being published
+    or when an older release workflow omitted the asset. Pages/raw copies keep update checks
+    working during that window. Payload downloads still remain pinned to GitHub Releases.
+    """
+    urls = [
+        manifest_url(),
+        f"https://{GITHUB_OWNER}.github.io/{GITHUB_REPO}/{MANIFEST_NAME}",
+        f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/main/docs/{MANIFEST_NAME}",
+    ]
+    return list(dict.fromkeys(urls))
+
+
+def release_api_url() -> str:
+    """GitHub API fallback when a release exists but its latest.json asset does not."""
+    return f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+
+
 def latest_download_url(plat: str | None = None) -> str:
     """Direct 'download newest build' link for a platform (website button fallback)."""
     return (f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"

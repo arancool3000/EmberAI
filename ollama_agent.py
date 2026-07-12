@@ -424,8 +424,9 @@ class OllamaAgent:
         sys_prompt = OFFLINE_TOOLS_SYSTEM_PROMPT + _memory_extras()
         include_tools = True       # send the structured `tools` field until the model rejects it
         progressed = False         # have we executed any tool / consumed a real model turn?
-        max_steps = 8
-        for step in range(max_steps):
+        last_call_signature = ""
+        repeated_call_rounds = 0
+        while not self._stop_flag.is_set():
             if self._stop_flag.is_set():
                 self._emit(AgentEvent("message", "[stopped]"))
                 return True
@@ -482,6 +483,15 @@ class OllamaAgent:
                     self._emit(AgentEvent("message", content or "[no response from the local model]"))
                     return True
             progressed = True
+            call_signature = json.dumps(tool_calls, sort_keys=True, default=str)
+            repeated_call_rounds = (repeated_call_rounds + 1
+                                    if call_signature == last_call_signature else 1)
+            last_call_signature = call_signature
+            if repeated_call_rounds >= 4:
+                self._emit(AgentEvent(
+                    "error", "Stopped a repeated-action loop after the local model requested "
+                    "the same operation four times."))
+                return True
             for tc in tool_calls:
                 if self._stop_flag.is_set():
                     break
@@ -508,8 +518,7 @@ class OllamaAgent:
                                     + self._ocr_fallback_text()),
                     })
                 self._pending_images = []
-        self._emit(AgentEvent("message",
-                   "[stopped after several tool steps — ask me to continue if needed]"))
+        self._emit(AgentEvent("message", "[stopped]"))
         return True
 
     def _ocr_fallback_text(self) -> str:

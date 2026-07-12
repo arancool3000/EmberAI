@@ -52,6 +52,16 @@ def test_asset_collection_tolerates_a_missing_linux_artifact():
     assert "cp artifacts/Ember-Linux/Ember-Linux.AppImage out/ 2>/dev/null || true" in block
 
 
+def test_release_validates_required_assets_and_manifest_before_publish():
+    block = _release_job_block()
+    verify = block.index("Verify updater metadata before publishing")
+    publish = block.index("Publish GitHub Release")
+    assert verify < publish
+    assert 'for platform, asset in (("macos", "Ember-macOS.zip")' in block
+    assert '("windows", "Ember-Windows.zip")' in block
+    assert 're.fullmatch(r"[0-9a-f]{64}", item["sha256"])' in block
+
+
 def test_appimagetool_arch_is_set():
     assert "ARCH=x86_64 ./appimagetool" in _SRC, (
         "appimagetool needs an explicit ARCH when it can't auto-detect a single architecture "

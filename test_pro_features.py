@@ -1,4 +1,4 @@
-"""Tests for Ember's Pro tier, VPN location manager, and directory scanning
+"""Tests for Ember's permanently-free access policy, VPN manager, and directory scanning
 (plan.py, vpn.py, antivirus.scan_directory).
 
 Hermetic: all state in a throwaway dir; no network; no WireGuard required.
@@ -24,32 +24,32 @@ antivirus.set_config(vt_api_key="", vt_hash_lookup=False, vt_upload_unknown=Fals
 
 # ------------------------------- plans -------------------------------------
 
-def test_everyone_is_pro_by_default():
-    assert plan.current_plan() == "pro"
+def test_every_feature_is_free_by_default():
+    assert plan.current_plan() == "free"
     g = plan.get_plan()
-    assert g["is_pro"] and g["everyone_is_pro"]
+    assert g["all_features_free"] and not g["is_pro"]
     assert plan.has("vpn") and plan.has("sandbox") and plan.has("advanced_antivirus")
-    assert plan.require("vpn") is None  # entitled -> no error
+    assert plan.require("vpn") is None
 
 
-def test_plan_toggle_and_gating():
+def test_plan_compatibility_call_cannot_create_a_paywall():
     assert plan.set_plan("free")["ok"]
     assert plan.current_plan() == "free"
-    assert plan.has("antivirus") is True          # free feature
-    assert plan.has("vpn") is False               # pro feature locked when free
-    assert plan.require("vpn")["upgrade_required"] is True
-    assert plan.set_plan("pro")["ok"]             # back to pro
+    assert plan.has("antivirus") is True
     assert plan.has("vpn") is True
+    assert plan.set_plan("pro")["plan"] == "free"
+    assert plan.require("vpn") is None
 
 
-def test_set_plan_validates():
-    assert plan.set_plan("enterprise")["ok"] is False
-    plan.set_plan("pro")
+def test_set_plan_is_a_safe_noop_for_old_plugins():
+    assert plan.set_plan("enterprise")["ok"] is True
+    assert plan.current_plan() == "free"
 
 
 def test_list_pro_features():
     r = plan.list_pro_features()
-    assert r["ok"] and "vpn" in r["pro_features"] and r["benefits"]
+    assert r["ok"] and r["all_features_free"]
+    assert r["pro_features"] == [] and r["benefits"] == []
 
 
 # -------------------------------- vpn --------------------------------------

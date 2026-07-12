@@ -1,4 +1,4 @@
-"""Hermetic tests for security_suite.py — the pure Norton-style score (compute_dashboard), the
+"""Hermetic tests for security_suite.py — transparent control coverage (compute_dashboard), the
 Software Updater output parsers, and the tool exports. No OS access / network.
 (Named test_security_dashboard to avoid the pre-existing, unrelated test_security_suite.py.)
 Run: python test_security_dashboard.py"""
@@ -7,14 +7,15 @@ import security_suite as ss
 
 def test_compute_dashboard_all_on_is_100():
     d = ss.compute_dashboard({k: True for k in ss._WEIGHTS})
-    assert d["score"] == 100 and d["grade"] == "A" and d["rating"] == "excellent"
+    assert d["score"] == 100 and d["coverage_score"] == 100
+    assert d["grade"] == "A" and d["rating"] == "complete"
     assert d["recommendations"] == []
     assert all(c["ok"] for c in d["components"])
 
 
 def test_compute_dashboard_all_off_is_0():
     d = ss.compute_dashboard({k: False for k in ss._WEIGHTS})
-    assert d["score"] == 0 and d["grade"] == "F" and d["rating"] == "at risk"
+    assert d["score"] == 0 and d["grade"] == "F" and d["rating"] == "minimal"
     assert len(d["recommendations"]) == len(ss._WEIGHTS)
 
 

@@ -1517,7 +1517,8 @@ TOOL_DECLARATIONS = [
     # ---- Security / antivirus ----
     {"name": "scan_file",
      "description": "Scan a file for malware (local heuristics + platform AV + VirusTotal). "
-                    "Returns a verdict: clean | suspicious | malicious, with the reasons.",
+                    "Returns evidence, engine coverage, confidence, and a verdict. 'clean' means "
+                    "no known indicators were found; it is not proof that a file is safe.",
      "parameters": {"type": "OBJECT", "properties": {
         "path": {"type": "STRING"}, "deep": {"type": "BOOLEAN"}}, "required": ["path"]}},
     {"name": "run_in_sandbox",
@@ -1528,8 +1529,13 @@ TOOL_DECLARATIONS = [
         "path": {"type": "STRING"}, "args": {"type": "ARRAY", "items": {"type": "STRING"}},
         "timeout": {"type": "INTEGER"}}, "required": ["path"]}},
     {"name": "list_quarantine",
-     "description": "List files Ember has quarantined as malicious, and when each auto-deletes.",
+     "description": "List contained files and their evidence-retention details.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "verify_quarantined",
+     "description": "Verify a contained payload still matches its recorded intake SHA-256. "
+                    "Read-only and safe for evidence validation.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "id": {"type": "STRING", "description": "quarantine entry id"}}, "required": ["id"]}},
     {"name": "restore_quarantined",
      "description": "Restore a quarantined file (by id) to its original location. DANGEROUS: "
                     "this re-arms a file flagged as malicious — confirm with the user first.",
@@ -1539,9 +1545,20 @@ TOOL_DECLARATIONS = [
      "description": "Permanently delete a single quarantined file by id.",
      "parameters": {"type": "OBJECT", "properties": {"id": {"type": "STRING"}}, "required": ["id"]}},
     {"name": "security_status",
-     "description": "Report Ember's malware-protection status: engines available, settings, "
-                    "sandbox type, and quarantine count.",
+     "description": "Report actual endpoint-protection state, active providers, coverage gaps, "
+                    "sandbox type, containment count, and audit integrity.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "security_audit",
+     "description": "Read the endpoint-security activity chain and verify its local integrity.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "limit": {"type": "INTEGER", "description": "recent events to return (max 5000)"}},
+         "required": []}},
+    {"name": "security_report",
+     "description": "Build a redacted endpoint-security report with control state, containment "
+                    "inventory, limitations, and recent audit events. Does not write a file.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "audit_limit": {"type": "INTEGER", "description": "audit events to include"}},
+         "required": []}},
     {"name": "confirm_file_safe",
      "description": "Mark a file the antivirus HELD for review as user-confirmed-safe, so Ember "
                     "will open it (remembered by content hash). Only call this AFTER the user has "
@@ -1591,21 +1608,20 @@ TOOL_DECLARATIONS = [
      "description": "Set Ember's capability mode: full (all tools), restricted (no high-risk "
                     "actions), or read_only (only safe read-only tools). DANGEROUS to relax.",
      "parameters": {"type": "OBJECT", "properties": {"mode": {"type": "STRING"}}, "required": ["mode"]}},
-    # ---- Plan / Pro ----
+    # ---- Free feature access (compatibility tools) ----
     {"name": "get_plan",
-     "description": "Show the current plan (free/pro) and which features are unlocked. "
-                    "Note: every user currently has the full Pro feature set for free.",
+     "description": "Confirm that every Ember capability and local MCP tool is available free.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "list_pro_features",
-     "description": "List the Ember Pro features and benefits.",
+     "description": "Compatibility tool: confirms there are no paid-only Ember features.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "set_plan",
-     "description": "Set the local plan to 'free' or 'pro' (no payment; everyone is Pro by default).",
+     "description": "Compatibility no-op: Ember has one free tier with every feature enabled.",
      "parameters": {"type": "OBJECT", "properties": {"plan": {"type": "STRING"}}, "required": ["plan"]}},
     # ---- Advanced antivirus ----
     {"name": "scan_directory",
      "description": "Recursively scan a folder for malware; quarantines confirmed threats. "
-                    "deep=true also consults VirusTotal (Pro).",
+                    "deep=true also consults configured reputation providers. Free for everyone.",
      "parameters": {"type": "OBJECT", "properties": {
         "path": {"type": "STRING"}, "deep": {"type": "BOOLEAN"}, "max_files": {"type": "INTEGER"}},
         "required": ["path"]}},
@@ -1935,9 +1951,12 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "scan_file": antivirus.scan_file,
     "run_in_sandbox": antivirus.run_in_sandbox,
     "list_quarantine": antivirus.list_quarantine,
+    "verify_quarantined": antivirus.verify_quarantined,
     "restore_quarantined": antivirus.restore_quarantined,
     "delete_quarantined": antivirus.delete_quarantined,
     "security_status": antivirus.security_status,
+    "security_audit": antivirus.security_audit,
+    "security_report": antivirus.security_report,
     "confirm_file_safe": antivirus.confirm_file_safe,
     "list_cleared_files": antivirus.list_cleared_files,
     "unconfirm_file": antivirus.unconfirm_file,
@@ -1953,7 +1972,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "verify_audit_log": audit.verify,
     "get_security_mode": safety.get_mode,
     "set_agent_mode": safety.set_mode,
-    # plan / Pro
+    # free-feature compatibility API (kept for older automations/plugins)
     "get_plan": plan.get_plan,
     "list_pro_features": plan.list_pro_features,
     "set_plan": plan.set_plan,
@@ -3069,10 +3088,11 @@ class Agent:
         return [r for r in results if r is not None]
 
     def _process_response(self, response):
-        max_steps = 8   # tighter cap: fewer tool rounds = fewer API calls on the free tier
         steps = 0
+        last_call_signature = ""
+        repeated_call_rounds = 0
         _econ_nudged = False  # only inject the "wrap it up" hint once per turn
-        while steps < max_steps and not self._stop_flag.is_set():
+        while not self._stop_flag.is_set():
             steps += 1
             # Usage dashboard: record every model response's token usage (free-tier headroom).
             try:
@@ -3108,6 +3128,23 @@ class Agent:
                 self._emit(AgentEvent("message", "\n".join(text_parts).strip()))
 
             if not function_calls:
+                return
+
+            # No arbitrary step ceiling: continue until the task is complete. Only stop a true
+            # dead loop where the model issues the exact same call batch four rounds in a row.
+            try:
+                call_signature = json.dumps([
+                    {"name": fc.name, "args": tools._to_plain(getattr(fc, "args", {}) or {})}
+                    for fc in function_calls], sort_keys=True, default=str)
+            except Exception:
+                call_signature = "|".join(getattr(fc, "name", "") for fc in function_calls)
+            repeated_call_rounds = (repeated_call_rounds + 1
+                                    if call_signature == last_call_signature else 1)
+            last_call_signature = call_signature
+            if repeated_call_rounds >= 4:
+                self._emit(AgentEvent(
+                    "error", "Stopped a repeated-action loop after the model requested the exact "
+                    "same operation four times. Change the request or retry with another approach."))
                 return
 
             # Fast path: a batch of ONLY read-only tools runs concurrently.
@@ -3157,9 +3194,6 @@ class Agent:
                 self._emit(AgentEvent("error", f"send error: {str(e)[:500]}"))
                 return
 
-        if steps >= max_steps:
-            self._emit(AgentEvent("message", "[step limit reached - say 'continue' to keep going]"))
-
     def _spawn(self, instructions: str, mode: str = "auto", allowed_tools=None,
                label: str = "subagent", max_steps: int = 10) -> dict:
         """Run a fresh, scoped sub-agent on `instructions` and return its transcript.
@@ -3179,7 +3213,7 @@ class Agent:
                 anthropic_key=self.anthropic_key, anthropic_model=self.anthropic_model,
                 fallback_models=list(self.fallback_models),
                 auto_screenshot=self.auto_screenshot,
-                request_timeout_seconds=self.request_timeout_seconds, lean_tools=True,
+                request_timeout_seconds=self.request_timeout_seconds, lean_tools=False,
             )
         except Exception as e:
             return {"ok": False, "error": f"could not create sub-agent: {e}"}

@@ -105,17 +105,27 @@ def mic_available() -> tuple[bool, str]:
     if not got:
         return True, "ok"   # something is already using the mic -> it's available
     try:
-        mic = sr.Microphone()
-        with mic:
-            pass
-        return True, "ok"
-    except Exception as e:
-        msg = str(e).lower()
-        if "pyaudio" in msg:
-            return False, "PyAudio is missing. Run: pip install pyaudio"
+        primary_error = ""
+        try:
+            mic = sr.Microphone()
+            with mic:
+                pass
+            return True, "PyAudio"
+        except Exception as e:
+            primary_error = str(e)
+        # Normal Ember installs now include sounddevice, so PyAudio being absent is not fatal.
+        try:
+            import audio_level
+            ok, detail = audio_level.probe_microphone()
+            if ok:
+                return True, detail
+            fallback_error = detail
+        except Exception as exc:
+            fallback_error = str(exc)
         # The classic macOS symptom: a device exists but mic permission was never granted.
-        return False, ("Could not open the microphone — grant microphone permission to the app "
-                       "(macOS: System Settings → Privacy & Security → Microphone) and try again.")
+        return False, ("Could not open the microphone with either input backend. Grant microphone "
+                       "permission to Ember and check the selected input device. "
+                       f"Details: {primary_error or 'PyAudio unavailable'}; {fallback_error}")
     finally:
         MIC_LOCK.release()
 
@@ -386,6 +396,7 @@ class HoldRecorder:
         self._thread: threading.Thread | None = None
         self._mic = None
         self._source = None
+        self._fallback_stream = None
         self._held_lock = False
         self.error: str | None = None
 
@@ -401,15 +412,21 @@ class HoldRecorder:
             self.error = "microphone is busy"
             return False
         self._held_lock = True
+        primary_error = ""
         try:
             self._mic = sr.Microphone(sample_rate=self._rate)
             self._source = self._mic.__enter__()
         except Exception as e:
-            self._release_lock()
-            hint = ("voice input needs pyaudio: pip install pyaudio"
-                    if "pyaudio" in str(e).lower() else str(e))
-            self.error = f"could not open microphone: {hint}"
-            return False
+            primary_error = str(e)
+            self._mic = self._source = None
+            try:
+                import audio_level
+                self._fallback_stream = audio_level.open_input_stream()
+            except Exception as fallback:
+                self._release_lock()
+                self.error = ("could not open microphone: "
+                              f"{primary_error}; fallback: {fallback}")
+                return False
         self._stop.clear()
         self._frames = []
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -417,6 +434,16 @@ class HoldRecorder:
         return True
 
     def _loop(self):
+        if self._fallback_stream is not None:
+            while not self._stop.is_set():
+                try:
+                    frame = self._fallback_stream.read(1024)
+                    if not frame:
+                        break
+                    self._frames.append(frame)
+                except Exception:
+                    break
+            return
         chunk = getattr(self._source, "CHUNK", 1024) or 1024
         stream = getattr(self._source, "stream", None)
         if stream is None:
@@ -442,6 +469,12 @@ class HoldRecorder:
                 self._mic.__exit__(None, None, None)
         except Exception:
             pass
+        if self._fallback_stream is not None:
+            try:
+                self._fallback_stream.close()
+            except Exception:
+                pass
+            self._fallback_stream = None
         self._release_lock()
         pcm = b"".join(self._frames)
         self._frames = []
@@ -488,8 +521,8 @@ def listen_once(on_transcript: Callable[[str, str | None], None],
         try:
             mic = sr.Microphone()
         except Exception as e:
-            hint = ("voice input needs pyaudio: 'uv pip install pyaudio' "
-                    "(or pip install pyaudio)") if "pyaudio" in str(e).lower() else str(e)
+            hint = ("voice input needs an audio backend: pip install sounddevice "
+                    "(PyAudio is also supported)") if "pyaudio" in str(e).lower() else str(e)
             on_transcript("", f"no microphone: {hint}")
             return
         try:

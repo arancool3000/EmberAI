@@ -33,7 +33,8 @@ from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
                              QTabWidget, QLabel, QTextBrowser, QSplitter, QSizePolicy, QMenu,
                              QInputDialog, QMessageBox, QProgressBar, QGraphicsOpacityEffect,
-                             QLineEdit as _QLE)
+                             QLineEdit as _QLE, QDialog, QListWidget, QListWidgetItem,
+                             QPlainTextEdit)
 
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -343,23 +344,36 @@ _HOME_JS = r"""
 """
 
 BROWSER_QSS = """
-QWidget { background:#0e0f13; color:#e9eaf0; font:14px -apple-system,'Segoe UI',sans-serif; }
-QPushButton { background:#1b1e27; border:1px solid #2a2d39; border-radius:9px; padding:6px 8px;
-              color:#cdd1db; font-weight:600; }
-QPushButton:hover { background:#262a36; border-color:#3a3f4e; }
-QPushButton:pressed { background:#2f3442; }
-QLineEdit { background:#181a22; border:1px solid #2a2d39; border-radius:18px; padding:8px 14px;
-            color:#fff; selection-background-color:#e2562a; }
-QLineEdit:focus { border-color:#e2562a; }
+QWidget { background:#0c0e14; color:#e9edf5; font:13px -apple-system,'Segoe UI',sans-serif; }
+QWidget#browserChrome { background:#11141d; border-bottom:1px solid #252a36; }
+QPushButton { background:#1a1e29; border:1px solid #292f3d; border-radius:9px; padding:6px 8px;
+              color:#cbd3e3; font-weight:650; }
+QPushButton:hover { background:#252a37; border-color:#41495b; color:#ffffff; }
+QPushButton:pressed { background:#303747; }
+QPushButton#toolbarButton { background:transparent; border-color:transparent; padding:5px; }
+QPushButton#toolbarButton:hover { background:#232936; border-color:#303747; }
+QPushButton#aiButton { background:#263a68; border-color:#3f5f9f; color:#edf3ff; }
+QLineEdit { background:#161a24; border:1px solid #29303e; border-radius:12px; padding:8px 12px;
+            color:#fff; selection-background-color:#527fd1; }
+QLineEdit#addressBar { border-radius:17px; padding:8px 15px; background:#191d28; }
+QLineEdit:focus { border-color:#6d9bea; background:#1b202c; }
+QLabel#connectionState { color:#65d6aa; font-size:11px; font-weight:800; }
+QLabel#connectionState[secure="false"] { color:#f0b36a; }
 QTabWidget::pane { border:none; }
-QTabBar::tab { background:#15171e; color:#aeb3c0; padding:7px 14px; border-top-left-radius:9px;
-               border-top-right-radius:9px; margin-right:2px; }
-QTabBar::tab:selected { background:#222533; color:#fff; }
-QTabBar::tab:hover { background:#1d2029; }
-QTextBrowser { background:#15171e; border:1px solid #2a2d39; border-radius:10px; }
-QMenu { background:#181a22; color:#e9eaf0; border:1px solid #2a2d39; }
-QMenu::item:selected { background:#e2562a; }
-QSplitter::handle { background:#2a2d39; width:3px; }
+QTabBar::tab { background:transparent; color:#969fb2; padding:8px 16px; border:none;
+               border-top-left-radius:9px; border-top-right-radius:9px; margin:2px 1px 0 1px; }
+QTabBar::tab:selected { background:#1a1e29; color:#f6f8fc; }
+QTabBar::tab:hover { background:#151923; color:#dbe2ee; }
+QTextBrowser { background:#131722; border:1px solid #29303e; border-radius:12px; }
+QDialog { background:#0c0e14; }
+QListWidget, QPlainTextEdit { background:#111520; border:1px solid #29303e; border-radius:11px; padding:5px; }
+QListWidget::item { padding:10px 8px; border-radius:8px; }
+QListWidget::item:selected { background:#293d66; color:#ffffff; }
+QMenu { background:#171b25; color:#e9edf5; border:1px solid #303747; border-radius:10px; padding:6px; }
+QMenu::item { padding:8px 18px; border-radius:7px; }
+QMenu::item:selected { background:#2b3e66; }
+QMenu::separator { height:1px; background:#2b3140; margin:6px 10px; }
+QSplitter::handle { background:#252b38; width:3px; }
 """
 
 
@@ -384,6 +398,7 @@ if WEBENGINE_OK:
         def __init__(self):
             super().__init__()
             self.blocked = 0
+            self.enabled = True
             self._domains = frozenset(_TRACKERS)
             self._refreshing = False
             self._last_refresh = 0.0
@@ -409,6 +424,8 @@ if WEBENGINE_OK:
 
         def interceptRequest(self, info):
             try:
+                if not self.enabled:
+                    return
                 if time.monotonic() - self._last_refresh > 60:
                     self._refresh_domains()
                 host = (info.requestUrl().host() or "").lower()
@@ -540,6 +557,8 @@ class EmberBrowser(QWidget):
         self._ext_made.connect(self._on_ext_made)
         self._bookmarks = self._load_bookmarks()
         self._history = self._load_history()
+        self._downloads: list[dict] = []
+        self._closed_tabs: list[str] = []
 
         self._profile = QWebEngineProfile(self)
         # Present as a current Chrome so sites don't refuse us with an "unsupported browser /
@@ -565,12 +584,14 @@ class EmberBrowser(QWidget):
         # Wrap the toolbar row in a container so it can be hidden as a unit when a page goes
         # fullscreen (e.g. a fullscreen video), leaving only the web content on screen.
         self._chrome = QWidget()
+        self._chrome.setObjectName("browserChrome")
         bar = QHBoxLayout(self._chrome)
         bar.setContentsMargins(8, 6, 8, 6)
         bar.setSpacing(6)
 
         def _btn(text, tip, fn, w=34):
             b = QPushButton(text)
+            b.setObjectName("toolbarButton")
             b.setToolTip(tip)
             b.setFixedWidth(w)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -598,25 +619,25 @@ class EmberBrowser(QWidget):
         bar.addWidget(_ibtn("forward", "→", "Forward", lambda: self._cur() and self._cur().forward()))
         bar.addWidget(_ibtn("reload", "⟳", "Reload", lambda: self._cur() and self._cur().reload()))
         bar.addWidget(_ibtn("home", "⌂", "Ember Search home", lambda: self._go_home()))
-        self._lock = QLabel("🔒")
+        self._lock = QLabel("●")
+        self._lock.setObjectName("connectionState")
+        self._lock.setToolTip("Connection security")
         bar.addWidget(self._lock)
         self.address = QLineEdit()
+        self.address.setObjectName("addressBar")
         self.address.setPlaceholderText("Search Ember, enter a URL, or ask a question (end with ?)…")
         self.address.setClearButtonEnabled(True)
         self.address.returnPressed.connect(self._navigate_from_bar)
         self.address.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         bar.addWidget(self.address, 1)
+        self._privacy_btn = _ibtn("shield-check", "◆", "Privacy and site data", self._show_privacy_menu)
+        bar.addWidget(self._privacy_btn)
         bar.addWidget(_ibtn("star", "★", "Bookmark this page", self._bookmark_current))
-        bar.addWidget(_ibtn("bookmark", "📑", "Bookmarks", self._show_bookmarks_menu))
-        bar.addWidget(_ibtn("history", "📜", "History", self._show_history_menu))
-        bar.addWidget(_ibtn("book", "📖", "Reader mode", self._reader_mode))
-        bar.addWidget(_ibtn("moon", "🌙", "Dark mode for this site", self._toggle_dark))
-        bar.addWidget(_ibtn("search", "🔎", "Find on page (Ctrl+F)", self._toggle_find))
-        bar.addWidget(_btn("✓AI", "Check if the page text is AI-generated", self._ai_check_page, w=50))
-        bar.addWidget(_ibtn("key", "🔑", "Passwords (save / fill / manage logins)", self._show_password_menu))
-        bar.addWidget(_ibtn("puzzle", "🧩", "Extensions — let Ember's AI build one for you", self._show_extensions_menu))
         bar.addWidget(_ibtn("plus", "+", "New tab", lambda: self._new_tab()))
-        bar.addWidget(_ibtn("sparkle", "✨", "AI panel", self._toggle_ai))
+        ai_btn = _ibtn("sparkle", "AI", "Open the AI page assistant", self._toggle_ai, w=38)
+        ai_btn.setObjectName("aiButton")
+        bar.addWidget(ai_btn)
+        bar.addWidget(_btn("•••", "Browser tools and settings", self._show_more_menu, w=38))
         outer.addWidget(self._chrome)
 
         # Slim page-load progress line (animates as pages load, fades out when done).
@@ -676,13 +697,21 @@ class EmberBrowser(QWidget):
                         ("Ctrl+W", lambda: self._close_tab(self.tabs.currentIndex())),
                         ("Ctrl+L", lambda: (self.address.setFocus(), self.address.selectAll())),
                         ("Ctrl+F", self._toggle_find),
+                        ("Ctrl+J", self._show_downloads),
+                        ("Ctrl+Shift+A", self._show_tab_search),
+                        ("Ctrl+Shift+T", self._restore_last_closed_tab),
                         ("F11", self._toggle_window_fullscreen),
                         ("Escape", self._exit_any_fullscreen),
                         ("Ctrl+=", lambda: self._zoom(0.1)), ("Ctrl++", lambda: self._zoom(0.1)),
                         ("Ctrl+-", lambda: self._zoom(-0.1)), ("Ctrl+0", lambda: self._zoom(0))):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
-        self._new_tab()  # opens the Ember Search start page
+        session = self._load_session()
+        if session:
+            for url in session[:12]:
+                self._new_tab(url=url)
+        else:
+            self._new_tab()  # opens the Ember Search start page
 
     # ---- fullscreen (HTML5 video fullscreen + F11 window fullscreen) ----
     def _on_fullscreen_requested(self, request, _view):
@@ -759,6 +788,84 @@ class EmberBrowser(QWidget):
         elif self.isFullScreen():
             self.showNormal()
 
+    def _show_more_menu(self):
+        """Keep the everyday toolbar calm while preserving every advanced browser feature."""
+        from PyQt6.QtGui import QCursor
+        menu = QMenu(self)
+        bookmarks = menu.addAction("Bookmarks")
+        history = menu.addAction("History")
+        downloads = menu.addAction("Downloads")
+        downloads.setShortcut(QKeySequence("Ctrl+J"))
+        menu.addSeparator()
+        duplicate = menu.addAction("Duplicate current tab")
+        reopen = menu.addAction("Reopen closed tab")
+        reopen.setEnabled(bool(self._closed_tabs))
+        menu.addSeparator()
+        reader = menu.addAction("Reader mode")
+        dark = menu.addAction("Dark mode for this site")
+        find = menu.addAction("Find on page…")
+        find.setShortcut(QKeySequence("Ctrl+F"))
+        menu.addSeparator()
+        ai_check = menu.addAction("Check page for AI-generated text")
+        passwords = menu.addAction("Passwords and autofill")
+        extensions = menu.addAction("Extensions")
+        menu.addSeparator()
+        fullscreen = menu.addAction("Enter fullscreen")
+        fullscreen.setShortcut(QKeySequence("F11"))
+        chosen = menu.exec(QCursor.pos())
+        handlers = {
+            bookmarks: self._show_bookmarks_menu,
+            history: self._show_history_menu,
+            downloads: self._show_downloads,
+            duplicate: self._duplicate_current_tab,
+            reopen: self._restore_last_closed_tab,
+            reader: self._reader_mode,
+            dark: self._toggle_dark,
+            find: self._toggle_find,
+            ai_check: self._ai_check_page,
+            passwords: self._show_password_menu,
+            extensions: self._show_extensions_menu,
+            fullscreen: self._toggle_window_fullscreen,
+        }
+        if chosen in handlers:
+            handlers[chosen]()
+
+    def _show_privacy_menu(self):
+        from PyQt6.QtGui import QCursor
+        menu = QMenu(self)
+        blocked = menu.addAction(f"{self._guard.blocked:,} tracker requests blocked this session")
+        blocked.setEnabled(False)
+        toggle = menu.addAction("Pause tracker blocking" if self._guard.enabled else "Resume tracker blocking")
+        menu.addSeparator()
+        clear_site = menu.addAction("Clear cookies and cache…")
+        clear_history = menu.addAction("Clear browsing history…")
+        chosen = menu.exec(QCursor.pos())
+        if chosen is toggle:
+            self._guard.enabled = not self._guard.enabled
+            self._status.setText("Tracker blocking on" if self._guard.enabled else "Tracker blocking paused")
+        elif chosen is clear_site:
+            self._clear_site_data()
+        elif chosen is clear_history:
+            if QMessageBox.question(
+                    self, "Clear browsing history", "Clear Ember Browser's local browsing history?"
+                    ) == QMessageBox.StandardButton.Yes:
+                self._history.clear()
+                self._save_history()
+                self._status.setText("Browsing history cleared")
+
+    def _clear_site_data(self):
+        if QMessageBox.question(
+                self, "Clear cookies and cache",
+                "Clear cookies and cached website data? You may be signed out of websites."
+                ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._profile.cookieStore().deleteAllCookies()
+            self._profile.clearHttpCache()
+            self._status.setText("Cookies and cache cleared")
+        except Exception as exc:
+            QMessageBox.warning(self, "Clear site data", str(exc))
+
     # ---- tabs ----
     def _new_tab(self, url: str | None = None, *, blank: bool = False):
         view = QWebEngineView()
@@ -814,11 +921,35 @@ class EmberBrowser(QWidget):
         if index < 0:
             return
         w = self.tabs.widget(index)
+        try:
+            url = w.url().toString() if w is not None else ""
+            if url and not url.startswith("data:"):
+                self._closed_tabs.append(url)
+                self._closed_tabs = self._closed_tabs[-20:]
+        except Exception:
+            pass
         self.tabs.removeTab(index)
         if w is not None:
             w.deleteLater()
         if self.tabs.count() == 0:
             self._new_tab()
+
+    def _restore_last_closed_tab(self):
+        if self._closed_tabs:
+            self._new_tab(url=self._closed_tabs.pop())
+
+    def _duplicate_current_tab(self):
+        view = self._cur()
+        if view is not None:
+            self._new_tab(url=view.url().toString())
+
+    def _show_tab_search(self):
+        if not self.tabs.count():
+            return
+        labels = [self.tabs.tabText(i) or "Untitled tab" for i in range(self.tabs.count())]
+        chosen, ok = QInputDialog.getItem(self, "Search tabs", "Switch to:", labels, 0, False)
+        if ok and chosen in labels:
+            self.tabs.setCurrentIndex(labels.index(chosen))
 
     def _cur(self):
         return self.tabs.currentWidget()
@@ -882,8 +1013,11 @@ class EmberBrowser(QWidget):
         self.address.setText(s)
         self.address.setCursorPosition(0)
         secure = qurl.scheme() == "https"
-        self._lock.setText("🔒" if secure else "⚠")
-        self._lock.setToolTip("Secure (HTTPS)" if secure else "Not secure")
+        self._lock.setText("●")
+        self._lock.setProperty("secure", secure)
+        self._lock.setToolTip("Secure connection" if secure else "Connection is not encrypted")
+        self._lock.style().unpolish(self._lock)
+        self._lock.style().polish(self._lock)
 
     def _on_title(self, view, title):
         i = self.tabs.indexOf(view)
@@ -894,6 +1028,11 @@ class EmberBrowser(QWidget):
     def _refresh_status(self):
         self._status.setText(f"🛡 {self._guard.blocked} trackers blocked this session"
                              f"   ·   {len(self._bookmarks)} bookmarks")
+        try:
+            self._privacy_btn.setToolTip(
+                f"Privacy · {self._guard.blocked:,} tracker requests blocked this session")
+        except Exception:
+            pass
 
     def _on_load_progress(self, view, pct: int):
         """Drive the slim top progress line as the CURRENT tab loads (ignore background tabs)."""
@@ -1160,12 +1299,17 @@ class EmberBrowser(QWidget):
             act.setData((index, gcolor))
         ungroup = menu.addAction("Remove from group")
         menu.addSeparator()
+        duplicate_act = menu.addAction("Duplicate tab")
         close_act = menu.addAction("Close tab")
         chosen = menu.exec(tb.mapToGlobal(pos))
         if chosen is None:
             return
         if chosen is close_act:
             self._close_tab(index)
+        elif chosen is duplicate_act:
+            view = self.tabs.widget(index)
+            if view is not None:
+                self._new_tab(url=view.url().toString())
         elif chosen is ungroup:
             tb.setTabTextColor(index, QColor())
         elif chosen.data():
@@ -1652,6 +1796,34 @@ class EmberBrowser(QWidget):
             d.mkdir(parents=True, exist_ok=True)
         return d / "bookmarks.json"
 
+    def _session_path(self) -> Path:
+        return self._data_file().with_name("browser_session.json")
+
+    def _load_session(self) -> list[str]:
+        try:
+            data = json.loads(self._session_path().read_text(encoding="utf-8"))
+            return [str(url) for url in data if isinstance(url, str) and url.startswith(("http://", "https://"))]
+        except Exception:
+            return []
+
+    def _save_session(self):
+        urls = []
+        for index in range(self.tabs.count()):
+            try:
+                url = self.tabs.widget(index).url().toString()
+                if url.startswith(("http://", "https://")) and SEARCH_HOST not in url:
+                    urls.append(url)
+            except Exception:
+                pass
+        try:
+            self._session_path().write_text(json.dumps(urls[-12:], indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        self._save_session()
+        super().closeEvent(event)
+
     def _load_bookmarks(self):
         try:
             return json.loads(self._data_file().read_text())
@@ -1730,15 +1902,95 @@ class EmberBrowser(QWidget):
                 item.setDownloadDirectory(str(dl))
             except Exception:
                 pass
-            item.accept()
             name = item.downloadFileName() if hasattr(item, "downloadFileName") else "file"
+            path = str(dl / name)
+            entry = {"name": name, "path": path, "status": "Downloading", "received": 0,
+                     "total": 0, "item": item}
+            self._downloads.insert(0, entry)
+            self._downloads = self._downloads[:100]
+            item.accept()
             self._status.setText(f"⬇ Downloading {name}…")
             try:
-                item.isFinishedChanged.connect(lambda: self._status.setText(f"✓ Saved {name} to Downloads"))
+                item.receivedBytesChanged.connect(lambda *_, e=entry: self._update_download(e))
+                item.totalBytesChanged.connect(lambda *_, e=entry: self._update_download(e))
+                item.isFinishedChanged.connect(lambda *_, e=entry: self._finish_download(e))
             except Exception:
                 pass
         except Exception as e:
             self._status.setText(f"Download error: {e}")
+
+    def _update_download(self, entry: dict):
+        item = entry.get("item")
+        try:
+            entry["received"] = int(item.receivedBytes())
+            entry["total"] = int(item.totalBytes())
+        except Exception:
+            pass
+
+    def _finish_download(self, entry: dict):
+        item = entry.get("item")
+        try:
+            if not item.isFinished():
+                return
+        except Exception:
+            pass
+        entry["status"] = "Saved"
+        self._update_download(entry)
+        self._status.setText(f"✓ Saved {entry.get('name', 'download')} to Downloads")
+
+    def _show_downloads(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Downloads")
+        dialog.setMinimumSize(660, 440)
+        dialog.setStyleSheet(self._qss())
+        v = QVBoxLayout(dialog)
+        title = QLabel("Downloads")
+        title.setStyleSheet("font-size:18px;font-weight:800;padding:4px 2px;")
+        v.addWidget(title)
+        listing = QListWidget()
+        for entry in self._downloads:
+            total = int(entry.get("total") or 0)
+            received = int(entry.get("received") or 0)
+            detail = entry.get("status", "")
+            if total > 0 and detail == "Downloading":
+                detail += f" · {min(100, round(received * 100 / total))}%"
+            row = QListWidgetItem(f"{entry.get('name', 'Download')}\n{detail} · {entry.get('path', '')}")
+            row.setData(Qt.ItemDataRole.UserRole, entry.get("path", ""))
+            listing.addItem(row)
+        if not self._downloads:
+            listing.addItem("No downloads this session.")
+        v.addWidget(listing, 1)
+        buttons = QHBoxLayout()
+        clear = QPushButton("Clear list")
+        clear.clicked.connect(lambda: (self._downloads.clear(), listing.clear(),
+                                       listing.addItem("No downloads this session.")))
+        buttons.addWidget(clear)
+        buttons.addStretch()
+        show = QPushButton("Show in folder")
+
+        def reveal():
+            selected = listing.currentItem()
+            path = selected.data(Qt.ItemDataRole.UserRole) if selected else ""
+            if not path:
+                return
+            try:
+                import subprocess
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", "-R", path])
+                elif sys.platform.startswith("win"):
+                    subprocess.Popen(["explorer", "/select,", path])
+                else:
+                    subprocess.Popen(["xdg-open", str(Path(path).parent)])
+            except Exception as exc:
+                QMessageBox.warning(dialog, "Downloads", str(exc))
+
+        show.clicked.connect(reveal)
+        buttons.addWidget(show)
+        close = QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(close)
+        v.addLayout(buttons)
+        dialog.exec()
 
     # ---- reader / dark mode ----
     def _reader_mode(self):

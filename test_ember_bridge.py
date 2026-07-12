@@ -38,6 +38,9 @@ def test_tool_to_mcp_shape():
     assert m["description"] == "cap"
     assert m["inputSchema"]["type"] == "object"
     assert m["inputSchema"]["properties"]["grid"]["type"] == "boolean"
+    assert m["title"] == "Take Screenshot"
+    assert set(m["annotations"]) == {"readOnlyHint", "openWorldHint", "destructiveHint"}
+    assert all(isinstance(value, bool) for value in m["annotations"].values())
 
 
 def test_tool_to_mcp_defaults_missing_schema():
@@ -60,6 +63,23 @@ def test_list_tools_exposes_every_declared_tool():
     assert names == ["take_screenshot", "ask_claude", "run_custom_tool"]
 
 
+def test_list_tools_includes_dispatch_only_extensions():
+    tools = eb.list_tools_from(
+        [{"name": "declared", "parameters": {"type": "OBJECT"}}],
+        {"declared": lambda: {}, "plugin_runtime_tool": lambda: {}})
+    names = [tool["name"] for tool in tools]
+    assert names == ["declared", "plugin_runtime_tool"]
+    assert tools[1]["inputSchema"] == {"type": "object", "properties": {}}
+
+
+def test_destructive_annotation_is_conservative():
+    destructive = eb.tool_to_mcp({"name": "delete_quarantined"})["annotations"]
+    readonly = eb.tool_to_mcp({"name": "security_status"})["annotations"]
+    assert destructive == {"readOnlyHint": False, "openWorldHint": True,
+                           "destructiveHint": True}
+    assert readonly["readOnlyHint"] is True and readonly["destructiveHint"] is False
+
+
 # ---- safety-gated execution ------------------------------------------------
 
 def test_execute_unknown_tool():
@@ -72,6 +92,18 @@ def test_agent_loop_tools_return_sensible_results():
     assert eb.execute_tool("pause_for_human", {}, {})["ok"] is True
     # spawn_agent / agent_run honestly report they run inside Ember, not over MCP.
     assert eb.execute_tool("spawn_agent", {}, {})["ok"] is False
+
+
+def test_live_host_agent_enables_agent_loop_tools():
+    class Host:
+        def _handle_spawn_agent(self, args):
+            return {"ok": True, "task": args.get("task")}
+    eb.set_host_agent(Host())
+    try:
+        result = eb.execute_tool("spawn_agent", {"task": "inspect"}, {})
+        assert result == {"ok": True, "task": "inspect"}
+    finally:
+        eb.set_host_agent(None)
 
 
 def test_run_custom_tool_over_bridge():
@@ -180,6 +212,9 @@ def test_bridge_http_roundtrip():
         assert code == 401
         code, body = _get(base + "/mcp/tools", token=token)
         assert code == 200 and [t["name"] for t in body["tools"]] == ["ping_tool"]
+        assert body["count"] == 1 and body["all_features_free"] is True
+        code, body = _get(base + "/mcp/tools?refresh=1", token=token)
+        assert code == 200 and body["count"] == 1
 
         # call requires auth + returns wrapped result
         code, _ = _post(base + "/mcp/call", {"name": "ping_tool", "args": {"n": 7}})
@@ -256,6 +291,50 @@ def test_bridge_client_call_against_live_server():
         assert res["pong"] == 3
     finally:
         eb.stop()
+
+
+def test_bridge_client_recovers_after_token_rotation():
+    _patch_registries()
+    started = eb.start(port=8793)
+    try:
+        # The protected info file contains the current secret. A stale long-running MCP process
+        # gets one 401, refreshes from that file, and transparently retries.
+        client = ems.BridgeClient(started["url"], "stale-token")
+        assert [tool["name"] for tool in client.list_tools()] == ["ping_tool"]
+        assert client.token == started["token"]
+    finally:
+        eb.stop()
+
+
+def test_dynamic_handler_preserves_required_schema_arguments():
+    class Client:
+        def call_tool(self, name, args): return {"ok": True, "name": name, "args": args}
+    tool = {
+        "name": "write_file",
+        "description": "write",
+        "inputSchema": {"type": "object", "properties": {
+            "path": {"type": "string"}, "text": {"type": "string"},
+            "overwrite": {"type": "boolean", "default": False}},
+            "required": ["path", "text"]},
+    }
+    handler = ems._make_handler(Client(), tool)
+    signature = __import__("inspect").signature(handler)
+    assert list(signature.parameters) == ["path", "text", "overwrite"]
+    assert signature.parameters["path"].default is __import__("inspect").Parameter.empty
+    assert signature.parameters["overwrite"].default is False
+    assert str(signature.return_annotation) == "dict[str, typing.Any]"
+    assert handler(path="/tmp/a", text="x")["args"]["text"] == "x"
+
+
+def test_bridge_diagnostics_requires_chatgpt_annotations():
+    class Client:
+        url = "http://127.0.0.1:1"
+        def list_tools(self):
+            return [{"name": "x", "inputSchema": {"type": "object"},
+                     "annotations": {"readOnlyHint": True, "openWorldHint": False,
+                                     "destructiveHint": False}}]
+    result = ems.bridge_diagnostics(Client())
+    assert result["ok"] and result["tools"] == 1 and result["all_features_free"]
 
 
 if __name__ == "__main__":

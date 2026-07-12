@@ -1,4 +1,4 @@
-"""One-click MCP setup — wire Ember into an MCP client (Claude Desktop / Cursor) with no manual
+"""One-click MCP setup — wire Ember into ChatGPT or another MCP client with no manual
 Python-path hunting or JSON editing.
 
 Ember knows the exact Python it's running on (sys.executable), so it can:
@@ -15,7 +15,14 @@ import os
 import shutil
 import subprocess
 import sys
+import atexit
+import time
 from pathlib import Path
+
+
+_CHATGPT_PROCESS = None
+_CHATGPT_PORT = 8781
+_MCP_DEPENDENCY = "mcp>=1.27,<2"
 
 
 def _server_script() -> str:
@@ -62,14 +69,23 @@ def ensure_mcp_installed() -> tuple[bool, str]:
         return True, "mcp SDK is bundled in the Ember app"
     py = sys.executable
     try:
-        r = subprocess.run([py, "-c", "import mcp"], capture_output=True, text=True, timeout=20)
+        # Importability alone is insufficient: older SDKs don't support the HTTP transport and
+        # metadata ChatGPT needs. Check the installed distribution version without importing it.
+        version_check = (
+            "from importlib.metadata import version; "
+            "p=version('mcp').split('+',1)[0].split('-',1)[0].split('.'); "
+            "v=tuple(int(''.join(c for c in x if c.isdigit()) or 0) for x in p[:3]); "
+            "raise SystemExit(0 if (1,27,0) <= v < (2,0,0) else 1)"
+        )
+        r = subprocess.run([py, "-c", version_check], capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
-            return True, "mcp SDK already installed"
+            return True, "compatible mcp SDK already installed"
     except Exception:
         pass
     # Install it. --user/--break-system-packages covers the common macOS "externally managed" case.
-    for args in (["-m", "pip", "install", "mcp"],
-                 ["-m", "pip", "install", "--user", "--break-system-packages", "mcp"]):
+    for args in (["-m", "pip", "install", "--upgrade", _MCP_DEPENDENCY],
+                 ["-m", "pip", "install", "--user", "--break-system-packages", "--upgrade",
+                  _MCP_DEPENDENCY]):
         try:
             r = subprocess.run([py] + args, capture_output=True, text=True, timeout=600)
             if r.returncode == 0:
@@ -77,7 +93,7 @@ def ensure_mcp_installed() -> tuple[bool, str]:
         except Exception:
             continue
     return False, ("Could not install the mcp SDK automatically. Run this yourself:\n"
-                   f"  {py} -m pip install mcp")
+                   f"  {py} -m pip install --upgrade '{_MCP_DEPENDENCY}'")
 
 
 def configure_claude_desktop() -> tuple[bool, str]:
@@ -136,33 +152,131 @@ def setup_claude_desktop(install: bool = True) -> dict:
     }
 
 
+def _stop_chatgpt_process() -> None:
+    global _CHATGPT_PROCESS
+    process = _CHATGPT_PROCESS
+    _CHATGPT_PROCESS = None
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=3)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+
+atexit.register(_stop_chatgpt_process)
+
+
+def chatgpt_mcp_status() -> dict:
+    running = bool(_CHATGPT_PROCESS is not None and _CHATGPT_PROCESS.poll() is None)
+    return {"ok": True, "running": running, "host": "127.0.0.1", "port": _CHATGPT_PORT,
+            "url": f"http://127.0.0.1:{_CHATGPT_PORT}/mcp" if running else None,
+            "all_tools": True, "all_features_free": True}
+
+
+def start_chatgpt_mcp(port: int = 8781, install: bool = True) -> dict:
+    """Start a loopback Streamable-HTTP MCP endpoint for ChatGPT's Secure MCP Tunnel."""
+    global _CHATGPT_PROCESS, _CHATGPT_PORT
+    if _CHATGPT_PROCESS is not None and _CHATGPT_PROCESS.poll() is None:
+        return {"ok": True, "already_running": True, **chatgpt_mcp_status()}
+    try:
+        port = int(port)
+        if port < 1024 or port > 65535:
+            return {"ok": False, "error": "port must be between 1024 and 65535"}
+    except Exception:
+        return {"ok": False, "error": "port must be an integer"}
+    if install:
+        ok, note = ensure_mcp_installed()
+        if not ok:
+            return {"ok": False, "error": note}
+    try:
+        import ember_bridge
+        if not ember_bridge.status().get("running"):
+            started = ember_bridge.start()
+            if not started.get("ok"):
+                return {"ok": False, "error": started.get("error", "could not start bridge")}
+    except Exception as exc:
+        return {"ok": False, "error": f"could not start Ember's local bridge: {exc}"}
+
+    command, base_args = _client_command_and_args()
+    args = [*base_args, "--transport", "streamable-http", "--host", "127.0.0.1",
+            "--port", str(port)]
+    kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+              "stderr": subprocess.DEVNULL, "close_fds": True}
+    if sys.platform.startswith("win"):
+        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        process = subprocess.Popen([command, *args], **kwargs)
+        time.sleep(0.45)
+        if process.poll() is not None:
+            return {"ok": False, "error": (
+                "The ChatGPT MCP endpoint exited during startup. The port may be in use or the "
+                "MCP SDK may need upgrading. Run ember_mcp_server.py --doctor for details.")}
+        _CHATGPT_PROCESS = process
+        _CHATGPT_PORT = port
+        return {"ok": True, "started": True, **chatgpt_mcp_status(),
+                "connection": (
+                    "In ChatGPT developer mode, create an app using Secure MCP Tunnel and point "
+                    f"it at http://127.0.0.1:{port}/mcp. Refresh metadata after Ember updates.")}
+    except Exception as exc:
+        return {"ok": False, "error": f"could not start ChatGPT MCP endpoint: {exc}"}
+
+
+def stop_chatgpt_mcp() -> dict:
+    was_running = bool(_CHATGPT_PROCESS is not None and _CHATGPT_PROCESS.poll() is None)
+    _stop_chatgpt_process()
+    return {"ok": True, "stopped": was_running}
+
+
 # --- tool surface (merged into the agent + callable from the UI button) ----------------
 
-def _tool_setup_mcp_client(client: str = "claude") -> dict:
-    """Set up an external MCP client to control Ember. Currently supports Claude Desktop."""
-    c = (client or "claude").strip().lower()
+def _tool_setup_mcp_client(client: str = "chatgpt") -> dict:
+    """Set up an external MCP client to control Ember."""
+    c = (client or "chatgpt").strip().lower()
+    if c in ("chatgpt", "openai", "chatgpt-app"):
+        return start_chatgpt_mcp()
     if c in ("claude", "claude_desktop", "claude-desktop", "desktop"):
         return setup_claude_desktop()
-    return {"ok": False, "error": f"unknown MCP client '{client}'. Supported: claude"}
+    return {"ok": False, "error": f"unknown MCP client '{client}'. Supported: chatgpt, claude"}
 
 
 TOOL_DECLARATIONS = [
     {
         "name": "setup_mcp_client",
-        "description": ("One-click: wire an external MCP client (Claude Desktop) to control Ember "
+        "description": ("One-click: expose every free Ember tool to ChatGPT or Claude Desktop "
                         "— installs the mcp SDK into Ember's Python and writes the client's config "
                         "with the correct paths. No manual setup needed. Remember to turn on the "
                         "MCP bridge (start_mcp_bridge) too."),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "client": {"type": "STRING", "description": "which client (default 'claude')"},
+                "client": {"type": "STRING", "description": "chatgpt (default) or claude"},
             },
             "required": [],
         },
     },
+    {"name": "start_chatgpt_mcp",
+     "description": "Start Ember's free loopback Streamable-HTTP MCP endpoint for ChatGPT.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "port": {"type": "INTEGER", "description": "local port, default 8781"},
+         "install": {"type": "BOOLEAN", "description": "install/verify MCP SDK first"}},
+         "required": []}},
+    {"name": "stop_chatgpt_mcp",
+     "description": "Stop Ember's ChatGPT Streamable-HTTP MCP endpoint.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "chatgpt_mcp_status",
+     "description": "Report the local ChatGPT MCP endpoint and confirm all tools are free.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
 ]
 
 TOOL_DISPATCH = {
     "setup_mcp_client": _tool_setup_mcp_client,
+    "start_chatgpt_mcp": start_chatgpt_mcp,
+    "stop_chatgpt_mcp": stop_chatgpt_mcp,
+    "chatgpt_mcp_status": chatgpt_mcp_status,
 }

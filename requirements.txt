@@ -18,14 +18,13 @@ websocket-client>=1.7.0
 send2trash>=1.8.0
 anthropic>=0.40.0
 openai>=1.40.0           # ChatGPT + any OpenAI-compatible provider (Grok/DeepSeek/Groq/…) as a primary model
-mcp>=1.2.0               # Model Context Protocol server (ember_mcp_server.py) — control Ember from Claude Desktop/Cursor
+mcp>=1.27,<2              # Stable MCP v1: stdio + Streamable HTTP + tool impact annotations
 SpeechRecognition>=3.10.0
+sounddevice>=0.5.1       # microphone input fallback; bundles/locates PortAudio on macOS + Windows
 pyttsx3>=2.99
 edge-tts>=6.1.0          # free, natural neural text-to-speech (no API key). Pure-Python.
-# NOTE: voice/microphone INPUT (pyaudio) is OPTIONAL and lives in
-# requirements-voice.txt. On macOS/Linux it has no prebuilt wheel and must compile
-# against the portaudio C library, so it's kept OUT of the default install to avoid
-# a hard failure. Everything else, including voice OUTPUT, works without it.
+# PyAudio remains an optional alternate input backend in requirements-voice.txt. Ember uses
+# sounddevice out of the box when PyAudio is absent, so the composer mic works after normal setup.
 pynput>=1.7.0
 PyPDF2>=3.0.0
 openpyxl>=3.1.0
