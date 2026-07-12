@@ -8,6 +8,17 @@ import types
 import audio_level
 import voice
 
+# extra_tools.record_audio uses Ember's portable mic backend and needs no network, but the
+# extra_tools MODULE does `import requests` at load for its HTTP tools. The minimal CI env
+# (only rapidfuzz installed) has no requests, so stub it — requests is used only inside other
+# functions, never at import time — letting these record_audio tests run everywhere.
+if "requests" not in sys.modules:
+    try:
+        import requests  # noqa: F401
+    except Exception:
+        sys.modules["requests"] = types.ModuleType("requests")
+import extra_tools
+
 
 class _BrokenMicrophone:
     def __init__(self, *args, **kwargs):
@@ -75,8 +86,6 @@ def test_hold_recorder_records_with_fallback_backend():
 
 
 def test_record_audio_uses_portable_backend():
-    import extra_tools
-
     class Stream:
         def __init__(self):
             self.reads = 0
@@ -104,7 +113,6 @@ def test_record_audio_uses_portable_backend():
 
 
 def test_record_audio_reports_missing_backend_honestly():
-    import extra_tools
     original_open = audio_level.open_input_stream
 
     def _no_backend():
