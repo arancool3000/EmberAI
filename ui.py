@@ -1880,7 +1880,8 @@ class SettingsDialog(QDialog):
         self.live_voice_check.setToolTip(
             "Streams a live conversation instead of record→transcribe→speak: it hears HOW you "
             "talk, replies in a natural neural voice, supports barge-in, and isn't capped by the "
-            "per-message rate limit. Needs a Gemini key + pyaudio.")
+            "per-message rate limit. Needs a Gemini key + a mic backend (sounddevice, installed "
+            "by default; PyAudio also works).")
         layout.addRow(self.live_voice_check)
 
         self.live_voice_voice_input = _voice_picker(
@@ -6827,7 +6828,8 @@ class EmberWindow(QWidget):
                     self._start_live_voice()
                     return
                 self._add_bubble("system",
-                    "Natural voice needs the google-genai SDK + pyaudio installed — "
+                    "Natural voice needs the google-genai SDK plus a microphone backend "
+                    "(sounddevice, installed by default; PyAudio also works) — "
                     "falling back to standard voice chat.")
             except Exception:
                 pass

@@ -136,6 +136,104 @@ def test_capture_unavailable_is_graceful():
     _reset()
 
 
+# --- sounddevice fallback (wake word without PyAudio) --------------------------
+
+import sys
+import types as _types
+import audio_level
+
+
+class _FakeRecognizer:
+    def __init__(self):
+        self.dynamic_energy_threshold = False
+
+
+class _FakeAudioData:
+    def __init__(self, raw, rate, width):
+        self.raw, self.rate, self.width = raw, rate, width
+
+
+class _NoPyAudioMic:
+    def __init__(self, *a, **k):
+        raise AttributeError("Could not find PyAudio; check installation")
+
+
+def _fake_sr():
+    return _types.SimpleNamespace(
+        Microphone=_NoPyAudioMic, Recognizer=_FakeRecognizer, AudioData=_FakeAudioData,
+        WaitTimeoutError=type("WaitTimeoutError", (Exception,), {}))
+
+
+class _ScriptedStream:
+    """A raw PCM stream with scripted frames (silence for calibration, then loud speech, then a
+    silence tail so the VAD ends the phrase)."""
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.closed = False
+
+    def read(self, _n):
+        return self._frames.pop(0) if self._frames else b""
+
+    def close(self):
+        self.closed = True
+
+
+def test_real_capture_factory_falls_back_to_sounddevice_when_pyaudio_missing():
+    _reset()
+    prev_sr = sys.modules.get("speech_recognition")
+    orig_open = audio_level.open_input_stream
+    sys.modules["speech_recognition"] = _fake_sr()
+    audio_level.open_input_stream = lambda: _ScriptedStream([b"\x00\x00" * 1024])
+    try:
+        cap = ww._real_capture_factory()
+        assert isinstance(cap, ww._SoundDeviceCapture), type(cap)
+        assert ww.last_error() == "", ww.last_error()
+    finally:
+        audio_level.open_input_stream = orig_open
+        if prev_sr is None:
+            sys.modules.pop("speech_recognition", None)
+        else:
+            sys.modules["speech_recognition"] = prev_sr
+        _reset()
+
+
+def test_sounddevice_capture_recognizes_a_phrase():
+    _reset()
+    orig_open = audio_level.open_input_stream
+    orig_recognize = ww._recognize
+    silence = b"\x00\x00" * 1024          # rms 0  -> low noise floor
+    loud = b"\x00\x40" * 1024             # 0x4000 = 16384 -> well above threshold
+    # 4 silence frames feed calibration; then speech; then a silence tail ends the phrase.
+    frames = [silence] * 4 + [loud] * 2 + [silence] * 12
+    audio_level.open_input_stream = lambda: _ScriptedStream(frames)
+    ww._recognize = lambda rec, audio: "hey ember"
+    try:
+        cap = ww._SoundDeviceCapture(_fake_sr())
+        heard = cap()
+        assert heard == "hey ember", heard
+        assert ww.detect_wake(heard)
+    finally:
+        audio_level.open_input_stream = orig_open
+        ww._recognize = orig_recognize
+        _reset()
+
+
+def test_sounddevice_capture_returns_empty_on_pure_silence():
+    _reset()
+    orig_open = audio_level.open_input_stream
+    orig_recognize = ww._recognize
+    silence = b"\x00\x00" * 1024
+    audio_level.open_input_stream = lambda: _ScriptedStream([silence] * 80)
+    ww._recognize = lambda rec, audio: "should not be called"
+    try:
+        cap = ww._SoundDeviceCapture(_fake_sr())
+        assert cap() == ""    # nothing crossed the threshold -> no audio, no recognition
+    finally:
+        audio_level.open_input_stream = orig_open
+        ww._recognize = orig_recognize
+        _reset()
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())

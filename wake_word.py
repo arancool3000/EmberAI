@@ -170,18 +170,133 @@ class _MicCapture:
             return ""
 
 
+class _SoundDeviceCapture:
+    """Wake-word capture WITHOUT PyAudio. Reads raw frames from the portable input stream
+    (audio_level.open_input_stream → sounddevice when PyAudio is absent), runs light energy VAD to
+    grab one short utterance, then hands the PCM to speech_recognition via AudioData. This lets
+    'Hey Ember' work on a normal Ember install (sounddevice only) with no manual PyAudio build.
+
+    Mirrors _MicCapture's contract: keeps ONE stream open across listens (steady mic indicator),
+    releases it on pause() via release(), and shares voice.MIC_LOCK so it never fights a voice
+    turn for the device."""
+
+    def __init__(self, sr):
+        import audio_level
+        self._sr = sr
+        self._al = audio_level
+        self._rec = sr.Recognizer()
+        self._stream = None
+        self._threshold = None
+        try:
+            from voice import MIC_LOCK
+        except Exception:
+            MIC_LOCK = threading.RLock()
+        self._lock = MIC_LOCK
+        # Open once, now, so a missing-backend / denied-permission failure surfaces synchronously
+        # in _real_capture_factory instead of dying quietly on the daemon thread.
+        self._ensure_open()
+
+    def _ensure_open(self):
+        if self._stream is None:
+            self._stream = self._al.open_input_stream()
+            self._threshold = None   # recalibrate the noise floor on the fresh stream
+
+    def release(self):
+        if self._stream is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+    def _calibrate(self):
+        """Estimate a noise floor from a few frames so a loud room isn't read as constant speech.
+        Median (not max) so one blip doesn't inflate it; a floor keeps quiet mics usable."""
+        vals = []
+        for _ in range(4):
+            try:
+                fr = self._stream.read(self._al.CHUNK)
+            except Exception:
+                break
+            if fr:
+                vals.append(self._al.rms_of_frame(fr))
+        vals.sort()
+        floor = vals[len(vals) // 2] if vals else 0.0
+        self._threshold = max(floor * 1.8, 200.0)
+
+    def _read_phrase(self) -> bytes:
+        """Read one short utterance: wait (briefly) for speech to start, then collect until a
+        short silence tail or the phrase cap. Returns raw PCM (b'' if nothing was heard)."""
+        al = self._al
+        chunk = al.CHUNK
+        frame_secs = chunk / float(al.RATE)
+        wait_frames = max(1, int(_LISTEN_TIMEOUT / frame_secs))
+        phrase_frames = max(1, int(_PHRASE_LIMIT / frame_secs))
+        silence_tail = 0.5
+        if self._threshold is None:
+            self._calibrate()
+        threshold = self._threshold or 200.0
+        collected: list[bytes] = []
+        started = False
+        waited = 0
+        silence = 0.0
+        while True:
+            try:
+                fr = self._stream.read(chunk)
+            except Exception:
+                break
+            if not fr:
+                break
+            rms = al.rms_of_frame(fr)
+            if not started:
+                waited += 1
+                if rms >= threshold:
+                    started = True
+                    collected.append(fr)
+                elif waited >= wait_frames:
+                    break   # gave up waiting for speech to begin this chunk
+            else:
+                collected.append(fr)
+                silence = 0.0 if rms >= threshold else silence + frame_secs
+                if silence >= silence_tail or len(collected) >= phrase_frames:
+                    break
+        return b"".join(collected)
+
+    def __call__(self) -> str:
+        try:
+            with self._lock:
+                if _paused:
+                    self.release()
+                    return ""
+                self._ensure_open()
+                raw = self._read_phrase()
+            if not raw:
+                return ""
+            audio = self._sr.AudioData(raw, self._al.RATE, self._al.WIDTH)
+            return _recognize(self._rec, audio)
+        except Exception:
+            self.release()
+            time.sleep(0.3)
+            return ""
+
+
 def _real_capture_factory():
     """Persistent-stream mic capture. Returns None if the speech stack is unavailable (so the
     loop degrades to a no-op, not a crash). On failure it records a human-readable reason in the
     module `_last_error` so start()/the UI can tell the user WHAT to fix — the difference between
-    'Hey Ember silently does nothing' and 'install pyaudio' / 'grant mic permission'."""
+    'Hey Ember silently does nothing' and 'install a mic backend' / 'grant mic permission'.
+
+    Backend order: PyAudio-backed sr.Microphone first (steady OS mic indicator), then the
+    portable sounddevice capture so wake word works out of the box without a PyAudio build."""
     global _last_error
     try:
         import speech_recognition as sr
     except Exception:
         _last_error = ("Voice input isn’t installed yet. Install it with: "
-                       "pip install SpeechRecognition pyaudio")
+                       "pip install SpeechRecognition sounddevice")
         return None
+    # 1) Preferred: PyAudio-backed persistent stream.
+    pa_error = ""
     try:
         cap = _MicCapture(sr)
         # Open the stream once, now, so a missing-pyaudio / denied-permission / no-device
@@ -190,15 +305,24 @@ def _real_capture_factory():
         _last_error = ""
         return cap
     except Exception as e:
-        msg = str(e).lower()
-        if "pyaudio" in msg:
-            _last_error = ("Microphone support (PyAudio) isn’t installed. Install it with: "
-                           "pip install pyaudio  (macOS: brew install portaudio first)")
-        elif "permission" in msg or "denied" in msg or "-50" in msg:
+        pa_error = str(e)
+    # 2) Fallback: portable sounddevice capture (no PyAudio needed).
+    try:
+        cap = _SoundDeviceCapture(sr)
+        _last_error = ""
+        return cap
+    except Exception as e:
+        combined = f"{pa_error}; {e}".lower()
+        if "permission" in combined or "denied" in combined or "-50" in combined:
             _last_error = ("Ember doesn’t have Microphone permission. Grant it in System "
                            "Settings ▸ Privacy & Security ▸ Microphone, then reopen Ember.")
-        elif "no default input" in msg or "no device" in msg or "invalid" in msg:
+        elif ("no default input" in combined or "no device" in combined
+              or "no microphone" in combined or "invalid" in combined):
             _last_error = "No microphone was found. Plug one in (or check your input device) and retry."
+        elif "pyaudio" in combined or "sounddevice" in combined or "portaudio" in combined:
+            _last_error = ("Microphone support isn’t installed. Install it with: "
+                           "pip install sounddevice  (PyAudio also works; on macOS run "
+                           "brew install portaudio first for PyAudio).")
         else:
             _last_error = f"Microphone couldn’t start: {e}"
         return None
