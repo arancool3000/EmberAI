@@ -1466,6 +1466,12 @@ def list_quarantine() -> dict:
         try:
             if not e.get("id"):
                 continue
+            # Only surface entries whose contained payload actually exists in the vault. A
+            # recorded stored_path that's missing on disk means a stale / legacy / orphaned index
+            # record — never render it as a phantom "quarantined virus" the user never scanned.
+            stored = e.get("stored_path")
+            if stored and not Path(stored).exists():
+                continue
             qa = e.get("quarantined_at")
             items.append({
                 "id": e["id"],

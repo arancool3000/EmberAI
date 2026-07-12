@@ -43,7 +43,11 @@ def _creds() -> tuple[str, str, str]:
         st = {}
     host = (st.get("gmail_imap_host") or DEFAULT_IMAP_HOST).strip()
     user = (st.get("gmail_address") or st.get("email_smtp_user") or "").strip()
-    pw = (st.get("gmail_app_password") or st.get("email_smtp_password") or "")
+    # Google shows App Passwords as "abcd efgh ijkl mnop" (four space-separated groups). Users
+    # paste them exactly as shown, but the actual secret is the 16 characters with NO spaces —
+    # IMAP/SMTP login fails on the spaced form. Strip ALL whitespace so a correctly-copied app
+    # password authenticates ("I did everything right" but it still failed = the spaces).
+    pw = "".join((st.get("gmail_app_password") or st.get("email_smtp_password") or "").split())
     return host, user, pw
 
 
@@ -61,7 +65,14 @@ def _connect():
         raise RuntimeError("Gmail isn't set up. Add your Gmail address + a Google App Password "
                            "in Settings (the same fields used to send email).")
     conn = imaplib.IMAP4_SSL(host, timeout=30)
-    conn.login(user, pw)
+    try:
+        conn.login(user, pw)
+    except imaplib.IMAP4.error as e:
+        raise RuntimeError(
+            "Gmail rejected the login. Use a Google App Password "
+            "(myaccount.google.com/apppasswords) — not your normal password — with 2-Step "
+            "Verification on, and make sure IMAP is enabled in Gmail ▸ Settings ▸ "
+            f"Forwarding and POP/IMAP. ({e})")
     return conn
 
 

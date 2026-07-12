@@ -45,13 +45,14 @@ def test_main_workspace_is_one_conversation_not_competing_tabs():
     assert "self._tools_open = False" in window
 
 
-def test_conversation_has_document_replies_and_right_aligned_user_bubbles():
+def test_conversation_has_chat_bubbles_and_right_aligned_user_bubbles():
     window = _class_source(UI, "EmberWindow")
     assert 'kind == "user"' in window
     assert "Qt.AlignmentFlag.AlignRight" in window
     assert "Qt.AlignmentFlag.AlignHCenter" in window
     assert "frame_w = min(860, available)" in window
-    assert "QFrame#bubble {\n    background: transparent" in STYLES
+    # Assistant replies sit in a subtle chat bubble (proper bubbles, not transparent document text).
+    assert "QFrame#bubble {\n    background-color: rgba(255,255,255,0.045)" in STYLES
     assert "QFrame#bubbleUser" in STYLES
     assert "QFrame#emptyState" in STYLES
 

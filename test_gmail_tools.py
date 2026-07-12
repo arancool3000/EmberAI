@@ -158,6 +158,26 @@ def test_not_configured_is_graceful():
         gt._creds = orig
 
 
+def test_creds_strips_spaces_from_pasted_app_password():
+    # Google shows App Passwords as "abcd efgh ijkl mnop"; users paste them verbatim but login
+    # needs the 16 chars with no spaces. _creds must strip them ("I did everything right" bug).
+    import sys
+    import types as _t
+    fake_ui = _t.SimpleNamespace(load_settings=lambda: {
+        "gmail_address": "me@gmail.com", "gmail_app_password": "abcd efgh ijkl mnop"})
+    prev = sys.modules.get("ui")
+    sys.modules["ui"] = fake_ui
+    try:
+        host, user, pw = gt._creds()
+    finally:
+        if prev is None:
+            sys.modules.pop("ui", None)
+        else:
+            sys.modules["ui"] = prev
+    assert user == "me@gmail.com"
+    assert pw == "abcdefghijklmnop", pw   # spaces stripped
+
+
 def test_exports_consistent():
     assert set(gt.TOOL_DISPATCH) == {d["name"] for d in gt.TOOL_DECLARATIONS}
     assert gt.READONLY_TOOLS <= set(gt.TOOL_DISPATCH)

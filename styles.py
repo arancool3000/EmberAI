@@ -1158,19 +1158,20 @@ QFrame#commandPanel {
     border-radius: 14px;
 }
 QFrame#bubble {
-    background: transparent;
-    border: none;
-    border-radius: 0;
+    background-color: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
     padding: 0;
     margin: 5px 0 11px 0;
 }
 QFrame#bubbleUser {
-    background-color: rgba(255,255,255,0.105);
-    border: 1px solid rgba(255,255,255,0.075);
+    background-color: rgba(122,162,247,0.18);
+    border: 1px solid rgba(122,162,247,0.30);
     border-radius: 18px;
     padding: 0;
     margin: 5px 0 11px 0;
 }
+QFrame#bubbleUser QLabel#bubbleBody { color: #eef2fb; }
 QFrame#bubbleUser QLabel { color: #f3f5f9; }
 QFrame#bubbleSystem {
     background-color: rgba(255,255,255,0.025);
@@ -1219,16 +1220,31 @@ QPushButton#promptCard {
     color: #cbd2df;
     border: 1px solid rgba(255,255,255,0.075);
     border-radius: 13px;
-    padding: 11px 14px;
+    padding: 14px 16px;
     min-width: 164px;
+    min-height: 24px;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 650;
 }
 QPushButton#promptCard:hover {
     background-color: rgba(255,255,255,0.065);
     color: #ffffff;
     border-color: rgba(122,162,247,0.34);
+}
+QPushButton#mcpBtn {
+    background-color: rgba(255,255,255,0.05);
+    color: #e7ebf3;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 11px;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 750;
+}
+QPushButton#mcpBtn:hover {
+    background-color: rgba(255,255,255,0.09);
+    border-color: rgba(122,162,247,0.5);
+    color: #ffffff;
 }
 QFrame#composer {
     background-color: #171a24;

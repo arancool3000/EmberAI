@@ -99,6 +99,24 @@ def test_quarantine_list_and_restore_roundtrip():
     assert r["ok"] and dest.exists(), r
 
 
+def test_list_quarantine_skips_entries_whose_payload_is_gone():
+    # Hardening: a stale/orphaned index record (contained file no longer on disk) must never be
+    # surfaced as a phantom "quarantined virus" the user never scanned.
+    import stat as _stat
+    p = _write("phantom.bin", b"MZ\x00\x00evidence")
+    q = antivirus.quarantine_file(str(p))
+    assert q["ok"], q
+    assert any(i["id"] == q["id"] for i in antivirus.list_quarantine()["items"])
+    # Simulate the payload vanishing while the index still references it.
+    try:
+        os.chmod(q["stored_path"], _stat.S_IRUSR | _stat.S_IWUSR)
+    except Exception:
+        pass
+    os.remove(q["stored_path"])
+    ids = [i["id"] for i in antivirus.list_quarantine()["items"]]
+    assert q["id"] not in ids, "phantom entry (missing payload) must not be listed"
+
+
 def test_quarantine_ids_do_not_collide_for_identical_files():
     a = _write("same-a.bin", b"identical evidence")
     b = _write("same-b.bin", b"identical evidence")
