@@ -181,6 +181,72 @@ def probe_microphone() -> tuple[bool, str]:
                 pass
 
 
+def measure_level(seconds: float = 1.5) -> dict:
+    """Record a short clip and report HOW LOUD the microphone is — a 0-100 level, RMS, peak, and
+    dBFS — with NO ffmpeg needed. Honest: returns ok=False with a reason when there's no mic
+    backend or permission, so it never claims to measure audio it couldn't actually capture."""
+    seconds = max(0.3, min(10.0, float(seconds or 1.5)))
+    factory = _STREAM_FACTORY or open_input_stream
+    try:
+        stream = factory()
+    except Exception as e:
+        msg = str(e).lower()
+        if "permission" in msg or "denied" in msg or "-50" in msg:
+            return {"ok": False, "error": "microphone permission denied — grant Ember mic access, then retry."}
+        if ("no microphone backend" in msg or "pyaudio" in msg or "sounddevice" in msg
+                or "portaudio" in msg):
+            return {"ok": False, "error": "no microphone backend is installed "
+                                          "(pip install sounddevice). Details: " + str(e)}
+        return {"ok": False, "error": f"could not open the microphone: {e}"}
+    frame_secs = CHUNK / float(RATE)
+    n = max(1, int(seconds / frame_secs))
+    peak = total = 0.0
+    frames = 0
+    try:
+        try:
+            stream.read(CHUNK)        # discard the first frame (startup pop)
+        except Exception:
+            pass
+        for _ in range(n):
+            try:
+                fr = stream.read(CHUNK)
+            except Exception:
+                break
+            if not fr:
+                break
+            r = rms_of_frame(fr)
+            peak = max(peak, r)
+            total += r
+            frames += 1
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+    if frames == 0:
+        return {"ok": False, "error": "the microphone returned no audio frames."}
+    avg = total / frames
+
+    def _dbfs(x: float) -> float:
+        return round(20.0 * math.log10(max(x, 1.0) / 32768.0), 1)
+
+    if peak < 30:
+        verdict = ("silent — the mic captured almost nothing; check that mic permission is granted "
+                   "and the right input device is selected")
+    elif avg < 120:
+        verdict = "very quiet — try speaking louder or moving closer"
+    elif avg < 1200:
+        verdict = "good — a normal speaking level"
+    else:
+        verdict = "loud"
+    return {"ok": True, "seconds": round(frames * frame_secs, 2),
+            "level_0_100": round(normalize_level(avg) * 100),
+            "peak_0_100": round(normalize_level(peak) * 100),
+            "rms": round(avg, 1), "peak_rms": round(peak, 1),
+            "dbfs": _dbfs(avg), "peak_dbfs": _dbfs(peak),
+            "verdict": verdict}
+
+
 def available() -> bool:
     """True if the metered-capture path can run (an input backend + speech recognition),
     or if test hooks are installed."""

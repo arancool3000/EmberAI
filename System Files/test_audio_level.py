@@ -218,6 +218,79 @@ def test_recognizer_unknown_value_is_friendly():
     assert "understand" in err.lower()
 
 
+# ---- measure_level: one-shot "how loud is the mic" probe (no ffmpeg) --------
+class _ConstStream:
+    """Returns one constant frame forever (until closed) — for the loudness probe."""
+
+    def __init__(self, frame):
+        self._frame = frame
+        self.closed = False
+
+    def read(self, n):
+        return self._frame
+
+    def close(self):
+        self.closed = True
+
+
+def _measure(factory, seconds=0.3):
+    audio_level._STREAM_FACTORY = factory
+    try:
+        return audio_level.measure_level(seconds=seconds)
+    finally:
+        audio_level._STREAM_FACTORY = None
+
+
+def test_measure_level_loud_signal_reports_full_scale():
+    st = _ConstStream(_frame(6000))
+    r = _measure(lambda: st)
+    assert r["ok"] is True, r
+    assert r["level_0_100"] == 100 and r["peak_0_100"] == 100
+    assert r["verdict"] == "loud"
+    assert r["rms"] > 1200 and r["dbfs"] < 0
+    assert st.closed is True, "the probe must close the stream it opened"
+
+
+def test_measure_level_normal_speech_reads_good():
+    r = _measure(lambda: _ConstStream(_frame(500)))
+    assert r["ok"] is True and r["verdict"].startswith("good"), r
+    assert 0 < r["level_0_100"] < 100
+
+
+def test_measure_level_silent_mic_is_flagged():
+    r = _measure(lambda: _ConstStream(_frame(0)))
+    assert r["ok"] is True and r["verdict"].startswith("silent"), r
+    assert r["level_0_100"] == 0 and r["peak_0_100"] == 0
+
+
+def test_measure_level_permission_denied_is_honest():
+    def _factory():
+        raise OSError("Microphone permission was denied by the OS")
+
+    r = _measure(_factory)
+    assert r["ok"] is False and "permission" in r["error"].lower(), r
+
+
+def test_measure_level_no_backend_recommends_sounddevice():
+    def _factory():
+        raise RuntimeError("no microphone backend is installed")
+
+    r = _measure(_factory)
+    assert r["ok"] is False and "sounddevice" in r["error"].lower(), r
+
+
+def test_measure_level_no_frames_does_not_fake_a_reading():
+    class _Dead:
+        def read(self, n):
+            return b""      # never delivers audio
+
+        def close(self):
+            pass
+
+    r = _measure(lambda: _Dead())
+    assert r["ok"] is False and "no audio" in r["error"].lower(), r
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

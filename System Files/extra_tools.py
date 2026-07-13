@@ -462,6 +462,16 @@ def say_text(text: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def measure_mic_level(seconds: float = 1.5) -> dict:
+    """How loud is the microphone right now? Records a short clip and reports a 0-100 level, RMS,
+    peak, and dBFS — no ffmpeg needed. Honest about a missing device / permission."""
+    try:
+        import audio_level
+        return audio_level.measure_level(seconds)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def record_audio(seconds: float = 5.0, path: str | None = None) -> dict:
     """Record mic input to a WAV file, using Ember's portable microphone backend
     (sounddevice by default; PyAudio if it's installed)."""

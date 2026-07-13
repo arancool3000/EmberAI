@@ -178,6 +178,81 @@ def test_creds_strips_spaces_from_pasted_app_password():
     assert pw == "abcdefghijklmnop", pw   # spaces stripped
 
 
+def _fake_imap(behavior):
+    import imaplib
+
+    class F:
+        def __init__(self, host, timeout=None):
+            pass
+
+        def login(self, u, p):
+            if behavior == "auth":
+                raise imaplib.IMAP4.error("[AUTHENTICATIONFAILED] Invalid credentials")
+            if behavior == "imap_off":
+                raise imaplib.IMAP4.error("Please log in via your web browser")
+            return ("OK", [])
+
+        def select(self, mbox, readonly=False):
+            return ("OK", [b"1"]) if behavior != "select_fail" else ("NO", [b""])
+
+        def logout(self):
+            return ("BYE", [])
+    return F
+
+
+def _run_diag(creds, behavior):
+    import imaplib
+    orig_creds, orig_ssl = gt._creds, imaplib.IMAP4_SSL
+    gt._creds = lambda: creds
+    imaplib.IMAP4_SSL = _fake_imap(behavior)
+    try:
+        return gt.gmail_diagnose()
+    finally:
+        gt._creds = orig_creds
+        imaplib.IMAP4_SSL = orig_ssl
+
+
+def test_gmail_diagnose_not_configured():
+    orig = gt._creds
+    gt._creds = lambda: ("imap.gmail.com", "", "")
+    try:
+        r = gt.gmail_diagnose()
+        assert r["ok"] is False and r["configured"] is False and "address" in r["problem"].lower()
+    finally:
+        gt._creds = orig
+
+
+def test_gmail_diagnose_missing_password():
+    orig = gt._creds
+    gt._creds = lambda: ("imap.gmail.com", "me@gmail.com", "")
+    try:
+        r = gt.gmail_diagnose()
+        assert r["ok"] is False and "app password" in r["problem"].lower()
+    finally:
+        gt._creds = orig
+
+
+def test_gmail_diagnose_auth_failure_flags_a_non_app_password():
+    r = _run_diag(("imap.gmail.com", "me@gmail.com", "mypassword"), "auth")  # 10 chars, not an app pw
+    assert r["ok"] is False and "rejected" in r["problem"].lower()
+    assert r["notes"] and "App Password" in r["notes"][0]
+
+
+def test_gmail_diagnose_detects_imap_disabled():
+    r = _run_diag(("imap.gmail.com", "me@gmail.com", "abcdefghijklmnop"), "imap_off")
+    assert r["ok"] is False and "imap" in r["problem"].lower() and "Enable IMAP" in r["fix"]
+
+
+def test_gmail_diagnose_success_when_login_and_inbox_work():
+    r = _run_diag(("imap.gmail.com", "me@gmail.com", "abcdefghijklmnop"), "ok")
+    assert r["ok"] is True and r["configured"] is True and r["address"] == "me@gmail.com"
+
+
+def test_gmail_diagnose_select_failure_points_at_imap():
+    r = _run_diag(("imap.gmail.com", "me@gmail.com", "abcdefghijklmnop"), "select_fail")
+    assert r["ok"] is False and "IMAP" in r["fix"]
+
+
 def test_exports_consistent():
     assert set(gt.TOOL_DISPATCH) == {d["name"] for d in gt.TOOL_DECLARATIONS}
     assert gt.READONLY_TOOLS <= set(gt.TOOL_DISPATCH)
