@@ -105,6 +105,13 @@ SLASH_COMMANDS = {
     "/storage": "__storage__",
     "/network": "__network_inspector__",
     "/clipboard": "__clipboard__",
+    # Network security is a "quick task": expand to a natural-language instruction so the agent
+    # runs the read-only Wi-Fi + remote-access checks and reports the graded result with fixes.
+    "/netsec": ("Run a full network-security check: call network_security_report and tell me, in "
+                "plain language, how secure my Wi-Fi and my remote-access exposure are, with the "
+                "specific fix for anything risky."),
+    "/wifisecurity": ("Check how secure my current Wi-Fi is: call wifi_security and explain the "
+                      "result and any fix in plain language."),
 }
 
 HELP_TEXT = """Tip: click the ✨ Features button (top of the window) for a searchable list of
@@ -285,6 +292,8 @@ FEATURE_CATALOG = [
         ("📦", "Sandbox a file", "Run a risky file in an isolated sandbox.", ("open", "__sandbox__")),
         ("🔒", "Real-time protection", "Always-on download, fileless & Security-Center scanning. Settings ▸ Security.", ("settings", "Security")),
         ("🌍", "VPN", "Connect/disconnect your WireGuard VPN.", ("open", "__vpn__")),
+        ("📶", "Wi-Fi security check", "Grade your current Wi-Fi's encryption (Open / WEP / WPA / WPA2 / WPA3) and flag weak or open networks.", ("open", "/wifisecurity")),
+        ("🛰️", "Remote-access security", "Find remote-control services (Remote Desktop, SSH, VNC, Screen Sharing, SMB) exposed to the network, and check the firewall.", ("open", "__network_inspector__")),
         ("🔐", "Password manager", "Saved website logins, encrypted on your machine.", ("open", "__passwords__")),
         ("🗝️", "Encrypted key vault", "Store your API keys encrypted instead of in plaintext. Settings ▸ Models.", ("settings", "Models")),
     ]),
@@ -4986,13 +4995,19 @@ class NetworkInspectorDialog(QDialog):
         v.setContentsMargins(14, 14, 14, 12)
         v.setSpacing(9)
         v.addWidget(_dialog_header(
-            "Network Inspector", "Review local network activity without changing system settings.",
+            "Network Inspector",
+            "Check Wi-Fi encryption and remote-access exposure, and review local network "
+            "activity — read-only, nothing is changed.",
             eyebrow="NETWORK", mark="⌁"))
 
         actions = QHBoxLayout()
-        for label, key in (("Wi-Fi", "wifi"), ("Active connections", "connections"),
+        for label, key in (("Wi-Fi", "wifi"), ("🔒 Wi-Fi security", "wifi_security"),
+                           ("🔒 Remote access", "remote_access"),
+                           ("Active connections", "connections"),
                            ("Listening ports", "ports"), ("Nearby devices", "devices")):
             button = QPushButton(label)
+            if key in ("wifi_security", "remote_access"):
+                button.setObjectName("primaryBtn")   # the security checks are the headline actions
             button.clicked.connect(lambda _=False, k=key: self._load(k))
             actions.addWidget(button)
         actions.addStretch()
@@ -5030,6 +5045,10 @@ class NetworkInspectorDialog(QDialog):
                 if key == "ports":
                     import utilities
                     result = utilities.list_open_ports()
+                elif key in ("wifi_security", "remote_access"):
+                    import netsecurity
+                    result = (netsecurity.wifi_security if key == "wifi_security"
+                              else netsecurity.remote_access_audit)()
                 else:
                     import nettools
                     result = {"wifi": nettools.wifi_info,
@@ -5045,6 +5064,24 @@ class NetworkInspectorDialog(QDialog):
         self.progress.setVisible(False)
         if not result.get("ok"):
             self.status.setText(str(result.get("error", "Could not read network information.")))
+            return
+        if key in ("wifi_security", "remote_access"):
+            icon = {"critical": "🔴", "warning": "🟡", "ok": "🟢"}
+            title = "Wi-Fi security" if key == "wifi_security" else "Remote-access security"
+            self.results.addItem(f"{title}:  {result.get('rating', '—')}  ·  "
+                                 f"score {result.get('score', '—')}/100")
+            if result.get("ssid"):
+                self.results.addItem(f"Network: {result['ssid']}  ·  {result.get('security', '')}")
+            fw = result.get("firewall") or {}
+            if fw.get("detail"):
+                self.results.addItem(f"Firewall: {fw['detail']}")
+            for f in result.get("findings", []):
+                self.results.addItem(f"{icon.get(f.get('level'), '•')}  {f.get('title', '')}")
+                if f.get("detail"):
+                    self.results.addItem(f"        {f['detail']}")
+                if f.get("fix"):
+                    self.results.addItem(f"        ▸ Fix: {f['fix']}")
+            self.status.setText((result.get("summary", "") or "Done.")[:200])
             return
         rows = []
         if key == "wifi":
