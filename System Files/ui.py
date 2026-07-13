@@ -460,6 +460,7 @@ def load_settings() -> dict:
         "request_timeout_seconds": 15,
         "animations_enabled": True,
         "motion_level": "dynamic",  # dynamic | smooth | reduced | off
+        "show_thinking": True,      # show Ember's reasoning ("Thinking…") as a collapsible section
         "glow_enabled": True,
         "font_size": 12,
         "accent_color": "#7aa2f7",
@@ -1741,6 +1742,13 @@ class SettingsDialog(QDialog):
         self.autocorrect_check = QCheckBox("Autocorrect ordinary chat prompts before sending")
         self.autocorrect_check.setChecked(bool(self.settings.get("autocorrect_chat", True)))
         layout.addRow(self.autocorrect_check)
+
+        self.show_thinking_check = QCheckBox("Show Ember's thinking (collapsible reasoning)")
+        self.show_thinking_check.setChecked(bool(self.settings.get("show_thinking", True)))
+        self.show_thinking_check.setToolTip(
+            "When the model reasons before answering, show a collapsible “Thinking” note so you "
+            "can see how it got there. Turn off to hide it.")
+        layout.addRow(self.show_thinking_check)
 
         self.glow_check = QCheckBox("Blue glow around the window")
         self.glow_check.setChecked(bool(self.settings.get("glow_enabled", True)))
@@ -3540,6 +3548,7 @@ class SettingsDialog(QDialog):
             self.settings["animations_enabled"] = self.animations_check.isChecked()
             self.settings["motion_level"] = self.motion_combo.currentData() or "dynamic"
             self.settings["autocorrect_chat"] = self.autocorrect_check.isChecked()
+            self.settings["show_thinking"] = self.show_thinking_check.isChecked()
             self.settings["glow_enabled"] = self.glow_check.isChecked()
             self.settings["font_size"] = int(self.font_size_slider.value())
             self.settings["accent_color"] = self.accent_combo.currentData() or "#7aa2f7"
@@ -8676,6 +8685,55 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             QTimer.singleShot(0, lambda f=frame: self._animate_bubble_in(f))
         return frame
 
+    def _add_thinking(self, text: str) -> None:
+        """Show the model's reasoning as a collapsible, visually-quiet 'Thinking' note.
+        Skipped entirely when the show_thinking setting is off, so it never competes with the
+        actual reply."""
+        text = (text or "").strip()
+        if not text or not self.settings.get("show_thinking", True):
+            return
+        self._hide_typing_indicator()
+        frame = QFrame()
+        frame.setObjectName("bubbleThinking")
+        frame.setProperty("messageKind", "thinking")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        try:
+            frame_w, _ = self._chat_widths()
+            if frame_w > 0:
+                frame.setMaximumWidth(frame_w)
+        except Exception:
+            pass
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(12, 8, 12, 8)
+        v.setSpacing(5)
+        toggle = QPushButton("▸  Thinking")
+        toggle.setObjectName("thinkingToggle")
+        toggle.setCheckable(True)
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        body = QLabel(text)
+        body.setObjectName("thinkingBody")
+        body.setWordWrap(True)
+        body.setTextFormat(Qt.TextFormat.PlainText)
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.setVisible(False)
+
+        def _toggle(checked, _t=toggle, _b=body):
+            _b.setVisible(checked)
+            _t.setText("▾  Thinking" if checked else "▸  Thinking")
+            QTimer.singleShot(0, self._clamp_bubble_widths)
+
+        toggle.toggled.connect(_toggle)
+        v.addWidget(toggle)
+        v.addWidget(body)
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, frame, 0,
+                                      Qt.AlignmentFlag.AlignLeft)
+        try:
+            self._fade_in(frame, 160)
+        except Exception:
+            pass
+        QTimer.singleShot(0, self._clamp_bubble_widths)
+        QTimer.singleShot(35, self._scroll_to_bottom_smooth)
+
     def _animate_bubble_in(self, frame):
         """Snappy grow-in (0 -> natural height) with an easing curve, then release the
         height cap. Layout-safe: no QGraphicsEffect (those regressed bubble width/word-wrap),
@@ -11039,6 +11097,10 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                     self._speak_reply(self._streaming_buffer or "")
                 self._streaming_bubble_label = None
                 self._streaming_buffer = ""
+                return
+            if ev.kind == "thinking":
+                # The model's reasoning summary — show it as a collapsible "Thinking" note.
+                self._add_thinking(ev.payload or "")
                 return
             if ev.kind == "message":
                 # First real content - kill the thinking indicator

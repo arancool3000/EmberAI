@@ -116,7 +116,7 @@ SAFE_READONLY = {
     "pdf_extract_text", "excel_read", "csv_read", "json_query",
     "calculator", "generate_password", "generate_uuid",
     "hash_text", "hash_file", "base64_encode", "base64_decode",
-    "url_encode", "url_decode", "now",
+    "url_encode", "url_decode", "now", "api_health_status", "list_ember_installs",
     "get_battery", "get_volume", "env_get", "env_list",
     "color_at", "clipboard_get", "clipboard_history_get", "clipboard_history_snapshot",
     "git_status", "git_log", "git_diff",
@@ -321,6 +321,12 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
         if action in ("restart", "shutdown"):
             return "high", f"power: {action} (closes everything)"
         return "high", "unknown power action"
+
+    if tool_name in ("uninstall_ember", "uninstall_ember_instance"):
+        confirmed = args.get("confirm") is True or str(a.get("confirm", "")).lower() == "true"
+        if not confirmed:
+            return "low", "uninstall preview (dry run — nothing is removed)"
+        return "high", "UNINSTALLS Ember and deletes files"
 
     if tool_name in FILE_OPS_MEDIUM:
         if str(args.get("dry_run", "")).lower() == "true" or args.get("dry_run") is True:
