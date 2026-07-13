@@ -97,6 +97,11 @@ SLASH_COMMANDS = {
     "/macros": "__macros__",
     "/localai": "__local_ai__",
     "/ollama": "__local_ai__",
+    # Octopus Mode is a "quick task", not a dialog: expand to a natural-language instruction so the
+    # agent calls the octopus_discuss tool (bare "/octopus" with no question -> octopus_status).
+    "/octopus": ("Octopus Mode: use the octopus_discuss tool to answer the following with every "
+                 "connected AI, then show me its tentacle-structured result (the 'formatted' field). "
+                 "If nothing follows this, call octopus_status instead."),
     "/storage": "__storage__",
     "/network": "__network_inspector__",
     "/clipboard": "__clipboard__",
@@ -118,6 +123,7 @@ Autonomy
   /autopilot  take over a computer task end-to-end
   /apps       operate the current desktop app
   /research   browse, compare sources, and report back
+  /octopus    all your connected AIs discuss, then synthesize one answer
   /create     create a local file or asset
   /automate   build a background rule
   /schedule   create/list/cancel timed tasks
@@ -256,6 +262,7 @@ FEATURE_CATALOG = [
         ("🧩", "AI extension maker", "In Ember Browser, describe what you want and AI writes a userscript that runs on matching pages (🧩 button).", ("open", "__browser_app__")),
         ("🕸️", "Automate a website", "Open a page and fill forms / click / scrape via the DevTools browser.", ("open", "/web")),
         ("🔎", "Research a topic", "Browse multiple sources, compare, and report back.", ("open", "/research")),
+        ("🐙", "Octopus Mode", "Every AI you've connected (Gemini, Claude, ChatGPT, local Ollama) drafts, discusses, then one synthesizes a single answer — structured like octopus tentacles.", ("type", "octopus mode: ")),
         ("📸", "Screenshot the screen", "Capture the screen so Ember can see and act on it.", ("open", "/shot")),
     ]),
     ("Files & documents", [
