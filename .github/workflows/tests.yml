@@ -14,6 +14,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The source now lives in "System Files/"; run all steps from there.
+    defaults:
+      run:
+        working-directory: "System Files"
     steps:
       - uses: actions/checkout@v4
 
@@ -117,6 +121,9 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: "System Files"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

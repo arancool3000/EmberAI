@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-set "ROOT=%~dp0.."
+set "ROOT=%~dp0..\System Files"
 set "GUIDE=%~dp0Installation Guide.html"
 
 if /I not "%~1"=="--skip-guide" (

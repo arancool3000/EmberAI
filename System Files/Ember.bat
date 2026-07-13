@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\pythonw.exe" (
-  call "%~dp0Windows Install\Install Ember.bat" --skip-guide
+  call "%~dp0..\Windows Install\Install Ember.bat" --skip-guide
   exit /b %errorlevel%
 )
 

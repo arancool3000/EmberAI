@@ -30,6 +30,9 @@ permissions:
 jobs:
   build-macos:
     runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: "System Files"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,10 +54,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Ember-macOS
-          path: Ember-macOS.zip
+          path: System Files/Ember-macOS.zip
 
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: "System Files"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,10 +81,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Ember-Windows
-          path: Ember-Windows.zip
+          path: System Files/Ember-Windows.zip
 
   build-linux:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "System Files"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -144,7 +153,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Ember-Linux
-          path: Ember-Linux.AppImage
+          path: System Files/Ember-Linux.AppImage
 
   release:
     needs: [build-macos, build-windows, build-linux]
