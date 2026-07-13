@@ -22,7 +22,8 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 ### 🤖 The agent
 - **Autonomous agent** — 290+ tools: move the mouse/keyboard, read the screen with Vision OCR,
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
-  **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths).
+  **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths),
+  plus Ember's own click-through on-screen pointer so its actions are visibly distinct.
 - **Run modes & agents** — pick how Ember works: **auto** (autonomous), **plan** (proposes a
   plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
   run mode + tool scope + optional schedule), run them on demand or **on a schedule**; Ember can

@@ -32,7 +32,10 @@ _OPTS = {
     "curve": 1.0,       # how much the path bows (0 = straight)
     "jitter": 1.0,      # scale of along-the-way micro deviations
     "overshoot": True,  # slight overshoot + settle on longer moves
+    "show_pointer": True,  # show Ember's distinct click-through pointer overlay
 }
+
+_POINTER_HOOK = None
 
 
 def set_options(**kw) -> dict:
@@ -44,6 +47,26 @@ def set_options(**kw) -> dict:
 
 def get_options() -> dict:
     return dict(_OPTS)
+
+
+def set_pointer_hook(callback) -> None:
+    """Register ``callback(x, y, action)`` for Ember's visual pointer.
+
+    The driver is intentionally UI-agnostic.  The Qt app supplies a thread-safe signal
+    callback; tests and headless runs can leave this unset.
+    """
+    global _POINTER_HOOK
+    _POINTER_HOOK = callback if callable(callback) else None
+
+
+def _notify_pointer(x, y, action="move") -> None:
+    if not _OPTS.get("show_pointer", True) or _POINTER_HOOK is None:
+        return
+    try:
+        _POINTER_HOOK(int(x), int(y), str(action))
+    except Exception:
+        # A cosmetic overlay must never be allowed to interrupt an automation action.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +195,7 @@ def move(x, y, duration: float | None = None) -> bool:
         # travel time. duration=0 when speed is very high so it snaps instantly.
         if duration is None:
             duration = max(0.0, 0.2 / max(0.1, _OPTS.get("speed", 1.0)))
+        _notify_pointer(x, y)
         pg.moveTo(x, y, duration=duration)
         return False
     try:
@@ -181,6 +205,7 @@ def move(x, y, duration: float | None = None) -> bool:
         start, screen = (x, y), None
     dist = math.hypot(x - start[0], y - start[1])
     if dist < 2:
+        _notify_pointer(x, y)
         try:
             pg.moveTo(x, y, duration=0, _pause=False)
         except TypeError:
@@ -193,6 +218,7 @@ def move(x, y, duration: float | None = None) -> bool:
     try:
         pg.PAUSE = 0.0   # our own cadence; don't let the global 50ms pause stutter it
         for i, (px, py) in enumerate(path):
+            _notify_pointer(px, py)
             try:
                 pg.moveTo(px, py, duration=0, _pause=False)
             except TypeError:
@@ -202,6 +228,7 @@ def move(x, y, duration: float | None = None) -> bool:
             time.sleep(per * (0.6 + 0.8 * math.sin(math.pi * t)))
         # Land EXACTLY on target — never leave the pointer a rounded/jittered pixel off.
         _snap(pg, x, y)
+        _notify_pointer(x, y)
     finally:
         pg.PAUSE = saved_pause
     return True
@@ -224,6 +251,7 @@ def click(x, y, button: str = "left", double: bool = False,
     if move_first:
         move(x, y)
     _snap(pg, x, y)                              # guarantee exact position before pressing
+    _notify_pointer(x, y, "double-click" if double else "click")
     time.sleep(random.uniform(0.03, 0.09))      # tiny human pause before the press
     # Press with EXPLICIT coordinates so the click lands on the exact target regardless
     # of any humanized-travel rounding — accuracy first, realism second.
@@ -254,6 +282,7 @@ def drag(from_x, from_y, to_x, to_y, button: str = "left",
             pg.mouseDown(button=button, _pause=False)
         except TypeError:
             pg.mouseDown(button=button)
+        _notify_pointer(from_x, from_y, "down")
         time.sleep(random.uniform(0.03, 0.08))
         # hold the button and trace a human path to the destination
         move(to_x, to_y, duration=duration)
@@ -263,6 +292,7 @@ def drag(from_x, from_y, to_x, to_y, button: str = "left",
             pg.mouseUp(button=button, _pause=False)
         except TypeError:
             pg.mouseUp(button=button)
+        _notify_pointer(to_x, to_y, "up")
     finally:
         pg.PAUSE = saved_pause
     return True

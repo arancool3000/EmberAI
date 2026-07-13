@@ -457,6 +457,7 @@ def load_settings() -> dict:
         "hotkey_daemon": False,       # always-on login helper so the hotkey works even when quit
         "mouse_humanize": True,       # curved/eased human-like pointer movement
         "mouse_speed": 1.0,           # pointer movement speed multiplier (0.25x–3.0x)
+        "show_ember_pointer": True,   # branded click-through pointer while Ember acts
         "request_timeout_seconds": 15,
         "animations_enabled": True,
         "motion_level": "dynamic",  # dynamic | smooth | reduced | off
@@ -2714,6 +2715,14 @@ class SettingsDialog(QDialog):
         _section("Pointer")
         try:
             import human_mouse
+            self._ember_pointer_chk = QCheckBox("Show Ember's own pointer while it acts")
+            self._ember_pointer_chk.setChecked(bool(
+                self.settings.get("show_ember_pointer", True)))
+            self._ember_pointer_chk.stateChanged.connect(self._on_ember_pointer_toggled)
+            self._ember_pointer_chk.setToolTip(
+                "A click-through Ember pointer makes the agent's actions easy to distinguish")
+            v.addWidget(self._ember_pointer_chk)
+
             self._human_mouse_chk = QCheckBox("Human-like mouse movement (curved, eased, natural)")
             self._human_mouse_chk.setChecked(bool(human_mouse.get_options().get("enabled", True)))
             self._human_mouse_chk.stateChanged.connect(self._on_mouse_humanize_toggled)
@@ -3033,6 +3042,22 @@ class SettingsDialog(QDialog):
             pass
         try:
             save_settings(self.settings)   # this tab applies live + sticks immediately
+        except Exception:
+            pass
+
+    def _on_ember_pointer_toggled(self, state):
+        on = bool(state)
+        self.settings["show_ember_pointer"] = on
+        try:
+            import human_mouse
+            human_mouse.set_options(show_pointer=on)
+        except Exception:
+            pass
+        try:
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "_set_ember_pointer_enabled"):
+                parent._set_ember_pointer_enabled(on)
+            save_settings(self.settings)
         except Exception:
             pass
 
@@ -6364,6 +6389,8 @@ class EmberWindow(QWidget):
         self._orb_conversation = False   # True during a hands-free "Hey Ember" conversation
         self._title_jobs: set[str] = set()
         self._build_ui()
+        self._ember_pointer = None
+        self._install_ember_pointer()
         self._restore_position()
         # A successful replacement keeps its .old backup until this new build reaches the UI.
         # Confirm the result here, then clean up; failed swaps are reported after rollback.
@@ -7648,6 +7675,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.main_mouse_toggle.setToolTip("Curved, eased pointer paths that move like a careful person")
         self.main_mouse_toggle.toggled.connect(self._on_main_mouse_toggled)
         pointer_layout.addWidget(self.main_mouse_toggle)
+        self.main_ember_pointer_toggle = QCheckBox("Show Ember pointer")
+        self.main_ember_pointer_toggle.setObjectName("pointerToggle")
+        self.main_ember_pointer_toggle.setChecked(bool(
+            self.settings.get("show_ember_pointer", True)))
+        self.main_ember_pointer_toggle.setToolTip(
+            "Show a separate, click-through Ember marker while the agent moves and clicks")
+        self.main_ember_pointer_toggle.toggled.connect(self._on_main_ember_pointer_toggled)
+        pointer_layout.addWidget(self.main_ember_pointer_toggle)
         pointer_speed_row = QHBoxLayout()
         pointer_speed_row.setContentsMargins(0, 0, 0, 0)
         self.main_mouse_speed = QSlider(Qt.Orientation.Horizontal)
@@ -8182,6 +8217,12 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._apply_mouse_options()
         save_settings(self.settings)
         self._set_status("Human pointer motion on" if enabled else "Direct pointer motion on")
+
+    def _on_main_ember_pointer_toggled(self, enabled: bool):
+        self.settings["show_ember_pointer"] = bool(enabled)
+        self._apply_mouse_options()
+        save_settings(self.settings)
+        self._set_status("Ember pointer on" if enabled else "Ember pointer hidden")
 
     def _on_main_mouse_speed_changed(self, value: int):
         speed = max(0.25, min(3.0, value / 100.0))
@@ -9978,14 +10019,35 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self._add_bubble("system", "Offline Mode off — internet tools are available again.")
 
     def _apply_mouse_options(self):
-        """Push the saved pointer speed + humanize flag into human_mouse on launch."""
+        """Push the saved pointer appearance, speed, and motion options on launch."""
         try:
             import human_mouse
             human_mouse.set_options(
                 enabled=bool(self.settings.get("mouse_humanize", True)),
-                speed=max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0)))))
+                speed=max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0)))),
+                show_pointer=bool(self.settings.get("show_ember_pointer", True)))
+            self._set_ember_pointer_enabled(bool(
+                self.settings.get("show_ember_pointer", True)))
         except Exception:
             pass
+
+    def _install_ember_pointer(self):
+        """Attach the GUI overlay to the input driver without coupling either module."""
+        try:
+            import human_mouse
+            from ember_pointer import EmberPointerOverlay
+            self._ember_pointer = EmberPointerOverlay()
+            self._ember_pointer.set_enabled(bool(
+                self.settings.get("show_ember_pointer", True)))
+            human_mouse.set_pointer_hook(self._ember_pointer.request)
+        except Exception as e:
+            self._ember_pointer = None
+            print(f"[Ember pointer unavailable: {e}]")
+
+    def _set_ember_pointer_enabled(self, enabled: bool):
+        pointer = getattr(self, "_ember_pointer", None)
+        if pointer is not None:
+            pointer.set_enabled(bool(enabled))
 
     def _apply_tts_config(self):
         """Push the read-aloud engine settings to the voice module."""
@@ -10799,6 +10861,10 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 self.main_mouse_speed.setValue(int(round(speed * 100)))
                 self.main_mouse_speed.blockSignals(False)
                 self.main_mouse_speed_value.setText(f"{speed:.2f}×")
+                self.main_ember_pointer_toggle.blockSignals(True)
+                self.main_ember_pointer_toggle.setChecked(bool(
+                    self.settings.get("show_ember_pointer", True)))
+                self.main_ember_pointer_toggle.blockSignals(False)
             try:
                 import agents as _ag
                 run_mode = _ag.get_run_mode()
