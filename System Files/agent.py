@@ -48,6 +48,7 @@ import gmail_tools
 import bulk_tools
 import security_suite
 import octopus
+import netsecurity
 # --- roadmap backlog feature modules ---
 import usage as usage_tracker           # imported aliased: _send_streaming has a local var named `usage`
 import api_health
@@ -2217,7 +2218,7 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
               self_extend, song_id, app_builder,
               network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge,
-              mcp_setup, octopus):
+              mcp_setup, octopus, netsecurity):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
@@ -2230,6 +2231,8 @@ safety.SAFE_READONLY |= set(getattr(song_id, "READONLY_TOOLS", set()))
 safety.SAFE_READONLY |= set(getattr(app_builder, "READONLY_TOOLS", set()))
 # Octopus Mode only sends the question to the user's OWN configured providers and reads text back.
 safety.SAFE_READONLY |= set(getattr(octopus, "READONLY_TOOLS", set()))
+# Network-security checks only read the OS's own Wi-Fi/port/firewall state and grade it.
+safety.SAFE_READONLY |= set(getattr(netsecurity, "READONLY_TOOLS", set()))
 
 # Tell custom_tools the full live tool registry so create_custom_tool can reject a recipe
 # step that names a tool Ember doesn't actually have. (run_custom_tool is host-executed, so
