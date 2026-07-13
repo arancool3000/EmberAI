@@ -6349,13 +6349,11 @@ class EmberWindow(QWidget):
         self._ns_ptt_up_local = None
         self._ptt_status = "off"
         self._pending_update: dict | None = None
-        # macOS never auto-prompts for Accessibility — explicitly request it shortly after launch.
+        # macOS never auto-prompts for Accessibility, and Screen Recording / Microphone / Input
+        # Monitoring only "sometimes" auto-prompt on unsigned builds — so on first launch Ember
+        # explicitly primes EVERY permission it needs, in one pass, with a single clear guide.
         if not _SAFE_MODE:
-            QTimer.singleShot(900, self._check_accessibility)
-            # Screen Recording / Microphone are "supposed" to auto-prompt on first use, but that
-            # quietly fails to fire for a lot of unsigned/ad-hoc-signed builds — ask explicitly
-            # too, staggered after Accessibility so macOS doesn't stack multiple system prompts.
-            QTimer.singleShot(1500, self._check_screen_and_mic_permissions)
+            QTimer.singleShot(900, self._prime_permissions)
         self._listening = False
         self._voice_chat_enabled = False
         self._voice_waiting_for_reply = False
@@ -6571,7 +6569,7 @@ class EmberWindow(QWidget):
         errors = []
 
         # macOS needs Accessibility for any global key monitoring. Don't even try until it's
-        # granted (it's re-called by _check_accessibility after the user grants it).
+        # granted (the first-run _prime_permissions primer requests it; re-run once granted).
         if sys.platform == "darwin":
             try:
                 import mac_permissions
@@ -10860,50 +10858,59 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 pass
         self._open_settings()
 
-    def _check_accessibility(self):
-        """Trigger the macOS Accessibility prompt if Ember isn't trusted yet (needed to move the
-        mouse / type). macOS doesn't ask for this automatically the way it does Screen Recording."""
+    def _prime_permissions(self):
+        """First-run macOS permission primer: request EVERY permission Ember needs — Accessibility,
+        Screen Recording, Microphone and Input Monitoring — up front in one pass, then show a single
+        clear guide listing exactly what's still missing and why. macOS never auto-prompts for
+        Accessibility, and the others only "sometimes" prompt on unsigned/ad-hoc-signed builds (the
+        request quietly never fires and capture calls just return black frames / silence), so Ember
+        asks for all four explicitly instead of hoping an incidental call surfaces each one. No-ops
+        off macOS."""
         if sys.platform != "darwin":
             return
         try:
-            import mac_permissions
-            if mac_permissions.request_accessibility(prompt=True):
-                return  # already trusted
-            self._add_bubble(
-                "system",
-                "⚠️ Ember needs **Accessibility** access to control the mouse and keyboard.\n"
-                "I've opened the request — enable **Ember** under System Settings → Privacy & "
-                "Security → Accessibility, then quit and reopen Ember.",
-            )
-            mac_permissions.open_accessibility_settings()
+            import mac_permissions as mp
         except Exception:
-            pass
-
-    def _check_screen_and_mic_permissions(self):
-        """Explicitly trigger the macOS Screen Recording + Microphone prompts shortly after
-        launch, instead of hoping the first incidental screenshot/mic-open call surfaces them —
-        that quietly doesn't happen for a lot of unsigned/ad-hoc-signed builds, which is why
-        Ember could go most sessions without ever asking for either."""
-        if sys.platform != "darwin":
             return
-        try:
-            import mac_permissions
-            missing = []
-            if not mac_permissions.has_screen_recording(prompt=True):
-                missing.append("Screen Recording")
-                mac_permissions.open_screen_recording_settings()
-            if not mac_permissions.has_microphone(prompt=True):
-                missing.append("Microphone")
-                mac_permissions.open_microphone_settings()
-            if missing:
-                self._add_bubble(
-                    "system",
-                    f"⚠️ Ember needs **{' and '.join(missing)}** access for the screen mirror / "
-                    "voice features to work.\nI've opened the request — enable **Ember** under "
-                    "System Settings → Privacy & Security, then quit and reopen Ember.",
-                )
-        except Exception:
-            pass
+        # (label, granted?-and-prompt fn, open-settings fn, why Ember needs it). Accessibility first:
+        # it's the most-used capability and the one macOS never prompts for on its own.
+        checks = (
+            ("Accessibility", mp.request_accessibility, mp.open_accessibility_settings,
+             "control the mouse & keyboard"),
+            ("Screen Recording", mp.has_screen_recording, mp.open_screen_recording_settings,
+             "see the screen — screenshots & the Ember Link mirror"),
+            ("Microphone", mp.has_microphone, mp.open_microphone_settings,
+             "hear you for voice chat & dictation"),
+            ("Input Monitoring", mp.has_input_monitoring, mp.open_input_monitoring_settings,
+             "the global hotkey & the “Hey Ember” wake word"),
+        )
+        missing = []
+        first_pane = None
+        for label, granted_fn, open_fn, why in checks:
+            try:
+                ok = bool(granted_fn(prompt=True))   # fires the OS prompt if still undetermined
+            except Exception:
+                ok = True   # can't check (missing pyobjc / older macOS) -> don't nag or block
+            if not ok:
+                missing.append((label, why))
+                if first_pane is None:
+                    first_pane = open_fn   # open just the first pane; the guide lists the rest
+        if not missing:
+            return
+        if first_pane is not None:
+            try:
+                first_pane()
+            except Exception:
+                pass
+        lines = "\n".join(f"•  **{label}** — to {why}" for label, why in missing)
+        self._add_bubble(
+            "system",
+            "⚙️ **One-time setup — grant Ember these macOS permissions:**\n\n"
+            f"{lines}\n\n"
+            "Open **System Settings → Privacy & Security**, switch **Ember** on under each item "
+            "above (I've opened the first one for you), then **quit and reopen Ember once** so "
+            "they all take effect.",
+        )
 
     def _init_agent(self):
         # Warm the heavy google.genai import on a BACKGROUND thread so the UI never freezes,
@@ -11403,12 +11410,19 @@ def _set_macos_app_name(name: str = "Ember") -> None:
     try:
         from Foundation import NSBundle
         bundle = NSBundle.mainBundle()
-        if bundle is None:
-            return
-        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-        if info is not None:
-            info["CFBundleName"] = name
-            info["CFBundleDisplayName"] = name
+        if bundle is not None:
+            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            if info is not None:
+                info["CFBundleName"] = name
+                info["CFBundleDisplayName"] = name
+    except Exception:
+        pass
+    # CFBundleName fixes the menu-bar title, but the Dock / Force-Quit / Activity Monitor label
+    # for an unbundled process comes from the PROCESS name — which defaults to the interpreter
+    # ("python3.12"). Override it too so every place macOS shows Ember says "Ember".
+    try:
+        from Foundation import NSProcessInfo
+        NSProcessInfo.processInfo().setProcessName_(name)
     except Exception:
         pass
 

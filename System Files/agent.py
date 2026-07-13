@@ -1297,6 +1297,11 @@ TOOL_DECLARATIONS = [
     {"name": "record_audio", "description": "Record from mic for N seconds to a WAV file.",
      "parameters": {"type": "OBJECT", "properties": {
         "seconds": {"type": "NUMBER"}, "path": {"type": "STRING"}}, "required": []}},
+    {"name": "measure_mic_level",
+     "description": "Measure how loud the microphone is RIGHT NOW: records a short clip and reports "
+                    "a 0-100 level, RMS, peak, and dBFS (no ffmpeg). Use to answer 'how loud is it' "
+                    "or to confirm the mic is actually picking up sound.",
+     "parameters": {"type": "OBJECT", "properties": {"seconds": {"type": "NUMBER"}}, "required": []}},
     # ---- Browser ++ ----
     {"name": "browser_wait_for_element", "description": "Wait until a CSS selector exists in the page.",
      "parameters": {"type": "OBJECT", "properties": {
@@ -2182,6 +2187,7 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     # audio
     "say_text": extra_tools.say_text,
     "record_audio": extra_tools.record_audio,
+    "measure_mic_level": extra_tools.measure_mic_level,
     # browser additions
     "browser_wait_for_element": extra_tools.browser_wait_for_element,
     "browser_get_text": extra_tools.browser_get_text,
@@ -2306,7 +2312,7 @@ PARALLEL_SAFE_TOOLS = frozenset({
     "browser_get_page", "browser_get_text", "browser_list_tabs", "browser_current",
     "git_status", "git_log", "git_diff", "speed_test", "calculate_text_stats",
     "list_scheduled_tasks", "list_timers",
-    "gmail_status", "gmail_list_labels", "gmail_search", "gmail_read",
+    "gmail_status", "gmail_diagnose", "gmail_list_labels", "gmail_search", "gmail_read",
     "folder_report", "bulk_read_documents",
     "security_dashboard", "software_update_check",
     # roadmap backlog read-only tools

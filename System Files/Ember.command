@@ -21,7 +21,10 @@ PYBIN=".venv/bin/python"
 # No uv, no network, no dependency check against any index. This is the normal launch.
 if [ -x "$PYBIN" ] && "$PYBIN" -c "import PyQt6, google.genai" >/dev/null 2>&1; then
     echo "Starting Ember…"
-    exec "$PYBIN" main.py
+    # `exec -a Ember` runs the venv Python but names the process "Ember", so the Dock /
+    # Activity Monitor / Force-Quit say "Ember" instead of "python3.12". (macOS resolves the
+    # real interpreter via its own path, not argv[0], so the venv still loads correctly.)
+    exec -a Ember "$PYBIN" main.py
 fi
 
 # --- First-time setup (needs the network, once) ---------------------------------
@@ -41,4 +44,4 @@ echo "First-time setup: installing Ember dependencies (this takes a few minutes)
 uv pip install -r requirements.txt || die "Dependency install failed."
 
 echo "Starting Ember…"
-exec "$PYBIN" main.py
+exec -a Ember "$PYBIN" main.py

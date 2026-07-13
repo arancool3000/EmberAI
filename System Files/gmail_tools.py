@@ -76,6 +76,78 @@ def _connect():
     return conn
 
 
+def gmail_diagnose() -> dict:
+    """Pinpoint WHY Gmail isn't working and how to fix it. Turns 'it's not working' into a specific
+    cause: not set up, a normal password instead of an App Password, wrong credentials, 2-Step
+    Verification off, or IMAP disabled. Actually connects, so the result is real — not a guess."""
+    import imaplib
+    host, user, pw = _creds()
+    if not user:
+        return {"ok": False, "configured": False, "problem": "No Gmail address is set.",
+                "fix": "Settings ▸ Gmail: enter your full Gmail address and a Google App Password."}
+    if not pw:
+        return {"ok": False, "configured": False, "problem": "No Google App Password is set.",
+                "fix": "Create one at myaccount.google.com/apppasswords (needs 2-Step Verification), "
+                       "then paste it in Settings ▸ Gmail."}
+    notes = []
+    # A Google App Password is exactly 16 letters (shown as 4 groups of 4). If the saved value
+    # isn't, it's almost certainly a normal password — which Gmail IMAP always rejects.
+    if not (len(pw) == 16 and pw.isalpha()):
+        notes.append("The saved password isn't 16 letters, so it looks like your normal Google "
+                     "password rather than an App Password. Gmail only accepts an App Password.")
+    try:
+        conn = imaplib.IMAP4_SSL(host, timeout=20)
+    except Exception as e:
+        return {"ok": False, "configured": True, "problem": f"Couldn't reach {host}: {e}",
+                "fix": "Check your internet connection / firewall, then retry.", "notes": notes}
+    try:
+        conn.login(user, pw)
+    except imaplib.IMAP4.error as e:
+        low = str(e).lower()
+        if any(t in low for t in ("web browser", "imap access", "not enabled", "enable imap")):
+            problem = "IMAP access is turned off for this Gmail account."
+            fix = ("Enable it: Gmail (web) ▸ Settings ▸ See all settings ▸ Forwarding and "
+                   "POP/IMAP ▸ Enable IMAP ▸ Save changes.")
+        else:
+            problem = "Gmail rejected the username / App Password."
+            fix = ("1) Turn ON 2-Step Verification. 2) Create a NEW App Password at "
+                   "myaccount.google.com/apppasswords and paste it (spaces are fine — Ember strips "
+                   "them). 3) Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP. "
+                   "4) Make sure the address is the SAME account the App Password belongs to.")
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        return {"ok": False, "configured": True, "address": user,
+                "problem": problem, "fix": fix, "detail": str(e), "notes": notes}
+    except Exception as e:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        return {"ok": False, "configured": True, "problem": f"Unexpected login error: {e}",
+                "fix": "Recreate the App Password and confirm 2-Step Verification + IMAP are on.",
+                "notes": notes}
+    # Login worked — confirm IMAP is actually usable by opening the inbox.
+    try:
+        typ, _ = conn.select("INBOX", readonly=True)
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        if typ != "OK":
+            return {"ok": False, "configured": True, "address": user,
+                    "problem": "Signed in, but couldn't open the inbox — IMAP is likely disabled.",
+                    "fix": "Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP.", "notes": notes}
+    except Exception as e:
+        return {"ok": False, "configured": True, "address": user,
+                "problem": f"Signed in, but opening the inbox failed: {e}",
+                "fix": "Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP.", "notes": notes}
+    return {"ok": True, "configured": True, "address": user,
+            "message": "Gmail is working — signed in and opened the inbox successfully."
+                       + (" (Note: " + " ".join(notes) + ")" if notes else "")}
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested without a connection)
 # ---------------------------------------------------------------------------
@@ -457,6 +529,12 @@ TOOL_DECLARATIONS = [
     {"name": "gmail_status",
      "description": "Check if Gmail is connected and report inbox total + unread counts.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "gmail_diagnose",
+     "description": "Diagnose WHY Gmail isn't working and how to fix it — it actually tries to "
+                    "connect and reports the exact cause (not set up, a normal password instead of "
+                    "an App Password, wrong credentials, 2-Step Verification off, or IMAP disabled) "
+                    "with the specific fix. Use this whenever Gmail fails.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "gmail_list_labels",
      "description": "List the Gmail labels/folders available to organise email into.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
@@ -514,6 +592,7 @@ TOOL_DECLARATIONS = [
 
 TOOL_DISPATCH = {
     "gmail_status": gmail_status,
+    "gmail_diagnose": gmail_diagnose,
     "gmail_list_labels": gmail_list_labels,
     "gmail_search": gmail_search,
     "gmail_read": gmail_read,
@@ -528,7 +607,7 @@ TOOL_DISPATCH = {
 
 # Reading the mailbox is non-mutating. Sends nothing over the wire except to Gmail's IMAP with
 # the user's own credentials, so the read tools are safe/parallel-friendly.
-READONLY_TOOLS = {"gmail_status", "gmail_list_labels", "gmail_search", "gmail_read"}
+READONLY_TOOLS = {"gmail_status", "gmail_diagnose", "gmail_list_labels", "gmail_search", "gmail_read"}
 # Organising actions are reversible (labels/archive/star/read) or recoverable (trash) — low risk.
 INTERACTION_TOOLS = {"gmail_apply_label", "gmail_remove_label", "gmail_archive",
                      "gmail_mark_read", "gmail_star", "gmail_trash", "gmail_create_label"}

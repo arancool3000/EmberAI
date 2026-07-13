@@ -108,7 +108,7 @@ SAFE_READONLY = {
     "ocr_image", "ocr_screen", "browser_wait_for_element", "browser_get_text",
     "calculate_text_stats",
     "watch_folder_start", "watch_folder_events", "watch_folder_stop",
-    "record_audio",
+    "record_audio", "measure_mic_level",
     "list_desktop_items", "desktop_overview",
     # more_tools - read-only
     "http_get", "public_ip", "dns_lookup", "network_ping", "web_search",
