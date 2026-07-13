@@ -2,14 +2,15 @@
 
 ## Install
 
-Open the folder for your computer. Each contains a visual guide and one installer:
+Open the folder for your computer and run its one installer — that's all a new user needs:
 
 - **Windows:** [`Windows Install/`](Windows%20Install/) → double-click **Install Ember.bat**
 - **macOS:** [`macOS Install/`](macOS%20Install/) → double-click **Install Ember.command**
 
-Both installers keep dependencies in a private `.venv` inside the Ember folder. They do not
-install Ember packages globally. The rest of this repository is source code and developer files;
-new users do not need to open them.
+Each folder has a visual guide and the installer. Both keep dependencies in a private `.venv`
+and never install Ember packages globally. Everything else — the app's source code, tests, and
+build scripts — is tucked into the **`System Files/`** folder, so a fresh download shows only
+these two install buttons. You don't need to open `System Files/`.
 
 Ember sees your screen, drives the mouse/keyboard, controls a real browser, runs shell
 commands, manages files, organises your Gmail, talks with you hands-free, and can be controlled

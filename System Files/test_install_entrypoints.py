@@ -2,11 +2,14 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).parent
+# The source now lives in <repo>/System Files/; the user-facing install folders + README stay
+# at the repo root (so a fresh download shows only the Windows/Mac buttons).
+ROOT = Path(__file__).parent            # <repo>/System Files
+REPO = ROOT.parent                      # <repo> (repo root)
 
 
 def test_windows_install_folder_is_self_explanatory():
-    folder = ROOT / "Windows Install"
+    folder = REPO / "Windows Install"
     installer = (folder / "Install Ember.bat").read_text(encoding="utf-8")
     guide = (folder / "Installation Guide.html").read_text(encoding="utf-8")
     assert "Installation Guide.html" in installer
@@ -16,16 +19,16 @@ def test_windows_install_folder_is_self_explanatory():
 
 
 def test_macos_install_folder_is_self_explanatory():
-    folder = ROOT / "macOS Install"
+    folder = REPO / "macOS Install"
     installer = (folder / "Install Ember.command").read_text(encoding="utf-8")
     guide = (folder / "Installation Guide.html").read_text(encoding="utf-8")
     assert 'open "$HERE/Installation Guide.html"' in installer
-    assert 'exec "$ROOT/Ember.command"' in installer
+    assert 'exec "$ROOT/System Files/Ember.command"' in installer
     assert "private environment" in guide
 
 
 def test_readme_leads_with_platform_install_folders():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
     install = readme.index("## Install")
     features = readme.index("## ✨ What's inside")
     assert install < features

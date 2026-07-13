@@ -11,7 +11,8 @@ Run: python test_release_workflow.py"""
 import os
 import re
 
-_PATH = os.path.join(os.path.dirname(__file__), ".github", "workflows", "release.yml")
+# .github stays at the repo root; the source (this test) now lives in <repo>/System Files/.
+_PATH = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "release.yml")
 _SRC = open(_PATH, encoding="utf-8").read()
 
 

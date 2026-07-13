@@ -11,12 +11,18 @@ chat_history/
 .env
 
 # Runtime state for backlog features (encrypted vault, usage, snippets, recordings).
-# Anchored to the repo root so the workflow_recorder's /workflows/ data dir does NOT
-# shadow .github/workflows/ (the CI definitions).
+# The source now lives in "System Files/", so a source run writes these there. Anchored to
+# that folder so the workflow_recorder's workflows/ data dir does NOT shadow .github/workflows/
+# (the CI definitions).
+/System Files/vault.enc
+/System Files/usage.json
+/System Files/snippets.json
+/System Files/workflows/
+/System Files/recordings/
+# (legacy root locations from before the System Files/ move)
 /vault.enc
 /usage.json
 /snippets.json
-/workflows/
 /recordings/
 
 # Captured screen content
