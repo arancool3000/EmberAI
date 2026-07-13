@@ -176,6 +176,67 @@ def test_open_microphone_settings_calls_open_with_the_right_url():
         _restore()
 
 
+def test_input_monitoring_true_off_macos():
+    _restore()
+    assert mp.has_input_monitoring() is True
+
+
+def test_input_monitoring_true_when_pyobjc_missing():
+    _darwin()
+    sys.modules.pop("Quartz", None)
+    try:
+        assert mp.has_input_monitoring() is True   # can't check -> don't hard-block
+    finally:
+        _restore()
+
+
+def test_input_monitoring_reports_granted():
+    _darwin()
+    q = types.ModuleType("Quartz")
+    q.CGPreflightListenEventAccess = lambda: True
+    q.CGRequestListenEventAccess = lambda: True
+    sys.modules["Quartz"] = q
+    try:
+        assert mp.has_input_monitoring() is True
+    finally:
+        _restore()
+
+
+def test_input_monitoring_not_granted_and_prompts_only_when_asked():
+    _darwin()
+    calls = []
+    q = types.ModuleType("Quartz")
+    q.CGPreflightListenEventAccess = lambda: False
+    q.CGRequestListenEventAccess = lambda: calls.append("requested")
+    sys.modules["Quartz"] = q
+    try:
+        assert mp.has_input_monitoring(prompt=False) is False
+        assert calls == []           # prompt=False must never trigger the OS prompt
+        assert mp.has_input_monitoring(prompt=True) is False
+        assert calls == ["requested"]
+    finally:
+        _restore()
+
+
+def test_open_input_monitoring_settings_calls_open_with_the_right_url():
+    _darwin()
+    captured = {}
+    import subprocess as real_subprocess
+    orig_run = real_subprocess.run
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        class R: pass
+        return R()
+    real_subprocess.run = fake_run
+    try:
+        mp.open_input_monitoring_settings()
+        assert captured["cmd"][0] == "open"
+        assert "Privacy_ListenEvent" in captured["cmd"][1]
+    finally:
+        real_subprocess.run = orig_run
+        _restore()
+
+
 def _run():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

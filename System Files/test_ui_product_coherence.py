@@ -15,6 +15,13 @@ def _class_source(source: str, name: str) -> str:
     return ast.get_source_segment(source, cls)
 
 
+def _func_source(source: str, name: str) -> str:
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return ast.get_source_segment(source, node)
+    raise AssertionError(f"function {name} not found")
+
+
 def test_major_dialogs_use_the_shared_product_surface():
     for name in (
         "ManualModeDialog", "SettingsDialog", "FeaturesDialog", "AntivirusDialog",
@@ -108,6 +115,31 @@ def test_endpoint_security_is_evidence_led_not_scareware():
     for forbidden in ("Threats found", "Quarantine ALL", "Norton-style", "AI cleared"):
         assert forbidden not in security, forbidden
     assert "Direct deletion is disabled" in security
+
+
+def test_macos_shows_ember_not_python312():
+    # The menu bar comes from CFBundleName; the Dock / Activity Monitor / Force-Quit label comes
+    # from the PROCESS name (which otherwise defaults to "python3.12"). Override both.
+    name_fn = _func_source(UI, "_set_macos_app_name")
+    assert 'info["CFBundleName"] = name' in name_fn
+    assert "setProcessName_(name)" in name_fn
+    assert '_set_macos_app_name("Ember")' in UI
+
+
+def test_first_run_primes_every_macos_permission_in_one_guide():
+    primer = _func_source(UI, "_prime_permissions")
+    # All four permissions Ember actually needs — including Input Monitoring for the global
+    # hotkey / "Hey Ember" wake word, which the old two-step primer left out.
+    for perm in ("Accessibility", "Screen Recording", "Microphone", "Input Monitoring"):
+        assert perm in primer, perm
+    for fn in ("request_accessibility", "has_screen_recording", "has_microphone",
+               "has_input_monitoring"):
+        assert fn in primer, fn
+    assert "prompt=True" in primer                      # actually fires the OS prompts
+    assert "quit and reopen Ember once" in primer       # one clear, consolidated instruction
+    # Scheduled once at launch (replacing the old split _check_accessibility / _check_screen_and_mic).
+    assert "QTimer.singleShot(900, self._prime_permissions)" in UI
+    assert "_check_screen_and_mic_permissions" not in UI
 
 
 if __name__ == "__main__":

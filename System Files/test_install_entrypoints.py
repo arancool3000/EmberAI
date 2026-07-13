@@ -41,6 +41,14 @@ def test_windows_launcher_reuses_private_environment():
     assert "Windows Install\\Install Ember.bat" in launcher
 
 
+def test_macos_launcher_names_the_process_ember_not_python():
+    # Running from source, the Dock/Activity Monitor label comes from the process name, which
+    # defaults to the interpreter ("python3.12"). `exec -a Ember` names it "Ember" instead.
+    launcher = (ROOT / "Ember.command").read_text(encoding="utf-8")
+    assert "exec -a Ember" in launcher
+    assert 'exec "$PYBIN" main.py' not in launcher   # no un-named exec left behind
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for test in tests:
