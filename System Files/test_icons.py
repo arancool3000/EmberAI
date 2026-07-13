@@ -57,24 +57,24 @@ def test_filled_glyphs_use_currentcolor_fill():
         assert 'fill="currentColor"' in icons._ICONS[name], name
 
 
-def test_diamond_svg_is_a_valid_scalable_vector():
-    s = icons.diamond_svg()
+def test_brand_star_svg_is_a_valid_scalable_vector():
+    s = icons.brand_star_svg()
     assert s.startswith("<svg") and s.endswith("</svg>")
-    assert 'viewBox="0 0 24 24"' in s          # scales to any size (resizable)
-    assert "linearGradient" in s and "url(#emberGem)" in s   # filled ember gem, not monoline
-    # The default deep-ember gradient stops are present.
-    for stop in icons._DIAMOND_STOPS:
-        assert stop in s
+    assert 'viewBox="0 0 24 24"' in s
+    assert "linearGradient" in s and "url(#emberStar)" in s
+    for colour in icons._BRAND_STAR_STOPS:
+        assert colour in s
 
 
-def test_diamond_svg_accepts_custom_colors():
-    s = icons.diamond_svg(stops=("#111111", "#222222", "#333333"), facet="#eeeeee")
-    assert "#111111" in s and "#333333" in s and "#eeeeee" in s
+def test_brand_star_svg_accepts_custom_colors():
+    s = icons.brand_star_svg(
+        colors=("#111111", "#222222", "#333333", "#444444", "#555555"),
+        edge="#eeeeee")
+    assert "#111111" in s and "#555555" in s and "#eeeeee" in s
 
 
-def test_diamond_svg_is_not_the_letter_E():
-    # Regression: the brand mark must be the gem, never a text glyph / letter.
-    s = icons.diamond_svg()
+def test_brand_star_svg_has_no_text_glyph():
+    s = icons.brand_star_svg()
     assert ">E<" not in s and "<text" not in s
 
 

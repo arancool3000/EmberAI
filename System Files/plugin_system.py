@@ -32,9 +32,12 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-# Directory scanned for plugin files. Default = ``plugins/`` next to this file.
+# Directory scanned for plugin files. It lives in the stable support directory so an app
+# upgrade cannot erase user-authored plugins.
 # Tests monkeypatch this to a temporary directory.
-PLUGINS_DIR: Path = Path(__file__).parent / "plugins"
+from app_data import data_dir as _support_dir
+
+PLUGINS_DIR: Path = _support_dir() / "plugins"
 
 # Cache of the most recent load_plugins() summary so the management tools can report it.
 _LAST_LOAD: dict | None = None

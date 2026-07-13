@@ -27,7 +27,9 @@ def _base_dir() -> Path:
     return Path(__file__).parent
 
 
-PROFILE_DIR = _base_dir() / "browser_profile"
+from app_data import data_dir as _support_dir
+
+PROFILE_DIR = _support_dir() / "browser_profile"
 
 
 class CDPError(Exception):

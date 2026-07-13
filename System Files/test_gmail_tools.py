@@ -240,7 +240,8 @@ def test_gmail_diagnose_auth_failure_flags_a_non_app_password():
 
 def test_gmail_diagnose_detects_imap_disabled():
     r = _run_diag(("imap.gmail.com", "me@gmail.com", "abcdefghijklmnop"), "imap_off")
-    assert r["ok"] is False and "imap" in r["problem"].lower() and "Enable IMAP" in r["fix"]
+    assert r["ok"] is False and "imap" in r["problem"].lower()
+    assert "Workspace" in r["fix"] and "automatically" in r["fix"]
 
 
 def test_gmail_diagnose_success_when_login_and_inbox_work():
@@ -251,6 +252,18 @@ def test_gmail_diagnose_success_when_login_and_inbox_work():
 def test_gmail_diagnose_select_failure_points_at_imap():
     r = _run_diag(("imap.gmail.com", "me@gmail.com", "abcdefghijklmnop"), "select_fail")
     assert r["ok"] is False and "IMAP" in r["fix"]
+
+
+def test_gmail_diagnose_can_test_unsaved_fields_directly():
+    import imaplib
+    original = imaplib.IMAP4_SSL
+    imaplib.IMAP4_SSL = _fake_imap("ok")
+    try:
+        r = gt.gmail_diagnose(address="new@gmail.com",
+                              app_password="abcd efgh ijkl mnop")
+    finally:
+        imaplib.IMAP4_SSL = original
+    assert r["ok"] is True and r["address"] == "new@gmail.com"
 
 
 def test_exports_consistent():

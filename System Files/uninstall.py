@@ -28,12 +28,8 @@ from pathlib import Path
 
 def _data_dir() -> Path:
     """Ember's per-user data dir (settings/vault/usage/etc.) — matches the other modules."""
-    home = Path.home()
-    if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "Ember"
-    if sys.platform.startswith("win"):
-        return home / "AppData" / "Roaming" / "Ember"
-    return home / ".ember"
+    from app_data import data_dir
+    return data_dir()
 
 
 def _base_dir() -> Path:

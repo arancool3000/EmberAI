@@ -995,20 +995,8 @@ def _run_shell_macro(cmd: str) -> dict:
 
 
 def _data_dir():
-    from pathlib import Path
-    import sys
-    home = Path.home()
-    if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Ember"
-    elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Ember"
-    else:
-        d = home / ".ember"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return d
+    from app_data import data_dir
+    return data_dir()
 
 
 def stable_pin() -> str:
