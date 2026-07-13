@@ -46,7 +46,7 @@ def test_gmail_settings_from():
     cfg = st.gmail_settings_from("me@gmail.com", "app pass word")
     assert cfg["gmail_address"] == "me@gmail.com"
     assert cfg["email_smtp_user"] == "me@gmail.com"          # mirrored for send_email
-    assert cfg["email_smtp_password"] == "app pass word"
+    assert cfg["email_smtp_password"] == "apppassword"
     assert cfg["email_smtp_host"] == "smtp.gmail.com"
     assert cfg["gmail_imap_host"] == "imap.gmail.com"
     # blank inputs -> no settings (skipped in the tour)

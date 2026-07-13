@@ -32,22 +32,8 @@ def _base_dir() -> Path:
 
 
 def _data_dir() -> Path:
-    """Writable runtime dir. In a frozen app, never write inside the bundle (it breaks the
-    code signature -> slow relaunch / read-only /Applications); use the OS user-data dir."""
-    if not getattr(sys, "frozen", False):
-        return _base_dir()
-    home = Path.home()
-    if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Ember"
-    elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Ember"
-    else:
-        d = home / ".ember"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return d
+    from app_data import data_dir
+    return data_dir()
 
 
 RULES_PATH = _data_dir() / "automations.json"

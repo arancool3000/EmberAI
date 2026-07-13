@@ -7,8 +7,8 @@ marshals the update onto the GUI thread.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QConicalGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
 
 
@@ -16,7 +16,7 @@ class EmberPointerOverlay(QWidget):
     """A non-interactive branded pointer that briefly follows Ember's actions."""
 
     requested = pyqtSignal(int, int, str)
-    _HOTSPOT = QPoint(14, 14)
+    _HOTSPOT = QPoint(24, 24)
 
     def __init__(self):
         flags = (Qt.WindowType.FramelessWindowHint
@@ -31,16 +31,20 @@ class EmberPointerOverlay(QWidget):
             pass
         super().__init__(None, flags)
         self.setObjectName("emberPointerOverlay")
-        self.setFixedSize(104, 56)
+        self.setFixedSize(48, 48)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._enabled = True
         self._click_flash = False
+        self._phase = 0.0
         self._idle = QTimer(self)
         self._idle.setSingleShot(True)
-        self._idle.timeout.connect(self.hide)
+        self._idle.timeout.connect(self._hide_pointer)
+        self._spin = QTimer(self)
+        self._spin.setInterval(45)
+        self._spin.timeout.connect(self._animate)
         self.requested.connect(self._apply_request)
         self.hide()
 
@@ -52,7 +56,7 @@ class EmberPointerOverlay(QWidget):
         self._enabled = bool(enabled)
         if not self._enabled:
             self._idle.stop()
-            self.hide()
+            self._hide_pointer()
 
     def _apply_request(self, x: int, y: int, action: str) -> None:
         if not self._enabled:
@@ -63,6 +67,7 @@ class EmberPointerOverlay(QWidget):
         if not self.isVisible():
             self.show()
             self.raise_()
+            self._spin.start()
         # Long enough to make the owner of the action obvious, short enough not to leave
         # a second pointer hanging around or obscuring Ember's next verification screenshot.
         self._idle.start(500 if self._click_flash else 700)
@@ -73,38 +78,58 @@ class EmberPointerOverlay(QWidget):
         self._click_flash = False
         self.update()
 
+    def _hide_pointer(self) -> None:
+        self._spin.stop()
+        self.hide()
+
+    def _animate(self) -> None:
+        self._phase = (self._phase + 5.0) % 360.0
+        self.update()
+
+    @staticmethod
+    def _star_path() -> QPainterPath:
+        """Compact four-point star centred on the exact action hotspot."""
+        p = QPainterPath(QPointF(24, 4))
+        p.lineTo(28.5, 19.5)
+        p.lineTo(44, 24)
+        p.lineTo(28.5, 28.5)
+        p.lineTo(24, 44)
+        p.lineTo(19.5, 28.5)
+        p.lineTo(4, 24)
+        p.lineTo(19.5, 19.5)
+        p.closeSubpath()
+        return p
+
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self._click_flash:
-            p.setPen(QPen(QColor(255, 153, 64, 185), 3))
+            p.setPen(QPen(QColor(255, 255, 255, 215), 2.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(self._HOTSPOT, 11, 11)
+            p.drawEllipse(self._HOTSPOT, 21, 21)
 
-        # A warm Ember-orange cursor with a dark edge so it remains readable on both
-        # light and dark desktops.  The path's first point is the exact click hotspot.
-        path = QPainterPath()
-        path.moveTo(14, 14)
-        path.lineTo(16, 40)
-        path.lineTo(22, 33)
-        path.lineTo(29, 46)
-        path.lineTo(36, 42)
-        path.lineTo(28, 30)
-        path.lineTo(39, 28)
-        path.closeSubpath()
-        p.setPen(QPen(QColor(53, 30, 20, 235), 2))
-        p.setBrush(QColor(255, 132, 54, 245))
+        path = self._star_path()
+        # A soft dark halo keeps the rainbow readable over both pale and busy desktops.
+        p.setPen(QPen(QColor(15, 11, 28, 80), 7, Qt.PenStyle.SolidLine,
+                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-        # Compact owner badge: useful when the system cursor is also visible nearby.
-        badge = QRect(40, 10, 58, 25)
-        p.setPen(QPen(QColor(255, 183, 105, 220), 1))
-        p.setBrush(QColor(31, 24, 25, 230))
-        p.drawRoundedRect(badge, 9, 9)
-        font = QFont()
-        font.setPointSize(9)
-        font.setBold(True)
-        p.setFont(font)
-        p.setPen(QColor(255, 190, 119))
-        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, "EMBER")
+        rainbow = QConicalGradient(QPointF(24, 24), self._phase)
+        for pos, colour in (
+            (0.00, "#ff3b63"), (0.16, "#ff9f1c"), (0.32, "#ffe66d"),
+            (0.48, "#35e38b"), (0.64, "#26c6ff"), (0.80, "#7267ff"),
+            (0.92, "#d94cff"), (1.00, "#ff3b63"),
+        ):
+            rainbow.setColorAt(pos, QColor(colour))
+        p.setPen(QPen(QColor(255, 255, 255, 235), 1.5,
+                      Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                      Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(QBrush(rainbow))
+        p.drawPath(path)
+
+        # Bright centre makes the click hotspot unambiguous without a long arrow tail.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 235))
+        p.drawEllipse(QPointF(self._HOTSPOT), 2.7, 2.7)

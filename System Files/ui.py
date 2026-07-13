@@ -326,22 +326,17 @@ def _base_dir() -> Path:
 
 
 def _data_dir() -> Path:
-    """Writable runtime dir. In a frozen app, never write inside the bundle (it breaks the
-    code signature -> slow relaunch / read-only /Applications); use the OS user-data dir."""
-    if not getattr(sys, "frozen", False):
-        return _base_dir()
-    home = Path.home()
-    if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Ember"
-    elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Ember"
-    else:
-        d = home / ".ember"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return d
+    from app_data import data_dir
+    return data_dir()
+
+
+# Before binding file constants, rescue settings/data written beside an older source install.
+# Copy-only migration means a newer support-folder value is never overwritten.
+try:
+    from app_data import migrate_legacy_data
+    migrate_legacy_data()
+except Exception:
+    pass
 
 
 SETTINGS_PATH = _data_dir() / "settings.json"
@@ -384,7 +379,8 @@ def _md_to_html(text: str) -> str:
 
 
 _VAULT_KEYS = ("gemini_api_key", "gemini_api_key_secondary", "gemini_api_key_3",
-               "gemini_api_key_4", "anthropic_api_key", "openai_api_key")
+               "gemini_api_key_4", "anthropic_api_key", "openai_api_key",
+               "soundtools_api_key", "gmail_app_password", "email_smtp_password")
 
 
 def _hydrate_keys_from_vault(settings: dict) -> dict:
@@ -406,8 +402,14 @@ def _hydrate_keys_from_vault(settings: dict) -> dict:
 def load_settings() -> dict:
     if SETTINGS_PATH.exists():
         try:
-            return _hydrate_keys_from_vault(json.loads(SETTINGS_PATH.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
+            settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if not isinstance(settings, dict):
+                raise ValueError("settings must be a JSON object")
+            # New installs secure secrets by default. Existing settings without the flag are
+            # upgraded in memory and move their secrets into the vault on the next save.
+            settings.setdefault("use_key_vault", True)
+            return _hydrate_keys_from_vault(settings)
+        except (json.JSONDecodeError, OSError, ValueError):
             pass
     return {
         "gemini_api_key": "",
@@ -423,6 +425,7 @@ def load_settings() -> dict:
         "openai_model": "gpt-4o-mini",
         "openai_base_url": "",        # blank = OpenAI; set for an OpenAI-compatible provider (Grok/DeepSeek/…)
         "openai_provider_label": "OpenAI",
+        "use_key_vault": True,
         "ollama_model": "",
         "auto_screenshot": True,
         "autocorrect_chat": True,
@@ -498,7 +501,13 @@ def save_settings(settings: dict):
             except Exception:
                 to_write = settings
         SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS_PATH.write_text(json.dumps(to_write, indent=2), encoding="utf-8")
+        tmp = SETTINGS_PATH.with_name(SETTINGS_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(to_write, indent=2), encoding="utf-8")
+        os.replace(tmp, SETTINGS_PATH)
+        try:
+            os.chmod(SETTINGS_PATH, 0o600)
+        except OSError:
+            pass
     except OSError as e:
         # Never let a failed write crash the app or silently lose the API key.
         print(f"[settings save failed: {e}] path={SETTINGS_PATH}")
@@ -674,18 +683,18 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y() + m.bottom()
 
 
-# Sentinel that tells _dialog_header (and any brand spot) to render Ember's diamond logo mark
+# Sentinel that tells _dialog_header (and any brand spot) to render Ember's star logo mark
 # instead of a text glyph.
-DIAMOND_MARK = "diamond"
+STAR_MARK = "star"
 
 
-class DiamondMark(QWidget):
-    """Ember's brand logo: a resizable faceted "ember gem" diamond.
+class StarMark(QWidget):
+    """Ember's brand logo: a resizable rainbow four-point star.
 
-    Renders the branded vector gem (icons.diamond_svg) scaled to the widget's CURRENT size, so
+    Renders the branded vector star (icons.brand_star_svg) at the widget's current size, so
     it stays crisp at any size and is trivially resizable — pass a size, call set_mark_size(),
-    or let a layout resize it. Replaces the old letter-"E" / sparkle badges. Falls back to a
-    hand-painted gradient diamond if QtSvg is unavailable, so the mark never disappears."""
+    or let a layout resize it. Falls back to a hand-painted gradient star if QtSvg is
+    unavailable, so the mark never disappears."""
 
     def __init__(self, size: int = 34, parent=None):
         super().__init__(parent)
@@ -722,7 +731,7 @@ class DiamondMark(QWidget):
         try:
             from PyQt6.QtCore import QByteArray, QRectF
             from PyQt6.QtSvg import QSvgRenderer
-            renderer = QSvgRenderer(QByteArray(icons.diamond_svg().encode("utf-8")))
+            renderer = QSvgRenderer(QByteArray(icons.brand_star_svg().encode("utf-8")))
             if not renderer.isValid():
                 return False
             renderer.render(painter, QRectF(x, y, side, side))
@@ -731,35 +740,40 @@ class DiamondMark(QWidget):
             return False
 
     def _render_fallback(self, painter, x, y, side) -> None:
-        # QtSvg missing → draw a simple ember-gradient rhombus so the logo still appears.
+        # QtSvg missing → draw the same four-point silhouette in a spectrum gradient.
         try:
             from PyQt6.QtCore import QPointF
-            from PyQt6.QtGui import QBrush, QLinearGradient, QPolygonF
+            from PyQt6.QtGui import QBrush, QLinearGradient, QPen, QPolygonF
             cx, cy, h = x + side / 2.0, y + side / 2.0, side / 2.0
             grad = QLinearGradient(cx - h, cy - h, cx + h, cy + h)
-            grad.setColorAt(0.0, QColor("#e6963c"))
-            grad.setColorAt(0.5, QColor("#dc5a28"))
-            grad.setColorAt(1.0, QColor("#af2629"))
-            painter.setPen(Qt.PenStyle.NoPen)
+            grad.setColorAt(0.0, QColor("#ff3b63"))
+            grad.setColorAt(0.25, QColor("#ffb020"))
+            grad.setColorAt(0.5, QColor("#45e38c"))
+            grad.setColorAt(0.75, QColor("#27bfff"))
+            grad.setColorAt(1.0, QColor("#b64cff"))
+            inner = h * 0.22
+            painter.setPen(QPen(QColor("#ffffff"), max(0.7, side * 0.025)))
             painter.setBrush(QBrush(grad))
             painter.drawPolygon(QPolygonF([
-                QPointF(cx, cy - h), QPointF(cx + h, cy),
-                QPointF(cx, cy + h), QPointF(cx - h, cy)]))
+                QPointF(cx, cy - h), QPointF(cx + inner, cy - inner),
+                QPointF(cx + h, cy), QPointF(cx + inner, cy + inner),
+                QPointF(cx, cy + h), QPointF(cx - inner, cy + inner),
+                QPointF(cx - h, cy), QPointF(cx - inner, cy - inner)]))
         except Exception:
             pass
 
 
 def _dialog_header(title: str, description: str, eyebrow: str = "EMBER",
-                   mark: str = DIAMOND_MARK) -> QFrame:
+                   mark: str = STAR_MARK) -> QFrame:
     """Reusable product header for every secondary Ember surface. `mark` is a short text glyph
-    for the surface, or DIAMOND_MARK to show Ember's diamond brand logo."""
+    for the surface, or STAR_MARK to show Ember's star brand logo."""
     frame = QFrame()
     frame.setObjectName("dialogHeader")
     row = QHBoxLayout(frame)
     row.setContentsMargins(13, 11, 15, 11)
     row.setSpacing(11)
-    if mark == DIAMOND_MARK:
-        icon = DiamondMark(38)
+    if mark == STAR_MARK:
+        icon = StarMark(38)
     else:
         icon = QLabel(mark)
         icon.setObjectName("dialogMark")
@@ -1611,7 +1625,7 @@ class SettingsDialog(QDialog):
         layout.addRow(self.dual_api_check)
 
         self.vault_check = QCheckBox("🔒 Store API keys in the encrypted vault (not plaintext settings.json)")
-        self.vault_check.setChecked(bool(self.settings.get("use_key_vault", False)))
+        self.vault_check.setChecked(bool(self.settings.get("use_key_vault", True)))
         layout.addRow(self.vault_check)
         try:
             import key_vault
@@ -1620,7 +1634,8 @@ class SettingsDialog(QDialog):
             _vbk = "encrypted-file"
         layout.addRow(self._hint(
             f"Keys are encrypted using {'the OS keychain' if _vbk == 'keychain' else 'an encrypted file (Fernet)'}. "
-            "When on, settings.json keeps blank keys and the real values live in the vault."))
+            "They live in Ember's permanent system support folder, not the version/install folder, "
+            "so upgrading Ember does not ask for them again."))
 
         # --- Model selection --------------------------------------------------
         model_box, mlayout = self._group("Model")
@@ -1697,11 +1712,14 @@ class SettingsDialog(QDialog):
         self.gmail_pw_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.gmail_pw_input.setPlaceholderText("16-char Google App Password (not your login password)")
         glayout.addRow("App Password:", self.gmail_pw_input)
+        gmail_test_btn = QPushButton("Test Gmail sign-in")
+        gmail_test_btn.clicked.connect(self._test_gmail_sign_in)
+        glayout.addRow("", gmail_test_btn)
         glayout.addRow(self._hint(
             "Lets Ember send email AND organise your inbox (search, label, archive, star, trash). "
             "Turn on 2-Step Verification, then create an App Password at "
-            "myaccount.google.com/apppasswords and paste it here. Stored locally; used only to "
-            "connect to Gmail (IMAP/SMTP)."))
+            "myaccount.google.com/apppasswords and paste it here. Personal Gmail already has "
+            "IMAP enabled. Stored in Ember's encrypted system vault; used only for Gmail."))
 
         outer.addStretch()
         self._add_tab(page, "Models")
@@ -1722,6 +1740,25 @@ class SettingsDialog(QDialog):
                    or "Ollama is not running. Install it from https://ollama.com, then run "
                       "`ollama pull llama3.2` and start Ollama.")
         QMessageBox.information(self, "Local AI (Ollama)", msg)
+
+    def _test_gmail_sign_in(self):
+        """Test the fields currently on screen, without requiring Save first."""
+        try:
+            import gmail_tools
+            result = gmail_tools.gmail_diagnose(
+                address=self.gmail_addr_input.text().strip(),
+                app_password=self.gmail_pw_input.text())
+        except Exception as e:
+            QMessageBox.warning(self, "Gmail sign-in", f"Could not run the test: {e}")
+            return
+        if result.get("ok"):
+            QMessageBox.information(self, "Gmail sign-in", result.get("message", "Gmail is working."))
+            return
+        detail = result.get("problem", "Gmail sign-in failed.")
+        fix = result.get("fix", "")
+        notes = "\n\n".join(result.get("notes") or [])
+        message = detail + (("\n\n" + fix) if fix else "") + (("\n\n" + notes) if notes else "")
+        QMessageBox.warning(self, "Gmail sign-in", message)
 
     def _build_appearance_tab(self):
         page = QWidget()
@@ -3495,7 +3532,7 @@ class SettingsDialog(QDialog):
             self.settings["openai_provider_label"] = _label
         if hasattr(self, "gmail_addr_input"):
             addr = self.gmail_addr_input.text().strip()
-            pw = self.gmail_pw_input.text().strip()
+            pw = "".join(self.gmail_pw_input.text().split())
             self.settings["gmail_address"] = addr
             self.settings["gmail_app_password"] = pw
             # Mirror into the SMTP/IMAP keys so the SAME App Password powers send_email + gmail_*.
@@ -5153,7 +5190,7 @@ class SetupTourDialog(QDialog):
         root.setSpacing(10)
         root.addWidget(_dialog_header(
             "Set up Ember", "Four quick choices, then your computer assistant is ready.",
-            eyebrow="WELCOME", mark=DIAMOND_MARK))
+            eyebrow="WELCOME", mark=STAR_MARK))
 
         step_rail = QFrame()
         step_rail.setObjectName("stepRail")
@@ -7557,7 +7594,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         brand_row = QHBoxLayout(brand)
         brand_row.setContentsMargins(1, 0, 1, 5)
         brand_row.setSpacing(9)
-        mark = DiamondMark(34)   # Ember's diamond brand logo (resizable vector), was the letter "E"
+        mark = StarMark(34)
         brand_row.addWidget(mark)
         brand_copy = QVBoxLayout()
         brand_copy.setContentsMargins(0, 0, 0, 0)
@@ -8345,7 +8382,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         content = QVBoxLayout(frame)
         content.setContentsMargins(28, 54, 28, 28)
         content.setSpacing(10)
-        mark = DiamondMark(46)   # Ember's diamond brand logo (resizable vector), was the "✦" mark
+        mark = StarMark(46)
         self._start_ambient_pulse(mark)
         title = QLabel("What can I help you get done?")
         title.setObjectName("emptyTitle")

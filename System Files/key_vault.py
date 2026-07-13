@@ -32,20 +32,8 @@ _SERVICE = "EmberAI"
 
 
 def _data_dir() -> Path:
-    if not getattr(sys, "frozen", False):
-        return Path(__file__).parent
-    home = Path.home()
-    if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Ember"
-    elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Ember"
-    else:
-        d = home / ".ember"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return d
+    from app_data import data_dir
+    return data_dir()
 
 
 # Module-level so tests can monkeypatch them to a temp dir.

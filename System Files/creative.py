@@ -12,15 +12,8 @@ from pathlib import Path
 
 def _settings() -> dict:
     import json
-    if getattr(sys, "frozen", False):
-        if sys.platform == "darwin":
-            d = Path.home() / "Library" / "Application Support" / "Ember"
-        elif sys.platform.startswith("win"):
-            d = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "Ember"
-        else:
-            d = Path.home() / ".ember"
-    else:
-        d = Path(__file__).parent
+    from app_data import data_dir
+    d = data_dir()
     p = d / "settings.json"
     try:
         return json.loads(p.read_text("utf-8")) if p.exists() else {}

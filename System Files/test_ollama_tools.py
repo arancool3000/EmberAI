@@ -18,7 +18,8 @@ def test_tool_schemas_wellformed():
         assert f["name"] and isinstance(f["description"], str) and f["description"]
         assert f["parameters"]["type"] == "object"
     # core local tools are present
-    for n in ("run_shell", "read_file", "write_file", "take_screenshot", "click", "type_text"):
+    for n in ("run_shell", "read_file", "write_file", "take_screenshot", "smart_click",
+              "click", "type_text"):
         assert n in ot.TOOL_NAMES, n
 
 
@@ -40,6 +41,23 @@ def test_coerce_args_parses_and_intifies():
 def test_call_unknown_tool():
     r = ot.call("does_not_exist", {})
     assert r["ok"] is False and "unknown tool" in r["error"]
+
+
+def test_screenshot_coordinates_are_scaled_to_the_real_display():
+    meta = {"width": 640, "height": 360, "original_width": 1920, "original_height": 1080}
+    args, mapped = ot.map_screenshot_coordinates({"x": 600, "y": 180}, meta)
+    assert mapped is True
+    assert args == {"x": 1800, "y": 540}
+
+
+def test_native_screen_coordinates_are_not_scaled_twice():
+    meta = {"width": 640, "height": 360, "original_width": 1920, "original_height": 1080}
+    args, mapped = ot.map_screenshot_coordinates(
+        {"x": 1200, "y": 500, "coordinate_space": "auto"}, meta)
+    assert mapped is False and args == {"x": 1200, "y": 500}
+    args, mapped = ot.map_screenshot_coordinates(
+        {"x": 600, "y": 180, "coordinate_space": "screen"}, meta)
+    assert mapped is False and args == {"x": 600, "y": 180}
 
 
 # ---- OllamaAgent._exec_tool (events + safety + confirmation) ---------------

@@ -71,17 +71,24 @@ def _connect():
         raise RuntimeError(
             "Gmail rejected the login. Use a Google App Password "
             "(myaccount.google.com/apppasswords) — not your normal password — with 2-Step "
-            "Verification on, and make sure IMAP is enabled in Gmail ▸ Settings ▸ "
-            f"Forwarding and POP/IMAP. ({e})")
+            "Verification on. Create a new App Password if your Google password changed. "
+            "Personal Gmail has IMAP enabled automatically; managed Workspace accounts may "
+            f"need their administrator to allow it. ({e})")
     return conn
 
 
-def gmail_diagnose() -> dict:
+def gmail_diagnose(address: str = "", app_password: str = "", host: str = "") -> dict:
     """Pinpoint WHY Gmail isn't working and how to fix it. Turns 'it's not working' into a specific
-    cause: not set up, a normal password instead of an App Password, wrong credentials, 2-Step
-    Verification off, or IMAP disabled. Actually connects, so the result is real — not a guess."""
+    cause: missing setup, a normal password instead of an App Password, revoked credentials, or
+    a managed-account policy. Optional arguments let Settings test unsaved fields directly."""
     import imaplib
-    host, user, pw = _creds()
+    if address or app_password or host:
+        saved_host, saved_user, saved_pw = _creds()
+        host = (host or saved_host or DEFAULT_IMAP_HOST).strip()
+        user = (address or saved_user).strip()
+        pw = "".join((app_password or saved_pw).split())
+    else:
+        host, user, pw = _creds()
     if not user:
         return {"ok": False, "configured": False, "problem": "No Gmail address is set.",
                 "fix": "Settings ▸ Gmail: enter your full Gmail address and a Google App Password."}
@@ -105,15 +112,16 @@ def gmail_diagnose() -> dict:
     except imaplib.IMAP4.error as e:
         low = str(e).lower()
         if any(t in low for t in ("web browser", "imap access", "not enabled", "enable imap")):
-            problem = "IMAP access is turned off for this Gmail account."
-            fix = ("Enable it: Gmail (web) ▸ Settings ▸ See all settings ▸ Forwarding and "
-                   "POP/IMAP ▸ Enable IMAP ▸ Save changes.")
+            problem = "This Google account or administrator is blocking IMAP access."
+            fix = ("Personal Gmail enables IMAP automatically. If this is a work/school Google "
+                   "Workspace account, ask the administrator to allow IMAP and App Passwords.")
         else:
             problem = "Gmail rejected the username / App Password."
             fix = ("1) Turn ON 2-Step Verification. 2) Create a NEW App Password at "
                    "myaccount.google.com/apppasswords and paste it (spaces are fine — Ember strips "
-                   "them). 3) Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP. "
-                   "4) Make sure the address is the SAME account the App Password belongs to.")
+                   "them). 3) Make sure the address is the SAME account the App Password belongs "
+                   "to. Google revokes App Passwords after the main account password changes. "
+                   "Advanced Protection and some work/school policies do not allow App Passwords.")
         try:
             conn.logout()
         except Exception:
@@ -126,7 +134,7 @@ def gmail_diagnose() -> dict:
         except Exception:
             pass
         return {"ok": False, "configured": True, "problem": f"Unexpected login error: {e}",
-                "fix": "Recreate the App Password and confirm 2-Step Verification + IMAP are on.",
+                "fix": "Recreate the App Password and confirm 2-Step Verification is on.",
                 "notes": notes}
     # Login worked — confirm IMAP is actually usable by opening the inbox.
     try:
@@ -137,12 +145,14 @@ def gmail_diagnose() -> dict:
             pass
         if typ != "OK":
             return {"ok": False, "configured": True, "address": user,
-                    "problem": "Signed in, but couldn't open the inbox — IMAP is likely disabled.",
-                    "fix": "Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP.", "notes": notes}
+                    "problem": "Signed in, but Gmail would not open the inbox.",
+                    "fix": "Retry once; for a managed Workspace account, ask the administrator "
+                           "to allow IMAP access.", "notes": notes}
     except Exception as e:
         return {"ok": False, "configured": True, "address": user,
                 "problem": f"Signed in, but opening the inbox failed: {e}",
-                "fix": "Enable IMAP in Gmail ▸ Settings ▸ Forwarding and POP/IMAP.", "notes": notes}
+                "fix": "Retry once; managed Workspace accounts may require administrator IMAP "
+                       "permission.", "notes": notes}
     return {"ok": True, "configured": True, "address": user,
             "message": "Gmail is working — signed in and opened the inbox successfully."
                        + (" (Note: " + " ".join(notes) + ")" if notes else "")}
@@ -532,7 +542,8 @@ TOOL_DECLARATIONS = [
     {"name": "gmail_diagnose",
      "description": "Diagnose WHY Gmail isn't working and how to fix it — it actually tries to "
                     "connect and reports the exact cause (not set up, a normal password instead of "
-                    "an App Password, wrong credentials, 2-Step Verification off, or IMAP disabled) "
+                    "an App Password, wrong credentials, 2-Step Verification off, or a Workspace "
+                    "administrator policy) "
                     "with the specific fix. Use this whenever Gmail fails.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
     {"name": "gmail_list_labels",

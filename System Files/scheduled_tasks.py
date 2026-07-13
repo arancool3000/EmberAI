@@ -18,13 +18,8 @@ from pathlib import Path
 
 
 def _data_dir() -> Path:
-    home = Path.home()
-    if sys.platform == "darwin":
-        d = home / "Library" / "Application Support" / "Ember" / "Scheduled Tasks"
-    elif sys.platform.startswith("win"):
-        d = home / "AppData" / "Roaming" / "Ember" / "Scheduled Tasks"
-    else:
-        d = home / ".ember" / "scheduled_tasks"
+    from app_data import data_dir
+    d = data_dir() / "Scheduled Tasks"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

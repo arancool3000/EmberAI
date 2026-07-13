@@ -101,7 +101,7 @@ def gmail_settings_from(address: str, app_password: str) -> dict:
     """Build the settings to enable Gmail (organise + send) from the tour. Mirrors the address +
     App Password into the SMTP/IMAP keys so one password powers everything. Returns {} if blank."""
     address = (address or "").strip()
-    app_password = (app_password or "").strip()
+    app_password = "".join((app_password or "").split())
     if not (address and app_password):
         return {}
     cfg = {

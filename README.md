@@ -23,7 +23,7 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 - **Autonomous agent** — 290+ tools: move the mouse/keyboard, read the screen with Vision OCR,
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
   **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths),
-  plus Ember's own click-through on-screen pointer so its actions are visibly distinct.
+  plus Ember's compact animated rainbow-star pointer so its actions are visibly distinct.
 - **Run modes & agents** — pick how Ember works: **auto** (autonomous), **plan** (proposes a
   plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
   run mode + tool scope + optional schedule), run them on demand or **on a schedule**; Ember can
@@ -79,6 +79,8 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 - **Local AI that drives the computer** — the free offline model (Ollama) can now run terminal
   commands, read/write files, see the screen (screenshot + OCR), move the mouse/type, and
   **analyse images** with a local vision model — not just chat. No API key, no rate limits.
+  App launches use the OS directly, labelled controls use semantic targeting, and coordinates
+  from resized screenshots are translated back to the real display to prevent wrong-side clicks.
   Text-only local models no longer crash on screen-reading requests (Ember detects vision
   support and falls back to OCR text), and tool calls a local model writes as plain text now
   run reliably instead of leaking raw JSON.

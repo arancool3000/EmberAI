@@ -15,7 +15,8 @@ def test_overlay_uses_exact_hotspot_and_can_be_disabled():
         pointer.request(200, 150, "click")
         app.processEvents()
         assert pointer.isVisible()
-        assert (pointer.x(), pointer.y()) == (186, 136)
+        assert (pointer.x(), pointer.y()) == (176, 126)
+        assert pointer.width() == pointer.height() == 48
 
         pointer.set_enabled(False)
         app.processEvents()
