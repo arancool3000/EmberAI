@@ -1195,6 +1195,28 @@ QLabel#bubbleBody {
     color: #e8ebf2;
     line-height: 1.45;
 }
+QFrame#bubbleThinking {
+    background-color: rgba(122,162,247,0.05);
+    border: 1px solid rgba(122,162,247,0.14);
+    border-radius: 12px;
+    padding: 0;
+    margin: 4px 0 9px 0;
+}
+QPushButton#thinkingToggle {
+    background: transparent;
+    border: none;
+    color: #8a93a8;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: left;
+    padding: 0;
+}
+QPushButton#thinkingToggle:hover { color: #b8c1d8; }
+QLabel#thinkingBody {
+    color: #929bb0;
+    font-size: 12px;
+    line-height: 1.4;
+}
 QFrame#typingIndicator {
     background: transparent;
     border: none;

@@ -49,6 +49,8 @@ import bulk_tools
 import security_suite
 # --- roadmap backlog feature modules ---
 import usage as usage_tracker           # imported aliased: _send_streaming has a local var named `usage`
+import api_health
+import uninstall
 import key_vault
 import download_guard
 import fileless_guard
@@ -1098,6 +1100,34 @@ TOOL_DECLARATIONS = [
     {"name": "now",
      "description": "Current date/time. timezone_name='local'|'utc'|'America/New_York'|etc.",
      "parameters": {"type": "OBJECT", "properties": {"timezone_name": {"type": "STRING"}}, "required": []}},
+    {"name": "api_health_status",
+     "description": "Report which AI APIs/keys Ember has used and how each is doing — rate limits, "
+                    "auth errors, timeouts, and last success — so you can explain why Ember switched "
+                    "APIs and which it currently prefers. No arguments.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    # ---- Uninstall Ember ----
+    {"name": "list_ember_installs",
+     "description": "List every Ember install, data folder, and login item found on this computer "
+                    "(read-only; nothing is changed). Use before uninstalling to show the user what "
+                    "exists.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "uninstall_ember",
+     "description": "Uninstall EVERY Ember instance on this computer: removes each install, Ember's "
+                    "data folder, and its login item. DESTRUCTIVE. Defaults to a DRY RUN that only "
+                    "reports what would be removed — pass confirm=true to actually remove (items go "
+                    "to the Trash/Recycle Bin when possible). The currently-running install is kept "
+                    "unless include_running=true (quit Ember first). keep_data=true leaves settings/"
+                    "memory in place.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "confirm": {"type": "BOOLEAN"}, "include_running": {"type": "BOOLEAN"},
+        "keep_data": {"type": "BOOLEAN"}}, "required": []}},
+    {"name": "uninstall_ember_instance",
+     "description": "Uninstall ONE specific Ember install by its folder/app path (from "
+                    "list_ember_installs). DESTRUCTIVE. Dry run unless confirm=true; set "
+                    "remove_data=true to also delete Ember's shared data folder. Trash-first.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "path": {"type": "STRING"}, "confirm": {"type": "BOOLEAN"},
+        "remove_data": {"type": "BOOLEAN"}}, "required": ["path"]}},
     # ---- System / hardware ----
     {"name": "power_action",
      "description": "Lock/sleep/restart/shutdown/hibernate/logoff the PC. DESTRUCTIVE for restart/shutdown.",
@@ -2083,6 +2113,10 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "url_encode": more_tools.url_encode,
     "url_decode": more_tools.url_decode,
     "now": more_tools.now,
+    "api_health_status": api_health.tool_status,
+    "list_ember_installs": uninstall.find_instances,
+    "uninstall_ember": uninstall.uninstall_all,
+    "uninstall_ember_instance": uninstall.uninstall_instance,
     # system / hardware
     "power_action": more_tools.power_action,
     "get_battery": more_tools.get_battery,
@@ -2474,6 +2508,38 @@ class Agent:
         i = self._api_key_index if index is None else index
         return "primary API" if i == 0 else f"backup API {i}"
 
+    def _api_hid(self, index: int | None = None) -> str | None:
+        """Stable api_health id for one of this agent's Gemini keys (or the active one)."""
+        try:
+            import api_health
+            i = self._api_key_index if index is None else index
+            return api_health.api_id("gemini", self.api_keys[i])
+        except Exception:
+            return None
+
+    def _record_api(self, kind: str, index: int | None = None) -> None:
+        """Record a success/issue for a Gemini key in api_health (best-effort, never raises)."""
+        try:
+            import api_health
+            hid = self._api_hid(index)
+            if not hid:
+                return
+            if kind == "success":
+                api_health.record_success(hid)
+            else:
+                api_health.record(hid, kind)
+        except Exception:
+            pass
+
+    def _record_api_error(self, err: Exception, index: int | None = None) -> None:
+        try:
+            import api_health
+            hid = self._api_hid(index)
+            if hid:
+                api_health.record_error(hid, err)
+        except Exception:
+            pass
+
     def _init_chat(self, model: str | None = None, history=None):
         if model:
             self.active_model = model
@@ -2510,10 +2576,16 @@ class Agent:
         # and retries less. Fewer round-trips = fewer API requests (the free tier counts
         # requests/day, not tokens). Dynamic budget; guarded for models/SDKs without it.
         if getattr(self, "_thinking_enabled", True):
+            # include_thoughts=True asks Gemini for a summary of its reasoning so Ember can SHOW
+            # its thinking. Fall back to plain thinking (no summaries) on SDKs that lack the flag.
             try:
-                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=-1, include_thoughts=True)
             except Exception:
-                pass
+                try:
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+                except Exception:
+                    pass
         try:
             config = types.GenerateContentConfig(**config_kwargs)
         except TypeError:
@@ -2761,22 +2833,38 @@ class Agent:
 
         def _try_api_key_fallback(reason: str):
             """Retry the SAME model with another Gemini API key before changing models.
-            History is carried across the key switch, so this works mid-turn too."""
+            The other keys are tried in api_health order — the one Ember most recently KNOWS
+            worked (and isn't cooling down) goes first — instead of blindly trying the next in
+            line. History is carried across the key switch, so this works mid-turn too."""
             if len(self.api_keys) < 2:
                 return None
             current_key = self._api_key_index
+            others = [i for i in range(len(self.api_keys)) if i != current_key]
+            try:
+                import api_health
+                others.sort(key=lambda i: -api_health.score(self._api_hid(i) or ""))
+            except Exception:
+                pass
             last_err = None
-            for i, _key in enumerate(self.api_keys):
-                if i == current_key:
-                    continue
+            for i in others:
+                healthy = ""
+                try:
+                    import api_health as _ah
+                    if not _ah.in_cooldown(self._api_hid(i) or ""):
+                        healthy = " (rated healthy)"
+                except Exception:
+                    pass
                 self._emit(AgentEvent("message",
                     f"[{self.active_model} {reason} on {self._api_label(current_key)} - "
-                    f"switching to {self._api_label(i)} (history kept)]"))
+                    f"switching to {self._api_label(i)}{healthy} (history kept)]"))
                 try:
                     self._switch_api_key(i)
-                    return self._chat.send_message(parts)
+                    resp = self._chat.send_message(parts)
+                    self._record_api("success", index=i)   # this key works — remember it
+                    return resp
                 except Exception as ke:
                     last_err = ke
+                    self._record_api_error(ke, index=i)
                     retryable_ke, status_ke = self._is_retryable(ke)
                     if self._is_limit_error(ke, status_ke):
                         continue
@@ -2799,6 +2887,7 @@ class Agent:
         t0 = time.time()
         try:
             resp = self._chat.send_message(parts)
+            self._record_api("success")   # this key just worked — remember it
             elapsed = time.time() - t0
             prev = self._model_latencies.get(self.active_model, elapsed)
             self._model_latencies[self.active_model] = 0.3 * elapsed + 0.7 * prev
@@ -2808,6 +2897,7 @@ class Agent:
                     "per call - consider switching primary model in Settings]"))
             return resp
         except Exception as e:
+            self._record_api_error(e)     # remember what went wrong on THIS key
             retryable, status = self._is_retryable(e)
             if not retryable:
                 raise
@@ -3107,6 +3197,7 @@ class Agent:
                 pass
             function_calls = []
             text_parts = []
+            thought_parts = []
             try:
                 candidates = getattr(response, "candidates", None) or []
                 for cand in candidates:
@@ -3119,11 +3210,18 @@ class Agent:
                             function_calls.append(fc)
                         text = getattr(part, "text", None)
                         if text:
-                            text_parts.append(text)
+                            # A thought-summary part (Gemini include_thoughts) is the model's
+                            # reasoning — surface it as "thinking", not as the answer.
+                            if getattr(part, "thought", False):
+                                thought_parts.append(text)
+                            else:
+                                text_parts.append(text)
             except Exception as e:
                 self._emit(AgentEvent("error", f"parse error: {e}"))
                 return
 
+            if thought_parts:
+                self._emit(AgentEvent("thinking", "\n".join(thought_parts).strip()))
             if text_parts:
                 self._emit(AgentEvent("message", "\n".join(text_parts).strip()))
 

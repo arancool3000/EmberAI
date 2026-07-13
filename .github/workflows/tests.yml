@@ -101,6 +101,9 @@ jobs:
             test_key_vault_recovery.py \
             test_openai_agent.py \
             test_agent_continuation.py \
+            test_api_health.py \
+            test_uninstall.py \
+            test_thinking.py \
             test_voice_mic.py \
             test_ember_bridge.py \
             test_av_static.py \
