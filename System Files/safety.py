@@ -158,6 +158,7 @@ SAFE_READONLY = {
     "gmail_status", "gmail_list_labels", "gmail_search", "gmail_read",  # Gmail (read-only)
     "folder_report", "bulk_read_documents",                            # bulk productivity (read-only)
     "security_dashboard", "software_update_check",                     # endpoint-security controls (read-only)
+    "octopus_discuss", "octopus_status",              # Octopus Mode — asks the user's own AIs, reads text back
 }
 
 SAFE_INTERACTION = {

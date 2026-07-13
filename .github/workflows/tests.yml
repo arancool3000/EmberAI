@@ -67,6 +67,7 @@ jobs:
             test_timers.py \
             test_updater.py \
             test_gmail_tools.py \
+            test_octopus.py \
             test_settings_dialog_methods.py \
             test_bulk_tools.py \
             test_panic.py \
