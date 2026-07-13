@@ -79,10 +79,24 @@ def test_more_steps_for_longer_moves():
 
 
 def test_options_roundtrip():
-    hm.set_options(speed=2.0, enabled=False)
+    hm.set_options(speed=2.0, enabled=False, show_pointer=False)
     o = hm.get_options()
-    assert o["speed"] == 2.0 and o["enabled"] is False
-    hm.set_options(speed=1.0, enabled=True)
+    assert o["speed"] == 2.0 and o["enabled"] is False and o["show_pointer"] is False
+    hm.set_options(speed=1.0, enabled=True, show_pointer=True)
+
+
+def test_pointer_hook_tracks_move_and_click():
+    fake = _FakePG()
+    seen = []
+    hm._pg = lambda: fake
+    hm.set_pointer_hook(lambda x, y, action: seen.append((x, y, action)))
+    try:
+        hm.move(320, 180, duration=0)
+        hm.click(640, 360)
+        assert (320, 180, "move") in seen
+        assert (640, 360, "click") in seen
+    finally:
+        import importlib; importlib.reload(hm)
 
 
 # --- driver accuracy (fake pyautogui, no display) ------------------------------
