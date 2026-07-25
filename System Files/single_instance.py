@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 from typing import Callable
 
@@ -11,10 +12,15 @@ SUMMON_MSG = b"SUMMON\n"
 
 def _bind_listener() -> socket.socket:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # REUSEADDR so a crash that left the port in TIME_WAIT doesn't lock us out on the next
-    # launch. A *live* instance still holds the listen socket, so bind still fails for it
-    # (we detect that via the connect-probe below) — this only frees stale TIME_WAIT locks.
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # On POSIX, REUSEADDR so a crash that left the port in TIME_WAIT doesn't lock us out on
+    # the next launch; a *live* instance still holds the listen socket so bind still fails for
+    # it (detected via the connect-probe below). On Windows, REUSEADDR instead lets a SECOND
+    # instance bind the SAME live port — defeating the single-instance guard — so use
+    # EXCLUSIVEADDRUSE there (Windows-only constant) to make the second bind() fail as intended.
+    if sys.platform.startswith("win"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("127.0.0.1", LOCK_PORT))
     s.listen(1)
     return s

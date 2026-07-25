@@ -53,9 +53,11 @@ def network_devices() -> dict:
         r = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10)
         devs = []
         for line in (r.stdout or "").splitlines():
-            m = re.search(r"\(?(\d+\.\d+\.\d+\.\d+)\)?\s+at\s+([0-9a-fA-F:]+)", line)
+            # Match IP + 6-octet MAC across platforms: colon (macOS/Linux) or dash (Windows)
+            # delimited, 1-2 hex digits per octet (macOS strips leading zeros). Normalize to colons.
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)\D+?([0-9a-fA-F]{1,2}(?:[:-][0-9a-fA-F]{1,2}){5})", line)
             if m:
-                devs.append({"ip": m.group(1), "mac": m.group(2)})
+                devs.append({"ip": m.group(1), "mac": m.group(2).replace("-", ":")})
         return {"ok": True, "count": len(devs), "devices": devs}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -79,8 +81,11 @@ def network_connections() -> dict:
             for line in (r.stdout or "").splitlines():
                 if "ESTAB" in line:
                     parts = line.split()
-                    if len(parts) >= 5:
-                        conns.append({"remote": parts[4]})
+                    # Foreign address is the second-to-last column and state the last on
+                    # Windows (4 tokens: proto/local/foreign/state), Linux and BSD/macOS
+                    # (6 tokens) alike — parts[-2] fixes Windows without regressing the rest.
+                    if len(parts) >= 4:
+                        conns.append({"remote": parts[-2]})
         else:
             return {"ok": False, "error": "no lsof/netstat available"}
         seen, uniq = set(), []

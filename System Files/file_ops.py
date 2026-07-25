@@ -410,7 +410,19 @@ def unzip_archive(archive_path: str, destination: str | None = None) -> dict:
                 names = z.namelist()
         elif any(suffix.endswith(s) for s in (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz")):
             with tarfile.open(p) as t:
-                t.extractall(dest)
+                # Guard against path-traversal ('../' or absolute) members that would let a
+                # malicious archive overwrite files outside `dest` (CVE-2007-4559). The "data"
+                # filter (Python >= 3.11.4 / 3.12) neutralizes unsafe members; fall back to a
+                # manual containment check on older interpreters that lack the parameter.
+                try:
+                    t.extractall(dest, filter="data")
+                except TypeError:
+                    dest_root = os.path.realpath(dest)
+                    for member in t.getmembers():
+                        target = os.path.realpath(os.path.join(dest, member.name))
+                        if target != dest_root and not target.startswith(dest_root + os.sep):
+                            return {"ok": False, "error": f"unsafe path in archive: {member.name}"}
+                    t.extractall(dest)
                 names = t.getnames()
         else:
             return {"ok": False, "error": f"unsupported archive: {suffix}"}

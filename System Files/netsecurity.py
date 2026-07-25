@@ -256,11 +256,13 @@ def _split_addr(addr: str) -> tuple:
     if "]" in addr:                       # [ipv6]:port
         host, _, port = addr.rpartition(":")
         return host.strip("[]"), _to_int(port)
-    if addr.count(":") == 1:
-        host, _, port = addr.partition(":")
-        return host, _to_int(port)
-    if ":" in addr:                       # bare ipv6 with no port
-        return addr, None
+    # Parse at the LAST colon so IPv6 wildcard listeners keep their port. Bracket-less
+    # forms like ':::22' (== '::' :22) or '::1:5900' were previously mis-read as
+    # port-less and dropped from the audit, hiding exposed SSH/RDP/VNC on IPv6.
+    host, sep, port = addr.rpartition(":")
+    p = _to_int(port)
+    if sep and p is not None and 0 <= p <= 65535:
+        return host.strip("[]"), p
     return addr, None
 
 

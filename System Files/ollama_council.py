@@ -118,7 +118,8 @@ def available_models(base_url: str = "http://localhost:11434") -> list:
         r = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
         if r.status_code != 200:
             return []
-        return [m.get("name", "").split(":")[0] or m.get("name", "")
-                for m in (r.json().get("models") or []) if m.get("name")]
+        # Keep the FULL installed id (e.g. 'qwen2.5:7b'): stripping the ':tag' yields a
+        # name Ollama can't run for tagged/non-'latest' installs. Matches local_ai_status.
+        return [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
     except Exception:
         return []

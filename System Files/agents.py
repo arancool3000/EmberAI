@@ -358,7 +358,8 @@ def _valid_schedule(schedule: dict) -> bool:
         except Exception:
             return False
     if "daily_at" in schedule:
-        return bool(re.match(r"^\d{1,2}:\d{2}$", str(schedule["daily_at"])))
+        m = re.match(r"^(\d{1,2}):(\d{2})$", str(schedule["daily_at"]))
+        return bool(m) and 0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 59
     return False
 
 

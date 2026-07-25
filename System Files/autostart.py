@@ -46,7 +46,10 @@ def program_args() -> list[str]:
     if sys.platform == "darwin":
         app = _macos_app_bundle()
         if app is not None:
-            return ["/usr/bin/open", str(app)]
+            # launchd must supervise the real app binary (sys.executable ==
+            # .../Ember.app/Contents/MacOS/Ember), NOT `open`, which forks Ember via
+            # LaunchServices and exits 0 — defeating KeepAlive/SuccessfulExit relaunch.
+            return [sys.executable]
         launcher = _base_dir() / "Ember.command"
         if launcher.exists():
             return ["/bin/bash", str(launcher)]

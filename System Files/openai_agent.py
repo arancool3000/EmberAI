@@ -66,7 +66,7 @@ def _agent_registries():
 # Tool-produced screenshots that should be fed back to the model as an image. OpenAI's
 # `role:"tool"` messages are text-only, so these are attached as a follow-up user image
 # message instead of being nested inside the tool result (as the Claude backend does).
-_SCREENSHOT_TOOLS = ("take_screenshot", "capture_window", "browser_screenshot")
+_SCREENSHOT_TOOLS = ("take_screenshot", "capture_window", "browser_screenshot", "zoom_screenshot")
 
 
 def _lower_types(node):
@@ -328,7 +328,7 @@ class OpenAIAgent:
                         "same operation four times."))
                     return
 
-                pending_images: list[str] = []
+                pending_images: list[tuple[str, str]] = []  # (base64, mime_type)
                 for tc in tool_calls:
                     if self._stop_flag.is_set():
                         return
@@ -396,16 +396,17 @@ class OpenAIAgent:
                     self._append_tool_result(tc.get("id"), result)
                     if (name in _SCREENSHOT_TOOLS and result.get("ok")
                             and result.get("image_b64")):
-                        pending_images.append(result["image_b64"])
+                        pending_images.append((result["image_b64"],
+                                               result.get("mime_type", "image/jpeg")))
 
                 # OpenAI tool messages are text-only, so any tool-produced screenshots are
                 # handed back as a single follow-up user image message.
                 if pending_images:
                     content = [{"type": "text",
                                 "text": "Screenshot(s) produced by the tool call(s) above:"}]
-                    for b64 in pending_images:
+                    for b64, mime in pending_images:
                         content.append({"type": "image_url", "image_url":
-                            {"url": f"data:image/png;base64,{b64}"}})
+                            {"url": f"data:{mime};base64,{b64}"}})
                     self._messages.append({"role": "user", "content": content})
         except Exception as e:
             self._emit(AgentEvent("error", f"{type(e).__name__}: {e}\n{traceback.format_exc()[:1500]}"))

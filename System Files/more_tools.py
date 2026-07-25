@@ -773,6 +773,17 @@ def _ics_dt(dt: datetime) -> str:
     return dt.strftime("%Y%m%dT%H%M%S")
 
 
+def _ics_text(s: str) -> str:
+    """Escape a value for an RFC 5545 TEXT field. Unescaped ';' ',' '\\' or newlines corrupt
+    the .ics (a ',' or ';' starts a new value/parameter; a raw newline ends the property)."""
+    return ((s or "")
+            .replace("\\", "\\\\")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+            .replace("\r\n", "\\n")
+            .replace("\n", "\\n"))
+
+
 def create_calendar_event(title: str, start: str, end: str | None = None,
                            description: str = "", location: str = "",
                            destination: str | None = None) -> dict:
@@ -788,9 +799,9 @@ def create_calendar_event(title: str, start: str, end: str | None = None,
             f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}\r\n"
             f"DTSTART:{_ics_dt(s)}\r\n"
             f"DTEND:{_ics_dt(e)}\r\n"
-            f"SUMMARY:{title}\r\n"
-            f"DESCRIPTION:{description}\r\n"
-            f"LOCATION:{location}\r\n"
+            f"SUMMARY:{_ics_text(title)}\r\n"
+            f"DESCRIPTION:{_ics_text(description)}\r\n"
+            f"LOCATION:{_ics_text(location)}\r\n"
             "END:VEVENT\r\nEND:VCALENDAR\r\n"
         )
         dst = Path(destination).expanduser() if destination else Path.home() / "Downloads" / f"event_{int(time.time())}.ics"

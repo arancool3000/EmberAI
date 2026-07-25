@@ -153,7 +153,7 @@ def match_url(pattern: str, url: str) -> bool:
     if not url:
         return False
     u = url.lower()
-    host = (urlparse(url).netloc or "").lower()
+    host = (urlparse(url).hostname or "").lower()   # .hostname strips port + userinfo
     if "*" in pattern or "?" in pattern:
         return fnmatch(u, pattern) or (bool(host) and fnmatch(host, pattern))
     if "/" not in pattern:   # a bare domain — exact host or a subdomain of it

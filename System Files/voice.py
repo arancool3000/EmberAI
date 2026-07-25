@@ -42,6 +42,8 @@ _say_proc = None            # current macOS `say` / audio-player subprocess (sto
 _mac_voice = None           # cached best macOS voice name ("" = system default, None = unprobed)
 _TTS_CONFIG: dict = {}      # set by the UI: {tts_engine, gemini_api_key, gemini_tts_voice,
                             #                  soundtools_api_key, soundtools_url, soundtools_voice}
+_pyttsx_speaking = threading.Event()  # True while the pyttsx3 (system) voice is talking
+_last_tts_file = None       # previous neural-TTS temp clip; deleted when the next one starts
 
 
 def _offline() -> bool:
@@ -178,6 +180,11 @@ def _system_tts(text: str):
         _mac_say(text)
         return
 
+    # Mark speaking BEFORE the thread starts (not inside _run) so is_speaking() is reliably
+    # True the instant speak() returns — pyttsx3 has no live subprocess for is_speaking to poll,
+    # so without this flag the mic-gating loop thinks Ember is silent and captures its own voice.
+    _pyttsx_speaking.set()
+
     def _run():
         try:
             with _tts_lock:
@@ -186,6 +193,8 @@ def _system_tts(text: str):
                 eng.runAndWait()
         except Exception:
             pass
+        finally:
+            _pyttsx_speaking.clear()
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -232,13 +241,24 @@ def _play_audio_file(path: str) -> bool:
     stop_speaking() can cut it. Returns True if a player was launched, False if none could handle
     the file — so the caller (edge/gemini/soundtools TTS) can fall back to the system voice
     instead of going silently mute."""
-    global _say_proc
+    global _say_proc, _last_tts_file
     stop_speaking()
+    # Delete the PREVIOUS neural-TTS temp clip now that its player has been stopped (on Windows
+    # the MediaPlayer holds the file handle during playback, so deleting only once the next clip
+    # starts is safe). Without this, every spoken reply leaks a temp .mp3/.wav.
+    prev = _last_tts_file
+    if prev:
+        try:
+            Path(prev).unlink(missing_ok=True)
+        except Exception:
+            pass
+        _last_tts_file = None
     cmd = _audio_player_cmd(path)
     if cmd is None:
         return False
     try:
         _say_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _last_tts_file = path
         return True
     except Exception:
         return False
@@ -359,6 +379,8 @@ def is_speaking() -> bool:
     """True while a TTS playback subprocess (say/afplay/etc.) is still running. Used by the
     conversational orb loop to wait for Ember to finish talking before it listens again, so
     the mic doesn't capture Ember's own voice."""
+    if _pyttsx_speaking.is_set():   # pyttsx3 system voice has no pollable subprocess
+        return True
     proc = _say_proc
     if proc is None:
         return False
@@ -370,6 +392,7 @@ def is_speaking() -> bool:
 
 def stop_speaking():
     global _tts_engine, _say_proc
+    _pyttsx_speaking.clear()   # reflect barge-in immediately for the pyttsx3 voice
     if _say_proc is not None:
         try:
             _say_proc.terminate()
@@ -408,7 +431,10 @@ class HoldRecorder:
         except Exception as e:
             self.error = f"speech_recognition not installed: {e}"
             return False
-        if not MIC_LOCK.acquire(timeout=2.0):
+        # Wait longer than the wake-word loop's worst-case in-flight capture
+        # (_LISTEN_TIMEOUT + _PHRASE_LIMIT ≈ 5.5s) so push-to-talk doesn't spuriously lose
+        # the lock and fail with "microphone is busy" when speech ends near the listen window.
+        if not MIC_LOCK.acquire(timeout=6.0):
             self.error = "microphone is busy"
             return False
         self._held_lock = True

@@ -151,6 +151,10 @@ def _schedule_windows(task_id: str, name: str, command: str, dt: datetime,
     ]
     if sc == "ONCE":
         args += ["/SD", dt.strftime("%m/%d/%Y")]
+    elif sc == "WEEKLY":
+        # Without an explicit /D, schtasks fires WEEKLY on the task-CREATION weekday, not the
+        # requested one. Map Python's Monday=0..Sunday=6 to schtasks' day tokens.
+        args += ["/D", ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][dt.weekday()]]
     r = subprocess.run(args, capture_output=True, text=True, timeout=20)
     return {
         "ok": r.returncode == 0,

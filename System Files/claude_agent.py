@@ -230,10 +230,13 @@ class ClaudeAgent:
                     # Attach a tool-produced screenshot INSIDE its own tool_result so the model
                     # attributes the image to the call that produced it (and so parallel
                     # screenshots each keep their image, instead of only the last surviving).
-                    if (name in ("take_screenshot", "capture_window", "browser_screenshot")
+                    if (name in ("take_screenshot", "capture_window", "browser_screenshot",
+                                 "zoom_screenshot")
                             and result.get("ok") and result.get("image_b64")):
                         blocks_out.append({"type": "image", "source":
-                            {"type": "base64", "media_type": "image/png", "data": result["image_b64"]}})
+                            {"type": "base64",
+                             "media_type": result.get("mime_type", "image/jpeg"),
+                             "data": result["image_b64"]}})
                     content.append({
                         "type": "tool_result",
                         "tool_use_id": tu_id,

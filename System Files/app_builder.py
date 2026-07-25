@@ -219,6 +219,11 @@ def list_apps() -> dict:
 def remove_app(name: str = "") -> dict:
     """Delete a standalone app Ember built (its folder and launcher)."""
     name = _slug(name)
+    # Validate BEFORE computing app_dir: an empty/whitespace name slugs to "" and
+    # `_apps_dir() / ""` collapses back to the apps folder itself, so an unguarded
+    # rmtree would wipe every built app. _NAME_RE also forbids '.'/'/', blocking escapes.
+    if not name or not _NAME_RE.match(name):
+        return {"ok": False, "error": f"no built app named '{name}'"}
     app_dir = _app_dir(name)
     if not app_dir.exists():
         return {"ok": False, "error": f"no built app named '{name}'"}

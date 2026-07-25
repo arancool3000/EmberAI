@@ -55,6 +55,13 @@ def strip_metadata(path: str, output: str = "") -> dict:
     try:
         with Image.open(p) as im:
             clean = Image.new(im.mode, im.size)
+            # Palette-mode pixels are indices into a color table; without copying the
+            # palette the rebuilt image resolves those indices against a default table and
+            # the colors are lost. Preserve it for P/PA images.
+            if im.mode in ("P", "PA"):
+                pal = im.getpalette()
+                if pal:
+                    clean.putpalette(pal)
             clean.putdata(list(im.getdata()))
             clean.save(str(out))
         return {"ok": True, "output": str(out), "note": "EXIF + embedded metadata removed"}

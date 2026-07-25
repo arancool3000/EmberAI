@@ -204,7 +204,9 @@ def _parse_pe(data: bytes) -> dict:
         magic = struct.unpack_from("<H", data, opt)[0] if size_opt else 0
         out["pe_plus"] = (magic == 0x20B)
         # Import directory (data directory index 1): RVA/size. Zero size => no imports.
-        dd_off = opt + (112 if magic == 0x20B else 96)
+        # The data-directory array begins at opt+(112|96); index 0 is Export, index 1 is
+        # Import, so advance one 8-byte entry (+8) to read Import, not Export.
+        dd_off = opt + (112 if magic == 0x20B else 96) + 8
         try:
             imp_rva, imp_size = struct.unpack_from("<II", data, dd_off)
             out["has_imports"] = imp_size > 0

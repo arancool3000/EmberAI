@@ -2644,7 +2644,7 @@ class SettingsDialog(QDialog):
 
         self._sec_autokill = QCheckBox(
             "Auto-terminate confirmed-malicious processes (uncheck for alert-only)")
-        self._sec_autokill.setChecked(bool(cfg.get("fileless_auto_terminate", True)))
+        self._sec_autokill.setChecked(bool(cfg.get("fileless_auto_terminate", False)))
         self._sec_autokill.stateChanged.connect(
             lambda s: antivirus.set_config(fileless_auto_terminate=bool(s)))
         v.addWidget(self._sec_autokill)
