@@ -3,21 +3,25 @@
 const EMBER = { owner: "arancool3000", repo: "EmberAI" };
 EMBER.repoUrl = `https://github.com/${EMBER.owner}/${EMBER.repo}`;
 EMBER.releasesUrl = `${EMBER.repoUrl}/releases/latest`;
+// Native Android app APK (built from android/ by the Android APK workflow).
+EMBER.androidApk = `${EMBER.repoUrl}/raw/main/android/app/release/ember-debug.apk`;
 
 function detectOS() {
   const ua = (navigator.userAgent || "") + " " + (navigator.platform || "");
+  if (/Android/i.test(ua)) return "android";
   if (/Win/i.test(ua)) return "windows";
   if (/Mac|iPhone|iPad|iPod/i.test(ua)) return "macos";
-  if (/Linux/i.test(ua) && !/Android/i.test(ua)) return "linux";
+  if (/Linux/i.test(ua)) return "linux";
   return "macos";
 }
 const OS = detectOS();
-const OS_LABEL = { macos: "macOS", windows: "Windows", linux: "Linux" };
+const OS_LABEL = { macos: "macOS", windows: "Windows", linux: "Linux", android: "Android" };
 const ASSET = { macos: "Ember-macOS.zip", windows: "Ember-Windows.zip", linux: "Ember-Linux.AppImage" };
 
 function dlUrl(manifest, os) {
   const d = (manifest.downloads || {})[os];
   if (d && d.url) return d.url;
+  if (os === "android") return EMBER.androidApk;
   return `${EMBER.releasesUrl}/download/${ASSET[os]}`;
 }
 
@@ -36,6 +40,7 @@ function applyDownloads(manifest) {
   document.querySelectorAll("[data-dl='macos']").forEach(b => b.href = dlUrl(manifest, "macos"));
   document.querySelectorAll("[data-dl='windows']").forEach(b => b.href = dlUrl(manifest, "windows"));
   document.querySelectorAll("[data-dl='linux']").forEach(b => b.href = dlUrl(manifest, "linux"));
+  document.querySelectorAll("[data-dl='android']").forEach(b => b.href = dlUrl(manifest, "android"));
 
   document.querySelectorAll("[data-oscard]").forEach(c => {
     const isPrimary = c.getAttribute("data-oscard") === OS;

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/ember_surface">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/filter_title"
+            android:textColor="@color/ember_flame_bright"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/filter_intro"
+            android:textColor="@color/ember_text_dim"
+            android:textSize="13sp"
+            android:lineSpacingExtra="2dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="@string/filter_custom_label"
+            android:textColor="@color/ember_text"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/custom_words"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/field_bg"
+            android:hint="@string/filter_custom_hint"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:minLines="2"
+            android:gravity="top"
+            android:padding="12dp"
+            android:textColor="@color/ember_text"
+            android:textColorHint="@color/ember_text_dim"
+            android:textSize="15sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="18dp"
+            android:background="@color/ember_divider" />
+
+        <Switch
+            android:id="@+id/unblock_all"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="@string/filter_unblock"
+            android:textColor="@color/ember_text"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/age_note"
+            android:textColor="@color/ember_gold"
+            android:textSize="12sp" />
+
+        <CheckBox
+            android:id="@+id/age_confirm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/age_confirm"
+            android:textColor="@color/ember_text"
+            android:textSize="14sp" />
+    </LinearLayout>
+</ScrollView>

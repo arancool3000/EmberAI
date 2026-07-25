@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Framework-only Material theme (no AndroidX). Dark, ember-tinted. -->
+    <style name="Theme.Ember" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/ember_flame</item>
+        <item name="android:colorPrimaryDark">@color/ember_bg</item>
+        <item name="android:colorAccent">@color/ember_flame_bright</item>
+        <item name="android:windowBackground">@color/ember_bg</item>
+        <item name="android:textColorPrimary">@color/ember_text</item>
+        <item name="android:textColorSecondary">@color/ember_text_dim</item>
+        <item name="android:textColorHint">@color/ember_text_dim</item>
+        <item name="android:statusBarColor">@color/ember_bg</item>
+        <item name="android:navigationBarColor">@color/ember_bg</item>
+    </style>
+
+    <style name="EmberDialog" parent="@android:style/Theme.Material.Dialog">
+        <item name="android:colorAccent">@color/ember_flame_bright</item>
+        <item name="android:textColorPrimary">@color/ember_text</item>
+        <item name="android:windowBackground">@color/ember_surface</item>
+    </style>
+</resources>

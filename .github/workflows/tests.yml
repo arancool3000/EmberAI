@@ -78,7 +78,6 @@ jobs:
             test_mac_keys.py \
             test_terminal.py \
             test_agent_tasks.py \
-            test_ipad_app.py \
             test_tunnel.py \
             test_pairing.py \
             test_tools_linux.py \

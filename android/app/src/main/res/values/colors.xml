@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ember palette -->
+    <color name="ember_bg">#0E0B0A</color>
+    <color name="ember_surface">#1A1512</color>
+    <color name="ember_surface2">#241C17</color>
+    <color name="ember_flame">#FF6A1A</color>
+    <color name="ember_flame_bright">#FF9330</color>
+    <color name="ember_ember">#E0451B</color>
+    <color name="ember_gold">#FFC24B</color>
+    <color name="ember_text">#F5EFEA</color>
+    <color name="ember_text_dim">#B9ADA3</color>
+    <color name="ember_user_bubble">#3A2213</color>
+    <color name="ember_ai_bubble">#1F1813</color>
+    <color name="ember_divider">#2E241D</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>

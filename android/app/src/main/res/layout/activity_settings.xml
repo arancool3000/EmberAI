@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/bg_app"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/settings"
+            android:textColor="@color/ember_flame_bright"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/ember_divider" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView style="@style/Lbl" android:text="@string/provider" />
+            <Spinner
+                android:id="@+id/provider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/field_bg"
+                android:padding="8dp" />
+
+            <TextView style="@style/Lbl" android:text="@string/gemini_key" />
+            <EditText android:id="@+id/gemini_key" style="@style/Field"
+                android:inputType="textPassword" />
+            <TextView style="@style/Lbl" android:text="@string/gemini_model" />
+            <EditText android:id="@+id/gemini_model" style="@style/Field"
+                android:inputType="text" />
+
+            <TextView style="@style/Lbl" android:text="@string/claude_key" />
+            <EditText android:id="@+id/claude_key" style="@style/Field"
+                android:inputType="textPassword" />
+            <TextView style="@style/Lbl" android:text="@string/claude_model" />
+            <EditText android:id="@+id/claude_model" style="@style/Field"
+                android:inputType="text" />
+
+            <TextView style="@style/Lbl" android:text="@string/openai_key" />
+            <EditText android:id="@+id/openai_key" style="@style/Field"
+                android:inputType="textPassword" />
+            <TextView style="@style/Lbl" android:text="@string/openai_model" />
+            <EditText android:id="@+id/openai_model" style="@style/Field"
+                android:inputType="text" />
+            <TextView style="@style/Lbl" android:text="@string/openai_base" />
+            <EditText android:id="@+id/openai_base" style="@style/Field"
+                android:inputType="textUri" />
+
+            <Switch android:id="@+id/web_search" style="@style/Toggle"
+                android:text="@string/web_search" />
+            <Switch android:id="@+id/read_aloud" style="@style/Toggle"
+                android:text="@string/read_aloud" />
+
+            <TextView style="@style/Lbl" android:text="@string/memory" />
+            <EditText android:id="@+id/memory" style="@style/Field"
+                android:inputType="textMultiLine|textCapSentences"
+                android:minLines="3" android:gravity="top"
+                android:hint="@string/memory_hint" />
+
+            <Button
+                android:id="@+id/save"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="22dp"
+                android:background="@drawable/btn_send"
+                android:text="@string/save"
+                android:textColor="@color/white"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/keys_note"
+                android:textColor="@color/ember_text_dim"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

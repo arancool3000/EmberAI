@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ember</string>
+    <string name="settings">Settings</string>
+    <string name="hint_message">Message Ember…</string>
+    <string name="send">Send</string>
+    <string name="mic">Voice input</string>
+    <string name="new_chat">New chat</string>
+    <string name="history">History</string>
+    <string name="clear_chat">Clear chat</string>
+    <string name="stop">Stop</string>
+
+    <!-- Settings -->
+    <string name="provider">AI provider</string>
+    <string name="gemini_key">Google Gemini API key</string>
+    <string name="claude_key">Anthropic (Claude) API key</string>
+    <string name="openai_key">OpenAI / compatible API key</string>
+    <string name="openai_base">OpenAI-compatible base URL</string>
+    <string name="gemini_model">Gemini model</string>
+    <string name="claude_model">Claude model</string>
+    <string name="openai_model">OpenAI model</string>
+    <string name="web_search">Web search grounding (Gemini)</string>
+    <string name="read_aloud">Read replies aloud</string>
+    <string name="memory">Memory — what Ember knows about you</string>
+    <string name="memory_hint">e.g. My name is Alex. I prefer concise answers. I use Python.</string>
+    <string name="save">Save</string>
+    <string name="keys_note">Keys are stored only on this device. Ember has no servers.</string>
+
+    <!-- New-chat content filter dialog -->
+    <string name="filter_title">New chat — word filter</string>
+    <string name="filter_intro">By default Ember hides a short list of strong words. You can turn the filter off completely, or add your own words to block.</string>
+    <string name="filter_unblock">Unblock all words (no filtering)</string>
+    <string name="filter_custom_label">Add your own blocked words (comma-separated)</string>
+    <string name="filter_custom_hint">word1, word2, word3</string>
+    <string name="age_note">You must be 18 or older to turn the filter off.</string>
+    <string name="age_confirm">I confirm I am 18 or older</string>
+    <string name="start_chat">Start chat</string>
+    <string name="cancel">Cancel</string>
+    <string name="age_required">Please confirm you are 18 or older to unblock all words.</string>
+</resources>

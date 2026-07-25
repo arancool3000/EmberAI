@@ -248,10 +248,9 @@ trackpad, keyboard, quality controls, **one-tap quick-actions** (Lock PC, Mute, 
 Sleep Screen, and a custom-command box), and a Chat tab for telling Ember what to do remotely.
 It’s LAN-only and PIN-gated; stop it when done.
 
-**iPad / tablet:** open the link in Safari, then **Share → Add to Home Screen** — Ember Link
-installs with its own icon and launches full-screen like a native app (it’s a PWA), with an
-iPad-optimised layout. A native iPad app can’t control a computer (iOS sandboxing), so this
-client is the supported way to use an iPad with Ember.
+**Phone / tablet:** open the link in your phone’s browser, then use **Add to Home Screen** —
+Ember Link installs with its own icon and launches full-screen, with a roomier tablet layout.
+This turns any phone into a remote for your computer.
 
 **Connect from anywhere (opt-in):** in the Ember Link panel, check **“Connect from anywhere.”**
 This starts an outbound [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
@@ -261,6 +260,25 @@ that for a long-lived pairing token — after that, the same device can reconnec
 using the public link, no PIN needed. The short PIN itself is **never** accepted over the public
 tunnel (only from a real LAN address), so there’s nothing for the internet to brute-force. Revoke
 every paired device any time from the same panel.
+
+---
+
+## 🤖 Ember on Android (native app)
+
+Beyond controlling your PC, there’s now a **native Android app** — Ember itself running on the
+phone, not a remote. It’s a real app (framework-only Java, no web wrapper) that talks directly to
+your chosen model:
+
+- **Chat with Gemini, Claude, or OpenAI** (and any OpenAI-compatible endpoint), with streaming.
+- **Voice** in (speech-to-text) and out (read-aloud), **web-search grounding**, and **memory**.
+- **Word filter** — the new-chat dialog lets you keep the default filter, add your own blocked
+  words, or turn filtering off entirely (18+ confirmation). It only changes how text is shown.
+- **Ember Arcade** — five built-in games: Snake, 2048, Breakout, Memory Match, and Tic-Tac-Toe.
+- **Private** — keys and chats stay on the device.
+
+Grab `ember-debug.apk` from the [Download page](https://arancool3000.github.io/EmberAI/download.html)
+or the **Android APK** GitHub Action’s artifacts, or build it yourself with one command — see
+[`android/`](android/). Requires Android 7.0+.
 
 ---
 
