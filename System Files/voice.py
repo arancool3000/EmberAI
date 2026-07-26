@@ -151,28 +151,39 @@ def speak(text: str):
       • 'gemini'     — Gemini TTS (very natural; needs a Gemini key; rate-limited)
       • 'soundtools' — a custom HTTP TTS endpoint URL (advanced; key optional)
       • 'system'/auto — native macOS `say` (premium voice) / pyttsx3 elsewhere (free, default)
-    Any engine falls back to the system voice on error so speech never silently dies."""
+    Any engine falls back to the system voice on error so speech never silently dies.
+
+    The engine dispatch runs on a background thread and this returns immediately (the
+    returned Thread is only for tests to synchronise on). The neural engines each make a
+    blocking network call + audio write, so doing this inline froze the whole Qt UI for the
+    duration of every spoken reply."""
     if not text or not text.strip():
-        return
+        return None
     engine = (_TTS_CONFIG.get("tts_engine") or "system").lower()
     # Offline Mode: the system voice is the only fully-local engine; the others call the network.
     if _offline() and engine in ("edge", "gemini", "soundtools"):
         engine = "system"
-    try:
-        if engine == "edge":
-            if _edge_tts(text):
-                return
-        elif engine == "gemini" and (_TTS_CONFIG.get("gemini_api_key") or "").strip():
-            if _gemini_tts(text):
-                return
-        elif engine == "soundtools" and (_TTS_CONFIG.get("soundtools_url") or "").strip():
-            # soundtools.io has no public API key — this path is for ANY custom HTTP TTS
-            # endpoint you point it at (auth header sent only if you provide a key).
-            if _soundtools_tts(text):
-                return
-    except Exception:
-        pass
-    _system_tts(text)
+
+    def _dispatch():
+        try:
+            if engine == "edge":
+                if _edge_tts(text):
+                    return
+            elif engine == "gemini" and (_TTS_CONFIG.get("gemini_api_key") or "").strip():
+                if _gemini_tts(text):
+                    return
+            elif engine == "soundtools" and (_TTS_CONFIG.get("soundtools_url") or "").strip():
+                # soundtools.io has no public API key — this path is for ANY custom HTTP TTS
+                # endpoint you point it at (auth header sent only if you provide a key).
+                if _soundtools_tts(text):
+                    return
+        except Exception:
+            pass
+        _system_tts(text)
+
+    th = threading.Thread(target=_dispatch, daemon=True)
+    th.start()
+    return th
 
 
 def _system_tts(text: str):

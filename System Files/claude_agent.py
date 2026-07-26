@@ -130,7 +130,21 @@ class ClaudeAgent:
     def _run_turn(self, user_text: str):
         self._stop_flag.clear()
         try:
-            self._messages.append({"role": "user", "content": self._user_block(user_text)})
+            # Heal a Stop-mid-execution dangling tool_use before adding the new turn: the
+            # Anthropic API 400s unless EVERY tool_use is answered by a tool_result in the
+            # immediately following user turn. Pressing Stop while tools were running left
+            # the trailing assistant tool_use unanswered, permanently breaking the chat.
+            # The cancellation tool_results and the new user text must go in ONE user turn
+            # so role alternation stays valid.
+            content = []
+            if self._messages and self._messages[-1].get("role") == "assistant":
+                for b in (self._messages[-1].get("content") or []):
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id"):
+                        content.append({"type": "tool_result", "tool_use_id": b["id"],
+                                        "content": [{"type": "text",
+                                                     "text": "[cancelled by user]"}]})
+            content.extend(self._user_block(user_text))
+            self._messages.append({"role": "user", "content": content})
             last_call_signature = ""
             repeated_call_rounds = 0
             while not self._stop_flag.is_set():

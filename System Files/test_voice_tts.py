@@ -12,7 +12,9 @@ def _route(cfg, edge=True, gem=True, snd=True):
     voice._gemini_tts = lambda t: (calls.append("gemini"), gem)[1]
     voice._soundtools_tts = lambda t: (calls.append("soundtools"), snd)[1]
     voice._system_tts = lambda t: calls.append("system")
-    voice.speak("hello there")
+    th = voice.speak("hello there")   # speak() dispatches on a background thread
+    if th is not None:
+        th.join(timeout=10)
     return calls
 
 

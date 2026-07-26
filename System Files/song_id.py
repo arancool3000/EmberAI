@@ -76,14 +76,43 @@ def _record_pyaudio(seconds: int, path: str) -> str:
             pa.terminate()
 
 
+def _record_sounddevice(seconds: int, path: str) -> str:
+    """Record via sounddevice — the input backend Ember actually ships (requirements.txt).
+    PyAudio has no macOS/Linux wheel and is an optional extra, so without this fallback
+    "what song is this?" failed with ModuleNotFoundError on a normal install."""
+    import sounddevice as sd
+    frames = []
+    with sd.RawInputStream(samplerate=_SAMPLE_RATE, channels=_CHANNELS,
+                           dtype="int16", blocksize=_CHUNK) as stream:
+        remaining = int(_SAMPLE_RATE * seconds)
+        while remaining > 0:
+            block = min(_CHUNK, remaining)
+            data, _overflowed = stream.read(block)
+            frames.append(bytes(data))
+            remaining -= block
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(_CHANNELS)
+        wf.setsampwidth(2)          # int16
+        wf.setframerate(_SAMPLE_RATE)
+        wf.writeframes(b"".join(frames))
+    return path
+
+
 def record_ambient(seconds: int = 12, path: str | None = None) -> str:
     """Record `seconds` of mic audio to a WAV and return its path."""
     seconds = max(_MIN_SECONDS, min(_MAX_SECONDS, int(seconds)))
     if path is None:
         fd, path = tempfile.mkstemp(prefix="ember_song_", suffix=".wav")
         os.close(fd)
-    rec = _RECORDER or _record_pyaudio
-    return rec(seconds, path)
+    if _RECORDER is not None:
+        return _RECORDER(seconds, path)
+    # Prefer pyaudio when present, else fall back to sounddevice — mirrors the
+    # pyaudio->sounddevice order in audio_level.open_input_stream / live_voice.open_mic.
+    try:
+        import pyaudio  # noqa: F401
+    except Exception:
+        return _record_sounddevice(seconds, path)
+    return _record_pyaudio(seconds, path)
 
 
 # ---------------------------------------------------------------------------

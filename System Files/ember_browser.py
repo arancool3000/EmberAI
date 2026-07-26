@@ -442,16 +442,27 @@ if WEBENGINE_OK:
 
         def acceptNavigationRequest(self, url, nav_type, is_main_frame):
             s = url.toString()
-            if SEARCH_HOST in s and "embercfg=" in s:
-                # The customise panel posts its JSON here to persist it. Emit it and BLOCK the
-                # navigation so the live-previewed page isn't reloaded out from under the user.
-                cfg = parse_qs(urlparse(s).query).get("embercfg", [""])[0]
-                self.configRequested.emit(cfg)
-                return False
-            if SEARCH_HOST in s and ("?q=" in s or "&q=" in s):
-                q = parse_qs(urlparse(s).query).get("q", [""])[0]
-                self.searchRequested.emit(q)
-                return False
+            # Only honour these internal signals when the navigation is a main-frame request
+            # whose TARGET host is exactly the sentinel AND whose INITIATOR is already the
+            # internal start page. A substring test ("ember.search" in s) matched any foreign
+            # URL containing that text, and a target-only test still let any site run
+            # location.href='https://ember.search/?embercfg=…' to silently overwrite the saved
+            # Ember Search customisation. A foreign origin can never be committed to the
+            # sentinel host, so the initiator check is the load-bearing one.
+            try:
+                from_start = (self.url().host() or "").lower() == SEARCH_HOST
+            except Exception:
+                from_start = False
+            if is_main_frame and from_start and (urlparse(s).hostname or "").lower() == SEARCH_HOST:
+                q = parse_qs(urlparse(s).query)
+                if "embercfg" in q:
+                    # The customise panel posts its JSON here to persist it. Emit it and BLOCK
+                    # the navigation so the live-previewed page isn't reloaded under the user.
+                    self.configRequested.emit(q.get("embercfg", [""])[0])
+                    return False
+                if "q" in q:
+                    self.searchRequested.emit(q.get("q", [""])[0])
+                    return False
             return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
         def createWindow(self, _type):
@@ -539,8 +550,10 @@ def _instant_answer(query: str):
 
 class EmberBrowser(QWidget):
     _ai_result = pyqtSignal(str)
-    _search_result = pyqtSignal(str, str)
-    _answer_ready = pyqtSignal(str, str)         # query, answer-html — fills the card in place
+    # All three carry the ORIGINATING view: the search runs on a worker thread, so by the time
+    # it finishes the user may have switched/opened tabs and _cur() is someone else's page.
+    _search_result = pyqtSignal(object, str, str)   # view, query, results-html
+    _answer_ready = pyqtSignal(object, str, str)    # view, query, answer-html — fills card in place
     _ext_made = pyqtSignal(str, str, str, str)   # name, match, description, js
 
     def __init__(self, settings: dict | None = None):
@@ -1456,7 +1469,7 @@ class EmberBrowser(QWidget):
                 "<div class=skl style='width:88%;margin-top:9px'></div></div></div>"
                 "<div class=empty>Searching the web&hellip;</div></div>")
         v.setHtml(self._shell(body, home=False), QUrl(f"https://{SEARCH_HOST}/"))
-        threading.Thread(target=self._search_thread, args=(query,), daemon=True).start()
+        threading.Thread(target=self._search_thread, args=(v, query), daemon=True).start()
 
     def _grounded_answer(self, query: str, results):
         """Answer a query GROUNDED in live web content: pull text from the top results and
@@ -1477,17 +1490,17 @@ class EmberBrowser(QWidget):
             "don't answer it, say so.\n\n"
             f"WEB RESULTS:{context}\n\nQUERY: {query}")
 
-    def _search_thread(self, query: str):
+    def _search_thread(self, view, query: str):
         results = _ddg(query)
         inst = _instant_answer(query)
         # Phase 1: show the web results + engine links IMMEDIATELY, with the answer card in a
         # "thinking" state — so the page is useful straight away instead of waiting on the (slow)
         # grounded AI answer (which fetches pages + a model call).
         self._search_result.emit(
-            query, self._search_results_html(query, None, results, inst, pending=True))
+            view, query, self._search_results_html(query, None, results, inst, pending=True))
         # Phase 2: compute the AI answer, then slot it into the card in place (no reload).
         answer = self._grounded_answer(query, results)
-        self._answer_ready.emit(query, self._render_answer_html(answer, results))
+        self._answer_ready.emit(view, query, self._render_answer_html(answer, results))
 
     def _render_answer_html(self, answer, results):
         """The AI answer as inner HTML for #ansBody: escaped, with [n] citations linkified to
@@ -1579,18 +1592,30 @@ class EmberBrowser(QWidget):
                 f"{calc}{answer_card}{cards}{pills}</div>{copy_js}")
         return self._shell(body, home=False)
 
-    def _load_search_results(self, query, html):
-        v = self._cur()
-        if v is not None:
-            v.setHtml(html, QUrl(f"https://{SEARCH_HOST}/"))
+    def _tab_is_live(self, view) -> bool:
+        """True if `view` is still one of our open tabs. _close_tab calls deleteLater(), so a
+        closed initiator leaves a deleted sip wrapper whose use raises RuntimeError."""
+        if view is None:
+            return False
+        try:
+            return self.tabs.indexOf(view) >= 0
+        except RuntimeError:
+            return False
 
-    def _update_search_answer(self, query, answer_html):
+    def _load_search_results(self, view, query, html):
+        # Write back to the tab that STARTED the search, not whatever tab happens to be
+        # current now — otherwise a slow search clobbers an unrelated page the user opened
+        # while waiting.
+        if self._tab_is_live(view):
+            view.setHtml(html, QUrl(f"https://{SEARCH_HOST}/"))
+
+    def _update_search_answer(self, view, query, answer_html):
         """Phase 2: drop the finished AI answer into the results page's answer card in place
-        (no reload, so the results the user is already reading don't jump) — but only if the
-        current page is still showing THIS query (data-q guard against a newer search)."""
-        v = self._cur()
-        if v is None:
+        (no reload, so the results the user is already reading don't jump) — but only if that
+        tab is still open and still showing THIS query (data-q guard against a newer search)."""
+        if not self._tab_is_live(view):
             return
+        v = view
         js = ("(function(){var card=document.getElementById('answerCard');"
               "if(!card||card.getAttribute('data-q')!==%s)return;"
               "var c=document.getElementById('ansBody');if(c)c.innerHTML=%s;"
@@ -1978,7 +2003,10 @@ class EmberBrowser(QWidget):
                 if sys.platform == "darwin":
                     subprocess.Popen(["open", "-R", path])
                 elif sys.platform.startswith("win"):
-                    subprocess.Popen(["explorer", "/select,", path])
+                    # Explorer needs `/select,<path>` as ONE argument with only the path
+                    # quoted. As separate argv items the switch and path are split and
+                    # Explorer just opens Documents instead of selecting the file.
+                    subprocess.Popen(f'explorer /select,"{path}"')
                 else:
                     subprocess.Popen(["xdg-open", str(Path(path).parent)])
             except Exception as exc:

@@ -551,18 +551,27 @@ class OllamaAgent:
             result = {"ok": False, "error": f"unknown tool {name}"}
             self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
             return result
-        # Confirmation for risky (non-readonly) actions, mirroring the cloud agent.
+        # Capability MODE enforcement + confirmation for risky actions, mirroring the cloud
+        # agent (agent.py) and ember_bridge. mode_allows MUST run fail-closed and outside the
+        # try/except: previously the whole block was wrapped in `except Exception: pass` and
+        # never called mode_allows at all, so read-only / restricted modes were silently
+        # bypassed and the local model could run destructive tools the user had disabled.
         try:
             risk, reason = safety.classify(name, args)
-            if name not in ollama_tools.READONLY and safety.needs_confirmation(risk):
-                pending = PendingConfirmation(name, args, reason)
-                self._emit(AgentEvent("confirm", pending))
-                if not pending.response.get():
-                    result = {"ok": False, "error": "user denied this action"}
-                    self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
-                    return result
         except Exception:
-            pass
+            risk, reason = "medium", "unclassified"
+        allowed, mode_reason = safety.mode_allows(name, risk)
+        if not allowed:
+            result = {"ok": False, "error": mode_reason, "blocked_by_mode": safety.current_mode()}
+            self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
+            return result
+        if name not in ollama_tools.READONLY and safety.needs_confirmation(risk):
+            pending = PendingConfirmation(name, args, reason)
+            self._emit(AgentEvent("confirm", pending))
+            if not pending.response.get():
+                result = {"ok": False, "error": "user denied this action"}
+                self._emit(AgentEvent("tool_result", {"name": name, "result": result}))
+                return result
         result = ollama_tools.call(name, args)
         # If the tool produced an image (e.g. take_screenshot), hand it to the VISION model on
         # the next turn instead of dumping a huge base64 blob into the text tool-result.
