@@ -281,21 +281,33 @@ def _pg():
         return None
 
 
-def move(x, y, duration: float | None = None) -> bool:
-    """Move the pointer to (x, y) like a human. Returns True if a humanized move ran,
-    False if it fell back to / used a plain move."""
+def move(x, y, duration: float | None = None, real: bool = False) -> bool:
+    """Move the pointer to (x, y) like a human.
+
+    Returns True if a humanized move ran, False if it fell back to / used a plain move.
+
+    ``real=True`` moves the physical system cursor even in detached mode. Use it when the
+    move IS the requested action; leave it False for the internal travel that precedes a
+    click, which detached mode is meant to skip.
+    """
     global _LAST_MODE, _YIELDED
     _YIELDED = False
     x, y = int(x), int(y)
     pg = _pg()
     if pg is None:
         return False
-    if effective_mode()[0] == "detached":
+    if effective_mode()[0] == "detached" and not real:
         # Nothing to physically move: Ember's pointer is its own. Park the overlay on the
         # target so the user can still see where Ember is about to act, and leave the
         # real cursor exactly where they left it.
+        #
+        # `real=True` overrides this. Detached mode exists to stop Ember *hijacking* the
+        # cursor while it works — it is not meant to swallow "move my mouse to the corner",
+        # which is a direct instruction about the physical pointer and has no other
+        # possible meaning. Without the override the tool returned ok, nothing moved, and
+        # the agent looped taking screenshots trying to work out why.
         _LAST_MODE = "detached"
-        _notify_pointer(x, y)
+        _notify_pointer(x, y, "park")
         return True
     if not _OPTS["enabled"]:
         # Plain (non-humanized) move still honours the speed setting: faster speed = shorter

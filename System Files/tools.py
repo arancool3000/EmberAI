@@ -284,7 +284,9 @@ def move_mouse(x, y, duration=0.2):
     try:
         try:
             import human_mouse
-            if human_mouse.move(int(x), int(y), duration=duration):
+            # real=True: an explicit move_mouse call is a request about the physical
+            # cursor. Detached mode only suppresses the internal travel before a click.
+            if human_mouse.move(int(x), int(y), duration=duration, real=True):
                 return {"ok": True, "x": x, "y": y, "mode": human_mouse.last_mode()}
             if human_mouse.yielded_to_human():
                 return {"ok": False, "yielded": True, "x": x, "y": y,

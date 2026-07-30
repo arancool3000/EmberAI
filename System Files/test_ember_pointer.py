@@ -65,6 +65,36 @@ def test_yield_state_dims_the_pointer_and_clears_on_the_next_move():
         pointer.close()
 
 
+def test_a_parked_pointer_stays_visible():
+    """Regression: Ember's pointer looked invisible.
+
+    In detached mode the system cursor doesn't move, so this overlay is the only evidence
+    of where Ember is pointing — and it auto-hid after 900ms, which is well before the
+    agent's verification screenshot.
+    """
+    app = _app()
+    pointer = EmberPointerOverlay()
+    try:
+        pointer.request(300, 200, "park")
+        app.processEvents()
+        assert pointer.isVisible()
+        assert not pointer._idle.isActive()      # no countdown to hiding itself
+    finally:
+        pointer.close()
+
+
+def test_a_normal_move_still_fades_out():
+    # The park exception must not leave a second pointer on screen forever.
+    app = _app()
+    pointer = EmberPointerOverlay()
+    try:
+        pointer.request(300, 200, "move")
+        app.processEvents()
+        assert pointer._idle.isActive()
+    finally:
+        pointer.close()
+
+
 def test_both_shapes_are_closed_non_empty_paths():
     # A degenerate path would paint nothing and the pointer would silently vanish.
     for path in (EmberPointerOverlay._arrow_path(), EmberPointerOverlay._hand_path()):

@@ -97,6 +97,15 @@ class EmberPointerOverlay(QWidget):
             self._spin.start()
         # Long enough to make the owner of the action obvious, short enough not to leave a
         # second pointer hanging around or obscuring Ember's next verification screenshot.
+        #
+        # A "park" is the exception. In detached mode a move doesn't touch the system
+        # cursor, so this overlay is the ONLY evidence of where Ember is pointing — and at
+        # 900ms it had always vanished by the time the agent took its verification
+        # screenshot, which read as the Ember pointer being invisible. A parked pointer
+        # stays until the next action moves it.
+        if action == "park":
+            self._idle.stop()
+            return
         self._idle.start(420 if self._yielding else 700 if self._click_flash else 900)
 
     def _hide_pointer(self) -> None:

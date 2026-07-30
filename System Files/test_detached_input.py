@@ -283,6 +283,75 @@ def test_move_yields_when_the_user_grabs_the_mouse():
         hm.set_options(mode=before)
 
 
+class _RecordingPG:
+    """Minimal pyautogui stand-in that remembers where it was told to go."""
+    PAUSE = 0.0
+    def __init__(self): self.pos = (0, 0); self.moves = []
+    def position(self): return self.pos
+    def size(self): return (1920, 1080)
+    def moveTo(self, x, y, duration=0, _pause=True):
+        self.pos = (x, y); self.moves.append((x, y))
+
+
+class _force_detached:
+    """Report a working detached backend regardless of the host.
+
+    CI and this container have no per-window event backend, so the mode would otherwise
+    resolve to 'restore' and these tests would silently exercise the wrong branch.
+    """
+    def __enter__(self):
+        self._real = di.capabilities
+        di.capabilities = lambda *a, **k: {"detached": True, "restore": True,
+                                           "backend": "stub"}
+        return self
+
+    def __exit__(self, *exc):
+        di.capabilities = self._real
+        return False
+
+
+def test_explicit_move_still_moves_the_real_cursor_in_detached_mode():
+    """Regression: 'move the mouse to the corner' silently did nothing.
+
+    Detached mode exists to stop Ember hijacking the cursor while it works. It must not
+    swallow a direct instruction about the physical pointer — the tool returned ok, the
+    cursor never moved, and the agent looped screenshotting trying to work out why.
+    """
+    fake = _RecordingPG()
+    before = hm.get_options().get("mode")
+    saved = hm._pg
+    try:
+        hm.set_options(mode="detached")
+        hm._pg = lambda: fake
+        with _force_detached():
+            assert hm.move(1400, 900, duration=0, real=True) is True
+        assert fake.moves and fake.moves[-1] == (1400, 900)
+    finally:
+        hm._pg = saved
+        hm.set_options(mode=before)
+
+
+def test_internal_travel_still_leaves_the_cursor_alone():
+    # The other half of the contract: the move that precedes a click is exactly what
+    # detached mode is supposed to skip.
+    fake = _RecordingPG()
+    before = hm.get_options().get("mode")
+    saved = hm._pg
+    seen = []
+    try:
+        hm.set_options(mode="detached")
+        hm._pg = lambda: fake
+        hm.set_pointer_hook(lambda x, y, action: seen.append((x, y, action)))
+        with _force_detached():
+            assert hm.move(1400, 900, duration=0) is True
+        assert fake.moves == []                      # physical cursor untouched
+        assert (1400, 900, "park") in seen           # but Ember's own pointer is shown
+    finally:
+        hm._pg = saved
+        hm.set_pointer_hook(None)
+        hm.set_options(mode=before)
+
+
 def test_yield_can_be_switched_off():
     class StubbornPG:
         PAUSE = 0.0
