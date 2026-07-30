@@ -1422,6 +1422,7 @@ class SettingsDialog(QDialog):
         # get_settings() save path is unchanged — we just don't show the others.
         self._only_tab = only_tab
         self._mcp_setup_done.connect(self._on_mcp_setup_done)
+        self._install_ember_hearth()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 14, 14, 12)
@@ -3128,6 +3129,55 @@ class SettingsDialog(QDialog):
             save_settings(self.settings)   # this tab applies live + sticks immediately
         except Exception:
             pass
+
+    # --- animated hearth ---------------------------------------------------
+    # Settings sits behind a live ember bed rather than a flat panel. The fire is
+    # simulated, not a looping asset, so it never repeats and costs no download.
+
+    def _install_ember_hearth(self):
+        """Start the flame simulation that paints along the bottom of this dialog."""
+        try:
+            import ember_fx
+            # A low intensity: this is a bed of embers under the content, not a bonfire
+            # in front of it. Anything brighter competes with the controls.
+            self._hearth = ember_fx.FlameBackground(140, 74, intensity=0.55)
+            self._hearth_timer = QTimer(self)
+            self._hearth_timer.setInterval(50)      # 20fps is plenty for fire, and idles cheap
+            self._hearth_timer.timeout.connect(self._tick_ember_hearth)
+            self._hearth_timer.start()
+        except Exception:
+            self._hearth = None
+
+    def _tick_ember_hearth(self):
+        hearth = getattr(self, "_hearth", None)
+        if hearth is None:
+            return
+        hearth.step()
+        # Only the strip the fire occupies needs repainting; invalidating the whole dialog
+        # every frame would make every control in it redraw 20 times a second.
+        h = max(40, int(self.height() * 0.30))
+        self.update(0, self.height() - h, self.width(), h)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        hearth = getattr(self, "_hearth", None)
+        if hearth is None:
+            return
+        try:
+            from PyQt6.QtCore import QRect
+            painter = QPainter(self)
+            painter.setOpacity(0.5)     # sits under the content, never fights it for attention
+            h = max(40, int(self.height() * 0.30))
+            hearth.paint(painter, QRect(0, self.height() - h, self.width(), h))
+            painter.end()
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        timer = getattr(self, "_hearth_timer", None)
+        if timer is not None:
+            timer.stop()            # don't keep simulating fire for a closed dialog
+        super().closeEvent(event)
 
     def _refresh_mouse_mode_note(self):
         """Explain what this machine will actually do, including any silent downgrade."""
@@ -8136,16 +8186,58 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._install_workspace_shortcuts()
         QTimer.singleShot(0, self._resize_composer)
 
+    #: Every keyboard shortcut in the app, in one place so the reference sheet can never
+    #: drift from what is actually bound. "Ctrl" is Qt's PORTABLE modifier — it maps to
+    #: Command on macOS and Control everywhere else, so these are written once.
+    WORKSPACE_SHORTCUTS = (
+        ("Ctrl+K", "_open_features", "Find a capability"),
+        ("Ctrl+N", "_new_chat", "New chat"),
+        ("Ctrl+,", "_open_settings", "Settings"),
+        ("Ctrl+B", "_toggle_history_panel", "Show/hide task history"),
+        ("Ctrl+`", "_open_terminal", "Terminal"),
+        ("Ctrl+Shift+A", "_open_agents", "Agent dashboard"),
+        ("Ctrl+Shift+V", "_toggle_voice_chat", "Voice chat"),
+        ("Ctrl+/", "_show_shortcuts", "Keyboard shortcuts"),
+        ("Escape", "_on_stop", "Stop what Ember is doing"),
+    )
+
     def _install_workspace_shortcuts(self):
-        """Fast paths for the two things people do most: find a capability and start fresh."""
+        """Bind the workspace shortcuts, skipping any whose handler isn't present.
+
+        Only two shortcuts existed before, and each was registered twice — once as "Ctrl+…"
+        and once as "Meta+…". On macOS Qt maps Ctrl to Command and Meta to Control, so that
+        was two bindings; everywhere else Meta is the Windows/Super key, which the window
+        manager usually swallows. Using the portable Ctrl form once is what Qt intends, and
+        it leaves the Super key alone.
+        """
         self._workspace_shortcuts = []
-        for sequence, handler in (("Ctrl+K", self._open_features),
-                                  ("Meta+K", self._open_features),
-                                  ("Ctrl+N", self._new_chat),
-                                  ("Meta+N", self._new_chat)):
+        for sequence, handler_name, _label in self.WORKSPACE_SHORTCUTS:
+            handler = getattr(self, handler_name, None)
+            if not callable(handler):
+                continue
             shortcut = QShortcut(QKeySequence(sequence), self)
+            # WindowShortcut (the default) doesn't fire while focus is inside the composer's
+            # text edit, which is where it usually is — so these were dead most of the time.
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(handler)
             self._workspace_shortcuts.append(shortcut)
+
+    def _show_shortcuts(self):
+        """A reference sheet built from the same table that binds the keys."""
+        try:
+            mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+            rows = "".join(
+                f"<tr><td style='padding:4px 18px 4px 0;color:#8f99ad'>{label}</td>"
+                f"<td style='padding:4px 0'><b>{seq.replace('Ctrl', mod)}</b></td></tr>"
+                for seq, handler_name, label in self.WORKSPACE_SHORTCUTS
+                if callable(getattr(self, handler_name, None)))
+            box = QMessageBox(self)
+            box.setWindowTitle("Keyboard shortcuts")
+            box.setTextFormat(Qt.TextFormat.RichText)
+            box.setText(f"<h3>Keyboard shortcuts</h3><table>{rows}</table>")
+            box.exec()
+        except Exception:
+            pass
 
     def _toggle_history_panel(self):
         sidebar = getattr(self, "_sidebar", None)
@@ -8459,6 +8551,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._typing_label = None
         self._streaming_bubble_label = None
         self._streaming_buffer = ""
+        self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self.empty_hint = None
 
     def _load_active_chat_into_view(self):
@@ -8797,6 +8890,86 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             pass
 
     # --- chat bubbles ---
+    # --- live-typing text -------------------------------------------------
+    # Text arrives in chunks and each one fades up from transparent over ~a quarter of a
+    # second, so a reply materialises at the point it is being typed instead of snapping
+    # into place a paragraph at a time.
+
+    def _stream_append_fx(self, chunk: str):
+        """Queue an arriving chunk and make sure the fade animation is running."""
+        try:
+            import ember_fx
+        except Exception:
+            # No effects module — fall back to the plain behaviour rather than losing text.
+            label = getattr(self, "_streaming_bubble_label", None)
+            if label is not None:
+                label.setText(_md_to_html(self._streaming_buffer))
+            return
+        fx = getattr(self, "_stream_fx", None)
+        if fx is None:
+            fx = self._stream_fx = ember_fx.StreamingText(fade=0.26)
+        fx.append(chunk)
+        timer = getattr(self, "_stream_fx_timer", None)
+        if timer is None:
+            timer = self._stream_fx_timer = QTimer(self)
+            timer.setInterval(33)          # ~30fps is plenty for an opacity ramp
+            timer.timeout.connect(self._stream_paint_fx)
+        if not timer.isActive():
+            timer.start()
+        self._stream_paint_fx()
+
+    def _stream_paint_fx(self):
+        """Repaint the streaming bubble with the tail dimmed by its arrival age."""
+        label = getattr(self, "_streaming_bubble_label", None)
+        fx = getattr(self, "_stream_fx", None)
+        if label is None or fx is None:
+            self._stream_stop_fx()
+            return
+        try:
+            import html as _html
+            pending = fx.opacities()
+            # Everything settled goes through the normal Markdown path; only the fading
+            # tail is emitted as spans, so a long reply never turns into thousands of them.
+            settled = fx.text[:len(fx.text) - sum(len(c) for c, _ in pending)]
+            parts = [_md_to_html(settled)]
+            for chunk, opacity in pending:
+                parts.append(
+                    f'<span style="color:rgba(232,232,239,{opacity:.3f})">'
+                    f'{_html.escape(chunk).replace(chr(10), "<br>")}</span>')
+            label.setText("".join(parts))
+            fx.compact()
+            if not fx.active():
+                self._stream_stop_fx()
+        except RuntimeError:
+            # The bubble was deleted mid-stream (chat cleared) — stop rather than crash.
+            self._stream_stop_fx()
+
+    def _stream_stop_fx(self):
+        timer = getattr(self, "_stream_fx_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    def _stream_reset_fx(self):
+        """Abandon a fade in progress (chat cleared, agent reset)."""
+        self._stream_stop_fx()
+        fx = getattr(self, "_stream_fx", None)
+        if fx is not None:
+            fx.reset()
+
+    def _stream_finish_fx(self):
+        """Lock the bubble to its final, fully-opaque Markdown rendering."""
+        self._stream_stop_fx()
+        fx = getattr(self, "_stream_fx", None)
+        label = getattr(self, "_streaming_bubble_label", None)
+        if fx is not None:
+            fx.finish()
+            if label is not None:
+                try:
+                    label.setText(_md_to_html(fx.text))
+                except RuntimeError:
+                    pass
+            fx.reset()
+
     def _add_bubble(self, kind: str, text: str, meta: str | None = None) -> QFrame:
         frame = QFrame()
         frame.setProperty("messageKind", kind)
@@ -10916,6 +11089,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._hide_typing_indicator()
         self._streaming_bubble_label = None
         self._streaming_buffer = ""
+        self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self._orb_active = False
         self._orb_conversation = False
         self._listening = False
@@ -11299,7 +11473,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                             break
                 if getattr(self, "_streaming_bubble_label", None):
                     self._streaming_buffer += ev.payload or ""
-                    self._streaming_bubble_label.setText(_md_to_html(self._streaming_buffer))
+                    self._stream_append_fx(ev.payload or "")
                     # Follow the stream only if the user is parked at the bottom (don't yank
                     # them down mid-read). rangeChanged also fires on growth as a backstop.
                     QTimer.singleShot(0, self._chat_follow_bottom)
@@ -11311,6 +11485,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 final_stream = getattr(self, "_streaming_buffer", "") or ""
                 if final_stream.strip():
                     self._append_history("assistant", final_stream.strip())
+                self._stream_finish_fx()   # settle the fade before the bubble is released
                 if getattr(self, "_streaming_bubble_label", None):
                     self._speak_reply(self._streaming_buffer or "")
                 self._streaming_bubble_label = None

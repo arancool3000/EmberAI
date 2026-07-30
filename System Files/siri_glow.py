@@ -283,6 +283,16 @@ class _Orb(QWidget):
                                              "#ff6ac1", "#36d2c3")]
         self._speed, self._breath = 0.020, 3.2     # tuned per state
         self._state = "listening"
+        # Cloud motion comes from a flow field rather than fixed orbits, so the puffs
+        # drift and recombine like weather instead of visibly circling.
+        try:
+            from ember_fx import FlowField
+            self._flow = FlowField(size=16, seed=41)
+        except Exception:
+            class _Flat:
+                def at(self, x, y, t=0.0):
+                    return 0.5 + 0.5 * math.sin(x * 1.7 + y * 0.9 + t)
+            self._flow = _Flat()
         self._level = 0.0          # smoothed audio-reactive amplitude (0..1)
         self._level_provider = None
         self._timer = QTimer(self)
@@ -341,99 +351,124 @@ class _Orb(QWidget):
             pass
 
     def paintEvent(self, _ev):
+        """A soft sphere with clouds drifting through it.
+
+        The old orb stacked a conical "swirl", three tinted blobs, an orbiting comet arc
+        and a hard white rim on a near-black core. Those layers muddied each other into
+        grey-purple and the rim made it read as a drawn circle rather than as a volume.
+
+        This is built the way the shape actually reads: one vertical body gradient for the
+        sphere, cloud puffs whose positions come from a flow field so they drift and
+        recombine like weather rather than orbiting on fixed circles, a terminator shading
+        the top edge for volume, and an outer bloom instead of an outline. Nothing is
+        stroked, so the silhouette stays soft.
+        """
         try:
             w, h = self.width(), self.height()
-            lvl = self._level
+            lvl = max(0.0, min(1.0, self._level))
             cx, cy = w / 2.0, h / 2.0
-            base = min(w, h) / 2.0 - 6
-            pal = self._palette
-            n = len(pal)
+            # The sphere has to leave room for its own bloom. Sizing it to the full widget
+            # made the halo overflow the canvas and clip to a visible square.
+            half = min(w, h) / 2.0
+            R = half * 0.64
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setPen(Qt.PenStyle.NoPen)
             breathe = 0.5 + 0.5 * math.sin(self._t * self._breath)
 
-            def col(i, a):
-                c = QColor(pal[int(i) % n])
-                c.setAlpha(max(0, min(255, int(a))))
-                return c
-
-            drift = self._t * 0.18             # slow colour rotation through the palette
-            # CONSTANT sizes — the orb never grows/shrinks (no "bouncing"); all life comes
-            # from flowing light, a rotating signature arc, and brightness that tracks the voice.
-            R = base * 0.62
-            glow_r = base * 1.0
+            top, bottom, cloud = self._body_colours()
             circle = QRectF(cx - R, cy - R, 2 * R, 2 * R)
 
-            # ---- 1. Outer glow bloom (brightness pulses; size fixed) ----
-            halo = QRadialGradient(QPointF(cx, cy), glow_r)
-            a_edge = min(210.0, 90 + 80 * breathe + 70 * lvl)
-            halo.setColorAt(0.0, col(drift, a_edge * 0.30))
-            halo.setColorAt(max(0.05, (R / glow_r) * 0.78), col(drift, a_edge))
-            halo.setColorAt(0.93, col(drift + 2, 30))
-            halo.setColorAt(1.0, col(drift + 2, 0))
+            # ---- outer bloom: light leaving the sphere, not a border around it ----
+            bloom_r = min(half - 1.0, R * 1.5)
+            halo = QRadialGradient(QPointF(cx, cy), bloom_r)
+            edge = QColor(top)
+            halo.setColorAt(0.0, QColor(edge.red(), edge.green(), edge.blue(), 0))
+            halo.setColorAt(max(0.02, R / bloom_r * 0.97),
+                            QColor(edge.red(), edge.green(), edge.blue(),
+                                   int(70 + 60 * breathe + 70 * lvl)))
+            halo.setColorAt(1.0, QColor(edge.red(), edge.green(), edge.blue(), 0))
             p.setBrush(QBrush(halo))
-            p.drawEllipse(QRectF(cx - glow_r, cy - glow_r, 2 * glow_r, 2 * glow_r))
+            p.drawEllipse(QRectF(cx - bloom_r, cy - bloom_r, 2 * bloom_r, 2 * bloom_r))
 
-            # ---- 2. Luminous liquid-light core ----
             p.setClipPath(self._circle_path(cx, cy, R))
-            depth = QRadialGradient(QPointF(cx, cy), R)
-            depth.setColorAt(0.0, QColor(44, 34, 82))
-            depth.setColorAt(1.0, QColor(10, 10, 20))
-            p.setBrush(QBrush(depth))
+
+            # ---- body: the sphere's own colour, deep at the top, luminous at the base ----
+            body = QLinearGradient(QPointF(cx, cy - R), QPointF(cx, cy + R))
+            body.setColorAt(0.0, top)
+            body.setColorAt(0.55, self._blend(top, bottom, 0.55))
+            body.setColorAt(1.0, bottom)
+            p.setBrush(QBrush(body))
             p.drawEllipse(circle)
-            ang = (self._t * (30.0 + 50.0 * lvl)) % 360.0    # iridescence rotates, no resize
-            swirl = QConicalGradient(cx, cy, ang)
-            for i in range(n + 1):
-                swirl.setColorAt(min(1.0, i / n), col(drift + i, 110 + 70 * breathe + 40 * lvl))
-            p.setBrush(QBrush(swirl))
-            p.drawEllipse(circle)
-            # soft blobs drift in POSITION only (constant size) -> liquid motion, never bouncing
-            for j in range(3):
-                ph = self._t * (0.5 + 0.2 * j) + j * 2.1
-                bx = cx + math.cos(ph) * R * 0.40
-                by = cy + math.sin(ph * 1.27) * R * 0.40
-                blob = QRadialGradient(QPointF(bx, by), R * 0.62)
-                blob.setColorAt(0.0, col(drift + j * 2 + 1, 140 + 55 * lvl))
-                blob.setColorAt(1.0, col(drift + j * 2 + 1, 0))
-                p.setBrush(QBrush(blob))
+
+            # ---- clouds: puffs steered by the flow field, so they drift and recombine ----
+            # Both bright and shadowed puffs: a cloud is only legible because of the
+            # contrast between its lit face and its underside. Light-only puffs washed out
+            # into a plain smooth gradient with no structure to see moving.
+            flow = self._flow
+            shade = self._blend(top, QColor(20, 24, 70), 0.45)
+            for j in range(7):
+                lit = (j % 2 == 0)
+                fx_ = flow.at(j * 3.1, self._t * 0.26 + j, self._t * 0.7)
+                fy_ = flow.at(self._t * 0.21 + j, j * 5.7, self._t * 0.7)
+                bx = cx + (fx_ - 0.5) * R * 1.5
+                by = cy + (fy_ - 0.5) * R * 1.4
+                rad = R * (0.30 + 0.22 * flow.at(j * 7.3, self._t * 0.15, self._t))
+                tint = cloud if lit else shade
+                # Shadowed puffs stay well under the lit ones: pushed any harder they stop
+                # reading as the underside of a cloud and start looking like smudges.
+                peak = (120 + 60 * breathe + 80 * lvl) if lit else (42 + 24 * breathe)
+                alpha = int(peak * (0.6 + 0.4 * ((j % 3) / 2.0)))
+                puff = QRadialGradient(QPointF(bx, by), max(6.0, rad))
+                puff.setColorAt(0.0, QColor(tint.red(), tint.green(), tint.blue(),
+                                            min(240, alpha)))
+                puff.setColorAt(0.55, QColor(tint.red(), tint.green(), tint.blue(),
+                                             int(alpha * 0.32)))
+                puff.setColorAt(1.0, QColor(tint.red(), tint.green(), tint.blue(), 0))
+                p.setBrush(QBrush(puff))
                 p.drawEllipse(circle)
-            hx = cx + math.cos(self._t * 0.8) * R * 0.14
-            hy = cy + math.sin(self._t * 1.0) * R * 0.14
-            bloom = QRadialGradient(QPointF(hx, hy), R * 0.9)
-            bloom.setColorAt(0.0, QColor(255, 255, 255, int(min(235, 130 + 70 * breathe + 55 * lvl))))
-            bloom.setColorAt(0.45, QColor(255, 255, 255, 34))
-            bloom.setColorAt(1.0, QColor(255, 255, 255, 0))
-            p.setBrush(QBrush(bloom))
+
+            # ---- terminator: darkens the upper rim so the disc reads as a sphere ----
+            term = QRadialGradient(QPointF(cx, cy + R * 0.42), R * 1.5)
+            term.setColorAt(0.0, QColor(255, 255, 255, 0))
+            term.setColorAt(0.72, QColor(0, 0, 0, 0))
+            term.setColorAt(1.0, QColor(12, 14, 40, 120))
+            p.setBrush(QBrush(term))
             p.drawEllipse(circle)
+
+            # ---- the light itself, low and bright, tracking the voice ----
+            glow = QRadialGradient(QPointF(cx - R * 0.10, cy + R * 0.34), R * 1.05)
+            glow.setColorAt(0.0, QColor(255, 255, 255,
+                                        int(min(240, 120 + 60 * breathe + 70 * lvl))))
+            glow.setColorAt(0.45, QColor(255, 255, 255, 40))
+            glow.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setBrush(QBrush(glow))
+            p.drawEllipse(circle)
+
             p.setClipping(False)
-
-            # ---- 3. Signature: a bright light-arc that orbits the rim (its unique identity) ----
-            arc_r = R * 0.93
-            arc_rect = QRectF(cx - arc_r, cy - arc_r, 2 * arc_r, 2 * arc_r)
-            arc_col = QColor(pal[int(drift + 1) % n])
-            arc_col.setAlpha(int(min(255, 165 + 80 * lvl)))
-            apen = QPen(arc_col, 2.6)
-            apen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setPen(apen)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            start = (-(self._t * 120.0)) % 360.0
-            p.drawArc(arc_rect, int(start * 16), int(72 * 16))   # a 72° comet sweeping round
-
-            # ---- 4. Glass sheen + crisp rim ----
-            hi = QRadialGradient(QPointF(cx - R * 0.34, cy - R * 0.42), R * 0.8)
-            hi.setColorAt(0.0, QColor(255, 255, 255, 140))
-            hi.setColorAt(0.5, QColor(255, 255, 255, 26))
-            hi.setColorAt(1.0, QColor(255, 255, 255, 0))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(hi))
-            p.drawEllipse(circle)
-            p.setPen(QPen(QColor(255, 255, 255, int(50 + 50 * breathe)), 1.4))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(circle)
             p.end()
         except Exception:
             pass
+
+    @staticmethod
+    def _blend(c1, c2, t):
+        return QColor(int(c1.red() + (c2.red() - c1.red()) * t),
+                      int(c1.green() + (c2.green() - c1.green()) * t),
+                      int(c1.blue() + (c2.blue() - c1.blue()) * t))
+
+    def _body_colours(self):
+        """(top, bottom, cloud) for the current state.
+
+        Each state is a different weather, not a different hue wheel: listening is a clear
+        periwinkle sky, thinking cools and deepens, speaking warms toward Ember's own
+        orange so the two halves of a conversation are told apart at a glance.
+        """
+        return {
+            "listening": (QColor(104, 118, 246), QColor(238, 241, 255), QColor(255, 255, 255)),
+            "thinking": (QColor(72, 68, 168), QColor(198, 208, 250), QColor(226, 233, 255)),
+            "speaking": (QColor(255, 138, 76), QColor(255, 240, 214), QColor(255, 252, 240)),
+        }.get(self._state,
+              (QColor(104, 118, 246), QColor(238, 241, 255), QColor(255, 255, 255)))
 
     def _circle_path(self, cx, cy, r):
         path = QPainterPath()

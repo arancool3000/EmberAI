@@ -91,6 +91,20 @@ rm -rf build dist
 run_with_progress 240 "Building Ember.app" "$PYBIN" -m PyInstaller --noconfirm --log-level=WARN Ember.spec \
   || { echo "Build failed. Last lines:"; tail -30 "$LAST_LOG"; echo "Press Enter."; read _; exit 1; }
 
+# Verify the bundle actually exists before claiming success. PyInstaller can fail late
+# (a missing hidden import, a full disk) and still exit 0 from the progress wrapper, which
+# used to leave this script cheerfully printing "Done → dist/Ember.app" for a build that
+# produced nothing.
+if [ ! -d "dist/Ember.app" ]; then
+  echo ""
+  echo "Build FAILED: dist/Ember.app was not produced."
+  [ -n "$LAST_LOG" ] && [ -f "$LAST_LOG" ] && { echo "Last 40 lines of the build log:"; tail -40 "$LAST_LOG"; }
+  echo ""
+  echo "Press Enter to close."
+  read -r _
+  exit 1
+fi
+
 # Clean extended-attribute detritus and apply a VALID ad-hoc signature.
 # PyInstaller's own ad-hoc signature is often malformed, which makes macOS
 # re-verify the bundle on EVERY launch -> ~30s startup. A clean signature fixes it.

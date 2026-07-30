@@ -42,3 +42,8 @@ pyobjc-framework-Quartz>=10.0; platform_system == "Darwin"
 # Explicit Microphone permission priming (mac_permissions.has_microphone) - relying on an
 # incidental mic-open call to trigger the OS prompt wasn't reliable.
 pyobjc-framework-AVFoundation>=10.0; platform_system == "Darwin"
+# Foundation (NSBundle / NSProcessInfo) — renames the running process so the menu bar and
+# Dock say "Ember" instead of "python3.12" on a run-from-source install. It arrives as a
+# transitive dependency of the frameworks above, but relying on that silently degraded to
+# the wrong app name whenever one of them failed to install, so it is declared explicitly.
+pyobjc-framework-Cocoa>=10.0; platform_system == "Darwin"

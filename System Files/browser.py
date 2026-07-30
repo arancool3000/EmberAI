@@ -224,6 +224,23 @@ class BrowserController:
             return False
 
     def _find_browser(self) -> str | None:
+        """The Chromium browser to drive — the user's own default first.
+
+        This used to try Chrome before anything else, so someone whose daily browser is
+        Edge, Brave, or Arc got a Chrome window they never asked for and were not signed
+        in to. DOM control genuinely requires Chromium (Safari and Firefox have no
+        DevTools Protocol), but *which* Chromium should be the user's, not Google's.
+        """
+        try:
+            import default_browser
+            info = default_browser.status()
+            for key in info.get("control_order", []):
+                path = default_browser.binary_for(key)
+                if path:
+                    return path
+        except Exception:
+            pass
+        # Fallback if the default can't be resolved — same list as before.
         if sys.platform == "darwin":
             candidates = [
                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -278,17 +295,27 @@ class BrowserController:
             self._kill_existing_debug_browser()
         binary = self._find_browser()
         if not binary:
-            return {"ok": False, "error": "Chrome/Edge not found in standard paths"}
+            return {"ok": False, "error": (
+                "DOM-level browser control needs a Chromium browser (Chrome, Edge, Brave, "
+                "Vivaldi, Arc or Chromium) — Safari and Firefox have no automation "
+                "protocol. None is installed. Ember can still open pages in your default "
+                "browser with open_url.")}
         PROFILE_DIR.mkdir(exist_ok=True)
         args = [
             binary,
             f"--remote-debugging-port={self.port}",
+            # A dedicated profile is unavoidable: Chromium refuses a debugging port when an
+            # instance is already running on the normal profile. That is exactly why this
+            # window starts signed out, and why open_url — which uses the real browser and
+            # the real session — is the right tool for anything that is just "go look at
+            # this page".
             f"--user-data-dir={PROFILE_DIR}",
             "--remote-allow-origins=*",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=Translate,OptimizationHints",
-            "--new-window",
+            # No --new-window: with this profile it stacks up a fresh window on every
+            # launch instead of reusing the automation window that is already open.
             "about:blank",
         ]
         try:
