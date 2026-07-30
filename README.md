@@ -104,6 +104,15 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 ### 🔔 Other
 - **Notifications** — connect **Slack, Telegram, Discord, or a webhook** so agents and security
   alerts can push you updates; `notify` sends to every channel.
+- **SUPRUNO — image, video, and music generation in one place.** *"write me a slow lo-fi
+  piano track"*, *"a 4-second clip of a paper boat going over a waterfall"*. Prefers **open
+  models running on your own GPU** (Flux / SDXL-Turbo for images, LTX-Video / CogVideoX for
+  clips, MusicGen for music) — private, no key, no rate limit — and picks the model tier
+  your VRAM can actually run rather than loading a checkpoint that will wedge the machine.
+  Falls back to the cloud image model when the hardware can't cope, and always tells you
+  which route it took and why. `supruno_training_plan` gives the real numbers for
+  fine-tuning your own LoRA on your own material. Install with
+  `pip install -r System Files/requirements-generation.txt`.
 - **Image gen, vision Q&A, audio transcription, and AI text/image detection.**
 - **Self-update** — built-in updater pulls new releases (verified download) and relaunches.
 - **Encrypted key vault, custom AI-authored tools, and a plugin system.**
