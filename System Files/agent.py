@@ -35,6 +35,7 @@ import chart_tools
 import local_ai
 import macros
 import creative
+import supruno
 import security_extras
 import text_tools
 import file_ops
@@ -1826,6 +1827,26 @@ TOOL_DECLARATIONS = [
                     "image-model access).",
      "parameters": {"type": "OBJECT", "properties": {
         "prompt": {"type": "STRING"}, "output": {"type": "STRING"}}, "required": ["prompt"]}},
+    {"name": "supruno_generate",
+     "description": "SUPRUNO: generate an image, a short video clip, or a piece of music from a "
+                    "text prompt. Prefers open models running on this machine's GPU (private, no "
+                    "key) and falls back to the cloud image model only when the hardware can't "
+                    "cope. kind: image | video | song. seconds applies to video/song.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "kind": {"type": "STRING"}, "prompt": {"type": "STRING"},
+        "output": {"type": "STRING"}, "seconds": {"type": "NUMBER"}},
+        "required": ["kind", "prompt"]}},
+    {"name": "supruno_status",
+     "description": "What SUPRUNO can generate on this machine right now: detected GPU/VRAM and, "
+                    "per modality, which model would run and why. Call this before promising the "
+                    "user a video or a song.",
+     "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "supruno_training_plan",
+     "description": "Concrete requirements to fine-tune our own model (LoRA over open weights) for "
+                    "a modality: dataset size and shape, VRAM, steps, estimated hours, and any "
+                    "blockers. kind: image | video | song.",
+     "parameters": {"type": "OBJECT", "properties": {
+        "kind": {"type": "STRING"}, "examples": {"type": "NUMBER"}}, "required": ["kind"]}},
     {"name": "describe_image",
      "description": "Vision Q&A: describe an image file or answer a question about it.",
      "parameters": {"type": "OBJECT", "properties": {
@@ -2062,6 +2083,11 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "run_macro": macros.run_macro,
     "delete_macro": macros.delete_macro,
     "generate_image": creative.generate_image,
+    "supruno_generate": lambda kind, prompt, output="", seconds=None: supruno.generate(
+        kind, prompt, output=output, seconds=seconds),
+    "supruno_status": lambda: supruno.status(),
+    "supruno_training_plan": lambda kind, examples=0: supruno.training_plan(
+        kind, examples=int(examples or 0)),
     "describe_image": creative.describe_image,
     "transcribe_audio": creative.transcribe_audio,
     "security_checkup": security_extras.security_checkup,

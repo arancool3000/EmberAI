@@ -48,6 +48,8 @@ jobs:
             test_agent_scheduler.py \
             test_wake_word.py \
             test_human_mouse.py \
+            test_detached_input.py \
+            test_supruno.py \
             test_autostart.py \
             test_custom_tools.py \
             test_adblock.py \

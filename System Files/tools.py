@@ -265,7 +265,12 @@ def click(x, y, button="left", double=False):
         try:
             import human_mouse
             if human_mouse.click(int(x), int(y), button=button, double=double):
-                return {"ok": True, "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
+                return {"ok": True, "mode": human_mouse.last_mode(),
+                        "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
+            if human_mouse.yielded_to_human():
+                return {"ok": False, "yielded": True,
+                        "error": "You took the mouse, so Ember stopped instead of "
+                                 "fighting for it. Ask again when you're done."}
         except Exception:
             pass
         pyautogui.moveTo(int(x), int(y), duration=0.08)
@@ -280,7 +285,11 @@ def move_mouse(x, y, duration=0.2):
         try:
             import human_mouse
             if human_mouse.move(int(x), int(y), duration=duration):
-                return {"ok": True, "x": x, "y": y}
+                return {"ok": True, "x": x, "y": y, "mode": human_mouse.last_mode()}
+            if human_mouse.yielded_to_human():
+                return {"ok": False, "yielded": True, "x": x, "y": y,
+                        "error": "You took the mouse, so Ember stopped instead of "
+                                 "fighting for it. Ask again when you're done."}
         except Exception:
             pass
         pyautogui.moveTo(x, y, duration=duration)

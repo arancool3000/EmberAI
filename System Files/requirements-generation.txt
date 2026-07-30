@@ -1,0 +1,27 @@
+# SUPRUNO — local image / video / music generation.
+#
+# Optional. Ember runs fine without these; SUPRUNO simply reports that nothing can run
+# locally and falls back to the cloud image model (see supruno.status()).
+#
+# Install PyTorch FIRST, matching your hardware — the default PyPI wheel is CPU-only and
+# these models are unusably slow on CPU:
+#   NVIDIA : pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   Apple  : pip install torch          (Metal/MPS support is in the standard wheel)
+
+torch>=2.2
+
+# Image and video (Flux, SDXL-Turbo, SD1.5, LTX-Video, CogVideoX)
+diffusers>=0.31
+transformers>=4.44
+accelerate>=0.33
+safetensors>=0.4
+sentencepiece>=0.2          # FLUX/T5 text encoders
+protobuf>=4.25
+imageio-ffmpeg>=0.5         # export_to_video
+
+# Music (MusicGen)
+scipy>=1.11
+
+# Fine-tuning your own LoRA adapter — see supruno.training_plan()
+peft>=0.12
+datasets>=2.20
