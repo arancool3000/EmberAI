@@ -2781,6 +2781,37 @@ class SettingsDialog(QDialog):
             self._human_mouse_chk.stateChanged.connect(self._on_mouse_humanize_toggled)
             v.addWidget(self._human_mouse_chk)
 
+            # How Ember relates to the user's physical cursor. The default keeps the two
+            # separate so Ember can work without the pointer jumping out from under your
+            # hand; the label reports what this machine can actually deliver.
+            self._mouse_mode_combo = QComboBox()
+            for label, value in (
+                ("Ember uses its own pointer — never moves my mouse", "detached"),
+                ("Borrow my mouse, then put it straight back", "restore"),
+                ("Share my real cursor (watch Ember work)", "shared"),
+            ):
+                self._mouse_mode_combo.addItem(label, value)
+            saved_mode = human_mouse.normalize_pointer_mode(
+                self.settings.get("mouse_mode", "detached"))
+            idx = self._mouse_mode_combo.findData(saved_mode)
+            self._mouse_mode_combo.setCurrentIndex(max(0, idx))
+            self._mouse_mode_combo.currentIndexChanged.connect(self._on_mouse_mode_changed)
+            v.addWidget(QLabel("Ember's pointer"))
+            v.addWidget(self._mouse_mode_combo)
+            self._mouse_mode_note = QLabel("")
+            self._mouse_mode_note.setWordWrap(True)
+            self._mouse_mode_note.setStyleSheet("color:#8f99ad; font-size:11px;")
+            v.addWidget(self._mouse_mode_note)
+            self._refresh_mouse_mode_note()
+
+            self._mouse_yield_chk = QCheckBox("Stop acting if I grab the mouse myself")
+            self._mouse_yield_chk.setChecked(bool(
+                self.settings.get("mouse_yield_to_human", True)))
+            self._mouse_yield_chk.setToolTip(
+                "Ember gives way instead of fighting you for the cursor")
+            self._mouse_yield_chk.stateChanged.connect(self._on_mouse_yield_toggled)
+            v.addWidget(self._mouse_yield_chk)
+
             # Mouse movement speed (0.25x slow & deliberate → 3.0x snappy). Applies live.
             cur_speed = float(self.settings.get("mouse_speed",
                                                 human_mouse.get_options().get("speed", 1.0)))
@@ -3095,6 +3126,36 @@ class SettingsDialog(QDialog):
             pass
         try:
             save_settings(self.settings)   # this tab applies live + sticks immediately
+        except Exception:
+            pass
+
+    def _refresh_mouse_mode_note(self):
+        """Explain what this machine will actually do, including any silent downgrade."""
+        try:
+            import human_mouse
+            _mode, why = human_mouse.effective_mode()
+            self._mouse_mode_note.setText(why)
+        except Exception:
+            pass
+
+    def _on_mouse_mode_changed(self, _index):
+        try:
+            import human_mouse
+            mode = self._mouse_mode_combo.currentData() or "detached"
+            self.settings["mouse_mode"] = mode
+            human_mouse.set_options(mode=mode)
+            self._refresh_mouse_mode_note()
+            save_settings(self.settings)
+        except Exception:
+            pass
+
+    def _on_mouse_yield_toggled(self, state):
+        try:
+            import human_mouse
+            on = bool(state)
+            self.settings["mouse_yield_to_human"] = on
+            human_mouse.set_options(yield_to_human=on)
+            save_settings(self.settings)
         except Exception:
             pass
 
@@ -10106,7 +10167,10 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             human_mouse.set_options(
                 enabled=bool(self.settings.get("mouse_humanize", True)),
                 speed=max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0)))),
-                show_pointer=bool(self.settings.get("show_ember_pointer", True)))
+                show_pointer=bool(self.settings.get("show_ember_pointer", True)),
+                mode=human_mouse.normalize_pointer_mode(
+                    self.settings.get("mouse_mode", "detached")),
+                yield_to_human=bool(self.settings.get("mouse_yield_to_human", True)))
             self._set_ember_pointer_enabled(bool(
                 self.settings.get("show_ember_pointer", True)))
         except Exception:

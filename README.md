@@ -24,6 +24,13 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
   **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths),
   plus Ember's compact animated rainbow-star pointer so its actions are visibly distinct.
+- **Ember's pointer is its own** — by default Ember no longer takes over your physical
+  mouse. Clicks are delivered straight to the target window (`CGEventPostToPid` on macOS,
+  `PostMessage` on Windows, `xdotool --window` on X11), so your cursor never moves and you
+  can keep working while the agent does. Where that isn't possible Ember *borrows* the
+  cursor and puts it straight back, and it always tells you which mode you got. If you grab
+  the mouse mid-action, Ember **yields instead of fighting you for it**. Settings → pointer
+  mode: *its own* / *borrow and return* / *share my cursor*.
 - **Run modes & agents** — pick how Ember works: **auto** (autonomous), **plan** (proposes a
   plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
   run mode + tool scope + optional schedule), run them on demand or **on a schedule**; Ember can
