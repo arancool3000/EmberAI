@@ -8459,6 +8459,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._typing_label = None
         self._streaming_bubble_label = None
         self._streaming_buffer = ""
+        self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self.empty_hint = None
 
     def _load_active_chat_into_view(self):
@@ -8797,6 +8798,86 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             pass
 
     # --- chat bubbles ---
+    # --- live-typing text -------------------------------------------------
+    # Text arrives in chunks and each one fades up from transparent over ~a quarter of a
+    # second, so a reply materialises at the point it is being typed instead of snapping
+    # into place a paragraph at a time.
+
+    def _stream_append_fx(self, chunk: str):
+        """Queue an arriving chunk and make sure the fade animation is running."""
+        try:
+            import ember_fx
+        except Exception:
+            # No effects module — fall back to the plain behaviour rather than losing text.
+            label = getattr(self, "_streaming_bubble_label", None)
+            if label is not None:
+                label.setText(_md_to_html(self._streaming_buffer))
+            return
+        fx = getattr(self, "_stream_fx", None)
+        if fx is None:
+            fx = self._stream_fx = ember_fx.StreamingText(fade=0.26)
+        fx.append(chunk)
+        timer = getattr(self, "_stream_fx_timer", None)
+        if timer is None:
+            timer = self._stream_fx_timer = QTimer(self)
+            timer.setInterval(33)          # ~30fps is plenty for an opacity ramp
+            timer.timeout.connect(self._stream_paint_fx)
+        if not timer.isActive():
+            timer.start()
+        self._stream_paint_fx()
+
+    def _stream_paint_fx(self):
+        """Repaint the streaming bubble with the tail dimmed by its arrival age."""
+        label = getattr(self, "_streaming_bubble_label", None)
+        fx = getattr(self, "_stream_fx", None)
+        if label is None or fx is None:
+            self._stream_stop_fx()
+            return
+        try:
+            import html as _html
+            pending = fx.opacities()
+            # Everything settled goes through the normal Markdown path; only the fading
+            # tail is emitted as spans, so a long reply never turns into thousands of them.
+            settled = fx.text[:len(fx.text) - sum(len(c) for c, _ in pending)]
+            parts = [_md_to_html(settled)]
+            for chunk, opacity in pending:
+                parts.append(
+                    f'<span style="color:rgba(232,232,239,{opacity:.3f})">'
+                    f'{_html.escape(chunk).replace(chr(10), "<br>")}</span>')
+            label.setText("".join(parts))
+            fx.compact()
+            if not fx.active():
+                self._stream_stop_fx()
+        except RuntimeError:
+            # The bubble was deleted mid-stream (chat cleared) — stop rather than crash.
+            self._stream_stop_fx()
+
+    def _stream_stop_fx(self):
+        timer = getattr(self, "_stream_fx_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    def _stream_reset_fx(self):
+        """Abandon a fade in progress (chat cleared, agent reset)."""
+        self._stream_stop_fx()
+        fx = getattr(self, "_stream_fx", None)
+        if fx is not None:
+            fx.reset()
+
+    def _stream_finish_fx(self):
+        """Lock the bubble to its final, fully-opaque Markdown rendering."""
+        self._stream_stop_fx()
+        fx = getattr(self, "_stream_fx", None)
+        label = getattr(self, "_streaming_bubble_label", None)
+        if fx is not None:
+            fx.finish()
+            if label is not None:
+                try:
+                    label.setText(_md_to_html(fx.text))
+                except RuntimeError:
+                    pass
+            fx.reset()
+
     def _add_bubble(self, kind: str, text: str, meta: str | None = None) -> QFrame:
         frame = QFrame()
         frame.setProperty("messageKind", kind)
@@ -10916,6 +10997,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._hide_typing_indicator()
         self._streaming_bubble_label = None
         self._streaming_buffer = ""
+        self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self._orb_active = False
         self._orb_conversation = False
         self._listening = False
@@ -11299,7 +11381,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                             break
                 if getattr(self, "_streaming_bubble_label", None):
                     self._streaming_buffer += ev.payload or ""
-                    self._streaming_bubble_label.setText(_md_to_html(self._streaming_buffer))
+                    self._stream_append_fx(ev.payload or "")
                     # Follow the stream only if the user is parked at the bottom (don't yank
                     # them down mid-read). rangeChanged also fires on growth as a backstop.
                     QTimer.singleShot(0, self._chat_follow_bottom)
@@ -11311,6 +11393,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 final_stream = getattr(self, "_streaming_buffer", "") or ""
                 if final_stream.strip():
                     self._append_history("assistant", final_stream.strip())
+                self._stream_finish_fx()   # settle the fade before the bubble is released
                 if getattr(self, "_streaming_bubble_label", None):
                     self._speak_reply(self._streaming_buffer or "")
                 self._streaming_bubble_label = None

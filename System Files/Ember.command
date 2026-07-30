@@ -17,14 +17,24 @@ die() { echo ""; echo "$1"; echo "Press Enter to close."; read -r _; exit 1; }
 
 PYBIN=".venv/bin/python"
 
+# macOS names a process after the FILE it executed, not after argv[0] — so `exec -a Ember`
+# left the Dock, the menu bar, Activity Monitor, and Force-Quit all saying "python3.12".
+# A symlink named "Ember" beside the venv's interpreter fixes it at the source: the process
+# is literally running a file called Ember. Python still finds pyvenv.cfg one directory up,
+# so the venv stays active — this is exactly how .venv/bin/python itself works.
+ember_launcher() {
+    if [ -x ".venv/bin/python" ]; then
+        [ -e ".venv/bin/Ember" ] || ln -sf python ".venv/bin/Ember" 2>/dev/null
+        [ -x ".venv/bin/Ember" ] && { echo ".venv/bin/Ember"; return; }
+    fi
+    echo "$PYBIN"
+}
+
 # --- Fast path: already set up -> launch straight from the venv, fully OFFLINE ---
 # No uv, no network, no dependency check against any index. This is the normal launch.
 if [ -x "$PYBIN" ] && "$PYBIN" -c "import PyQt6, google.genai" >/dev/null 2>&1; then
     echo "Starting Ember…"
-    # `exec -a Ember` runs the venv Python but names the process "Ember", so the Dock /
-    # Activity Monitor / Force-Quit say "Ember" instead of "python3.12". (macOS resolves the
-    # real interpreter via its own path, not argv[0], so the venv still loads correctly.)
-    exec -a Ember "$PYBIN" main.py
+    exec -a Ember "$(ember_launcher)" main.py
 fi
 
 # --- First-time setup (needs the network, once) ---------------------------------
@@ -44,4 +54,4 @@ echo "First-time setup: installing Ember dependencies (this takes a few minutes)
 uv pip install -r requirements.txt || die "Dependency install failed."
 
 echo "Starting Ember…"
-exec -a Ember "$PYBIN" main.py
+exec -a Ember "$(ember_launcher)" main.py

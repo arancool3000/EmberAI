@@ -18,6 +18,19 @@ The live websocket itself is verified on-device; everything around it is unit-te
 from __future__ import annotations
 
 import asyncio
+
+
+def _cue(name: str) -> None:
+    """Play a UI sound cue, if the sound engine is present.
+
+    Kept as a lazy helper so the voice session has no hard dependency on audio output —
+    a machine with no working sound device must still be able to run voice input.
+    """
+    try:
+        import ember_sound
+        ember_sound.play(name)
+    except Exception:
+        pass
 import threading
 from typing import Callable, Optional
 
@@ -468,9 +481,11 @@ class LiveVoice:
         self._thread = threading.Thread(target=self._thread_main, name="ember-live-voice", daemon=True)
         self._running = True
         self._thread.start()
+        _cue("voice_on")
         return {"ok": True, "running": True, "message": "natural voice listening"}
 
     def stop(self) -> dict:
+        _cue("voice_off")
         self._stop_requested.set()
         # Wake the async loops from this (other) thread via the running event loop.
         loop, ev = self._aioloop, self._loop_stop
