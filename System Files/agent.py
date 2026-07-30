@@ -703,12 +703,35 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "open_url",
-        "description": "Open a URL in the default browser.",
+        "description": (
+            "Open a URL in the user's OWN default browser (Safari, Chrome, Firefox — whatever "
+            "they actually use), reusing an already-open window and their existing logged-in "
+            "session. This is the DEFAULT way to put a page in front of the user, and the ONLY "
+            "way to reach a site they are signed in to. Prefer it over the browser_* tools "
+            "unless you specifically need to read or drive the DOM. Examples: 'check my email' "
+            "-> open_url('https://mail.google.com'); 'open my calendar' -> open_url(...)."),
         "parameters": {
             "type": "OBJECT",
             "properties": {"url": {"type": "STRING"}},
             "required": ["url"],
         },
+    },
+    {
+        "name": "known_places",
+        "description": (
+            "The user's REAL folders (Desktop, Documents, Downloads, iCloud Drive, …), machine, "
+            "and default browser. Call this before searching the filesystem or guessing a path — "
+            "never invent one like '/Users/you/Downloads'. Only paths that actually exist are "
+            "returned."),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "browser_info",
+        "description": (
+            "Which browser the user actually uses as their default, and whether Ember can drive "
+            "it directly. Call this before telling the user anything about their browser, or "
+            "when deciding between open_url and the browser_* tools — do not assume Chrome."),
+        "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "open_app",
@@ -1336,10 +1359,20 @@ TOOL_DECLARATIONS = [
         "path": {"type": "STRING"}, "clear": {"type": "BOOLEAN"}}, "required": ["path"]}},
     {"name": "watch_folder_stop", "description": "Stop watching a folder.",
      "parameters": {"type": "OBJECT", "properties": {"path": {"type": "STRING"}}, "required": ["path"]}},
-    # ---- Browser (DOM-driven Chrome/Edge via CDP) ----
+    # ---- Browser (DOM-driven Chromium via CDP) ----
+    # IMPORTANT: these open a SEPARATE automation profile that is signed out of everything.
+    # For anything that is just "go look at / open this page", use open_url instead — that
+    # uses the user's real default browser and their real logged-in session.
     {
         "name": "browser_open",
-        "description": "Launch (or attach to) the Ember automation browser and optionally navigate to a URL.",
+        "description": (
+            "Launch (or attach to) Ember's automation browser and optionally navigate to a URL. "
+            "USE THIS ONLY when you need to READ or DRIVE the page (extract elements, fill a "
+            "form, click something). It opens a SEPARATE Chromium profile that is SIGNED OUT of "
+            "the user's accounts, so it CANNOT see their email, or any other logged-in site. "
+            "To simply open or check a site the user is signed in to — Gmail, their bank, a "
+            "dashboard — call open_url instead: that uses their own default browser and their "
+            "existing session. Never use this tool just to visit a page."),
         "parameters": {
             "type": "OBJECT",
             "properties": {"url": {"type": "STRING"}},
@@ -1954,6 +1987,8 @@ TOOL_DISPATCH: dict[str, Callable[..., dict]] = {
     "list_directory": tools.list_directory,
     "search_files": tools.search_files,
     "open_url": tools.open_url,
+    "browser_info": lambda: __import__("default_browser").status(),
+    "known_places": tools.known_places,
     "open_app": tools.open_app,
     "open_path": tools.open_path,
     "get_event_logs": tools.get_event_logs,

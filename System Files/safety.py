@@ -160,6 +160,7 @@ SAFE_READONLY = {
     "security_dashboard", "software_update_check",                     # endpoint-security controls (read-only)
     "octopus_discuss", "octopus_status",              # Octopus Mode — asks the user's own AIs, reads text back
     "wifi_security", "remote_access_audit", "network_security_report",  # network-security checks (read-only)
+    "known_places", "browser_info",     # where the user's folders are / which browser they use
 }
 
 SAFE_INTERACTION = {

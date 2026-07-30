@@ -916,6 +916,45 @@ def _open_with_os(target, app=False):
         subprocess.Popen([target] if app else ["xdg-open", target])
 
 
+def known_places():
+    """The user's real folders, machine, and default browser — the things Ember guessed at.
+
+    Without this the agent invented paths ("/Users/you/Downloads"), searched from the wrong
+    root, and assumed Chrome. Every path returned here is checked for existence, so the
+    agent is told what is actually there rather than what usually is.
+    """
+    home = Path.home()
+    candidates = {
+        "home": home,
+        "desktop": home / "Desktop",
+        "documents": home / "Documents",
+        "downloads": home / "Downloads",
+        "pictures": home / "Pictures",
+        "music": home / "Music",
+        "movies": home / ("Movies" if sys.platform == "darwin" else "Videos"),
+        "applications": Path("/Applications") if sys.platform == "darwin" else None,
+        "icloud_drive": (home / "Library/Mobile Documents/com~apple~CloudDocs"
+                         if sys.platform == "darwin" else None),
+        "onedrive": home / "OneDrive" if sys.platform.startswith("win") else None,
+    }
+    places = {}
+    for name, path in candidates.items():
+        try:
+            if path is not None and path.exists():
+                places[name] = str(path)
+        except Exception:
+            continue
+
+    info = {"ok": True, "places": places, "cwd": os.getcwd(), "platform": sys.platform,
+            "user": os.environ.get("USER") or os.environ.get("USERNAME") or ""}
+    try:
+        import default_browser
+        info["browser"] = default_browser.status()
+    except Exception:
+        pass
+    return info
+
+
 def open_url(url):
     try:
         import web_policy
