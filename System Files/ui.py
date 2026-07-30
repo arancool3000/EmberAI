@@ -8186,16 +8186,58 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._install_workspace_shortcuts()
         QTimer.singleShot(0, self._resize_composer)
 
+    #: Every keyboard shortcut in the app, in one place so the reference sheet can never
+    #: drift from what is actually bound. "Ctrl" is Qt's PORTABLE modifier — it maps to
+    #: Command on macOS and Control everywhere else, so these are written once.
+    WORKSPACE_SHORTCUTS = (
+        ("Ctrl+K", "_open_features", "Find a capability"),
+        ("Ctrl+N", "_new_chat", "New chat"),
+        ("Ctrl+,", "_open_settings", "Settings"),
+        ("Ctrl+B", "_toggle_history_panel", "Show/hide task history"),
+        ("Ctrl+`", "_open_terminal", "Terminal"),
+        ("Ctrl+Shift+A", "_open_agents", "Agent dashboard"),
+        ("Ctrl+Shift+V", "_toggle_voice_chat", "Voice chat"),
+        ("Ctrl+/", "_show_shortcuts", "Keyboard shortcuts"),
+        ("Escape", "_on_stop", "Stop what Ember is doing"),
+    )
+
     def _install_workspace_shortcuts(self):
-        """Fast paths for the two things people do most: find a capability and start fresh."""
+        """Bind the workspace shortcuts, skipping any whose handler isn't present.
+
+        Only two shortcuts existed before, and each was registered twice — once as "Ctrl+…"
+        and once as "Meta+…". On macOS Qt maps Ctrl to Command and Meta to Control, so that
+        was two bindings; everywhere else Meta is the Windows/Super key, which the window
+        manager usually swallows. Using the portable Ctrl form once is what Qt intends, and
+        it leaves the Super key alone.
+        """
         self._workspace_shortcuts = []
-        for sequence, handler in (("Ctrl+K", self._open_features),
-                                  ("Meta+K", self._open_features),
-                                  ("Ctrl+N", self._new_chat),
-                                  ("Meta+N", self._new_chat)):
+        for sequence, handler_name, _label in self.WORKSPACE_SHORTCUTS:
+            handler = getattr(self, handler_name, None)
+            if not callable(handler):
+                continue
             shortcut = QShortcut(QKeySequence(sequence), self)
+            # WindowShortcut (the default) doesn't fire while focus is inside the composer's
+            # text edit, which is where it usually is — so these were dead most of the time.
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(handler)
             self._workspace_shortcuts.append(shortcut)
+
+    def _show_shortcuts(self):
+        """A reference sheet built from the same table that binds the keys."""
+        try:
+            mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+            rows = "".join(
+                f"<tr><td style='padding:4px 18px 4px 0;color:#8f99ad'>{label}</td>"
+                f"<td style='padding:4px 0'><b>{seq.replace('Ctrl', mod)}</b></td></tr>"
+                for seq, handler_name, label in self.WORKSPACE_SHORTCUTS
+                if callable(getattr(self, handler_name, None)))
+            box = QMessageBox(self)
+            box.setWindowTitle("Keyboard shortcuts")
+            box.setTextFormat(Qt.TextFormat.RichText)
+            box.setText(f"<h3>Keyboard shortcuts</h3><table>{rows}</table>")
+            box.exec()
+        except Exception:
+            pass
 
     def _toggle_history_panel(self):
         sidebar = getattr(self, "_sidebar", None)

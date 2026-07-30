@@ -16,6 +16,7 @@ from google.genai import types
 
 import tools
 import memory
+import agent_speed
 import offline
 import safety
 import antivirus
@@ -3065,6 +3066,9 @@ class Agent:
         self._refresh_tools_if_dirty()
         self._fail_counts: dict[str, int] = {}  # tool name -> consecutive failures this turn
         self._fail_lock = threading.Lock()
+        # Fresh per turn: a read cached from an earlier turn could describe a world the
+        # user has since changed by hand.
+        self._turn_cache = agent_speed.TurnCache(PARALLEL_SAFE_TOOLS)
         # Frame the turn with the current run-mode directive so plan/chat/read-only/auto
         # behavior is live every turn (Gemini's system_instruction is set only at chat init).
         try:
@@ -3318,18 +3322,22 @@ class Agent:
                     "same operation four times. Change the request or retry with another approach."))
                 return
 
-            # Fast path: a batch of ONLY read-only tools runs concurrently.
+            # Schedule the batch: adjacent read-only calls run concurrently, and a repeat
+            # of a read already done this turn is served from the turn cache. Previously a
+            # single write anywhere in the batch dropped the whole round to sequential —
+            # and "read several files, write one" is the common shape.
             batch = [fc for fc in function_calls if getattr(fc, "name", None)]
-            if (len(batch) > 1 and
-                    all(fc.name in PARALLEL_SAFE_TOOLS for fc in batch) and
-                    not self._stop_flag.is_set()):
-                response_parts = self._execute_parallel(batch)
-            else:
-                response_parts = []
-                for fc in function_calls:
-                    if self._stop_flag.is_set():
-                        return
-                    response_parts.append(self._execute_fc(fc))
+            response_parts = agent_speed.execute_batch(
+                [fc.name for fc in batch], batch,
+                run_one=self._execute_fc,
+                run_many=self._execute_parallel,
+                readonly=PARALLEL_SAFE_TOOLS,
+                # Absent on paths that reach _process_response without _run_turn (sub-agents,
+                # continuations); scheduling still applies, just without memoisation.
+                cache=getattr(self, "_turn_cache", None),
+                stop=self._stop_flag.is_set)
+            if self._stop_flag.is_set():
+                return
 
             parts_to_send = []
             attach_image = None
