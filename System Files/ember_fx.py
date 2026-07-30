@@ -173,25 +173,26 @@ class FireBuffer:
     def step(self) -> None:
         """Advance one frame: propagate heat upward with decay and lateral drift."""
         w, h, cells, rnd = self.w, self.h, self.cells, self._rng.random
-        # Slow, wandering wind so the flames lean and recover instead of shimmering in place.
-        self.wind = max(-1.5, min(1.5, self.wind + (rnd() - 0.5) * 0.25))
+        # Slow, wandering wind so the flames lean and recover instead of shimmering in
+        # place. The decay term is what makes a gust *pass*: a pure random walk drifts to
+        # one extreme and stays there, shearing the whole fire permanently sideways.
+        self.wind = max(-1.2, min(1.2, self.wind * 0.93 + (rnd() - 0.5) * 0.32))
         wind = self.wind
         decay_bias = 1.6 / max(0.15, float(self.intensity))
         for y in range(h - 1, 0, -1):
             row_below = y * w
             row_here = row_below - w
             for x in range(w):
-                heat = cells[row_below + x]
-                if heat <= 0:
-                    cells[row_here + x] = 0
-                    continue
-                decay = int(rnd() * decay_bias)
-                drift = int(round((rnd() - 0.5) * 3.0 + wind))
-                dst = x + drift
-                if dst < 0 or dst >= w:
-                    dst = x                      # reflect at the edges rather than wrap,
+                # GATHER, don't scatter. Pushing each source cell to a drifted destination
+                # leaves any destination nothing happened to land on holding its value from
+                # the previous frame, and those stale cells smear into permanent diagonal
+                # streaks. Pulling from a drifted source writes every cell exactly once.
+                src = x - int(round((rnd() - 0.5) * 3.0 + wind))
+                if src < 0 or src >= w:
+                    src = x                      # reflect at the edges rather than wrap,
                                                  # so flames don't tunnel across the frame
-                cells[row_here + dst] = max(0, heat - decay)
+                heat = cells[row_below + src]
+                cells[row_here + x] = 0 if heat <= 0 else max(0, heat - int(rnd() * decay_bias))
 
     def heat_at(self, x: int, y: int) -> int:
         if 0 <= x < self.w and 0 <= y < self.h:
@@ -337,17 +338,35 @@ class FlameBackground:
                 # Cool cells fade out rather than painting black, so the fire can sit over
                 # whatever the surface behind it is instead of punching a hole in it.
                 a = 0 if heat == 0 else min(255, 40 + heat * 15)
+                # This is a PREMULTIPLIED format: the components must already be scaled by
+                # alpha. Writing straight RGB here makes Qt read the pixel as an invalid
+                # premultiplied colour and the fire comes out fringed with green.
+                if a < 255:
+                    r, g, b = r * a // 255, g * a // 255, b * a // 255
                 img.setPixel(x, y, (a << 24) | (r << 16) | (g << 8) | b)
         return img
 
     def paint(self, painter, rect) -> None:
-        """Draw the current frame stretched across ``rect`` with smooth upscaling."""
+        """Draw the current frame stretched across ``rect`` with smooth upscaling.
+
+        Scaled as a QImage rather than a QPixmap: the pixmap path went through the window
+        system's own transform and came out nearest-neighbour on some platforms, which
+        turned the simulation into visible blocks. Scaling in two passes also softens the
+        lattice — a single jump from a 96px-wide grid to a full-width panel leaves stair
+        stepping that reads as pixel art rather than fire.
+        """
         from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QPainter, QPixmap
+        from PyQt6.QtGui import QPainter
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        img = self._image()
+        mid = img.scaled(max(1, rect.width() // 2), max(1, rect.height() // 2),
+                         Qt.AspectRatioMode.IgnoreAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+        full = mid.scaled(rect.width(), rect.height(),
+                          Qt.AspectRatioMode.IgnoreAspectRatio,
+                          Qt.TransformationMode.SmoothTransformation)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        pix = QPixmap.fromImage(self._image()).scaled(
-            rect.width(), rect.height(), Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        painter.drawPixmap(rect, pix)
+        painter.drawImage(rect, full)
         painter.restore()

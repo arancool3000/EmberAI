@@ -1422,6 +1422,7 @@ class SettingsDialog(QDialog):
         # get_settings() save path is unchanged — we just don't show the others.
         self._only_tab = only_tab
         self._mcp_setup_done.connect(self._on_mcp_setup_done)
+        self._install_ember_hearth()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 14, 14, 12)
@@ -3128,6 +3129,55 @@ class SettingsDialog(QDialog):
             save_settings(self.settings)   # this tab applies live + sticks immediately
         except Exception:
             pass
+
+    # --- animated hearth ---------------------------------------------------
+    # Settings sits behind a live ember bed rather than a flat panel. The fire is
+    # simulated, not a looping asset, so it never repeats and costs no download.
+
+    def _install_ember_hearth(self):
+        """Start the flame simulation that paints along the bottom of this dialog."""
+        try:
+            import ember_fx
+            # A low intensity: this is a bed of embers under the content, not a bonfire
+            # in front of it. Anything brighter competes with the controls.
+            self._hearth = ember_fx.FlameBackground(140, 74, intensity=0.55)
+            self._hearth_timer = QTimer(self)
+            self._hearth_timer.setInterval(50)      # 20fps is plenty for fire, and idles cheap
+            self._hearth_timer.timeout.connect(self._tick_ember_hearth)
+            self._hearth_timer.start()
+        except Exception:
+            self._hearth = None
+
+    def _tick_ember_hearth(self):
+        hearth = getattr(self, "_hearth", None)
+        if hearth is None:
+            return
+        hearth.step()
+        # Only the strip the fire occupies needs repainting; invalidating the whole dialog
+        # every frame would make every control in it redraw 20 times a second.
+        h = max(40, int(self.height() * 0.30))
+        self.update(0, self.height() - h, self.width(), h)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        hearth = getattr(self, "_hearth", None)
+        if hearth is None:
+            return
+        try:
+            from PyQt6.QtCore import QRect
+            painter = QPainter(self)
+            painter.setOpacity(0.5)     # sits under the content, never fights it for attention
+            h = max(40, int(self.height() * 0.30))
+            hearth.paint(painter, QRect(0, self.height() - h, self.width(), h))
+            painter.end()
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        timer = getattr(self, "_hearth_timer", None)
+        if timer is not None:
+            timer.stop()            # don't keep simulating fire for a closed dialog
+        super().closeEvent(event)
 
     def _refresh_mouse_mode_note(self):
         """Explain what this machine will actually do, including any silent downgrade."""
