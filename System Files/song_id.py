@@ -82,8 +82,17 @@ def record_ambient(seconds: int = 12, path: str | None = None) -> str:
     if path is None:
         fd, path = tempfile.mkstemp(prefix="ember_song_", suffix=".wav")
         os.close(fd)
-    rec = _RECORDER or _record_pyaudio
-    return rec(seconds, path)
+    if _RECORDER is not None:
+        return _RECORDER(seconds, path)
+    # Song ID used to go straight to PyAudio, so on any machine without a working PyAudio
+    # build — which is most of them, since it has no macOS/Linux wheel — the whole feature
+    # failed even though sounddevice was installed and working.
+    try:
+        import audio_backend
+        return audio_backend.record_wav(seconds, path, rate=_SAMPLE_RATE,
+                                        channels=_CHANNELS, chunk=_CHUNK)
+    except ImportError:
+        return _record_pyaudio(seconds, path)
 
 
 # ---------------------------------------------------------------------------

@@ -229,6 +229,11 @@ class _FakeDev:
     """A stand-in mic/player backend for exercising open_mic/open_player selection."""
     backend = "fake"
 
+    async def read(self):
+        # open_mic verifies a backend actually delivers audio before accepting it, so a
+        # usable stand-in has to return a frame.
+        return b"\x00\x00"
+
     def close(self):
         pass
 
@@ -248,14 +253,52 @@ def _make_returning_backend(name, instance):
     return _factory
 
 
-def test_open_mic_prefers_pyaudio_then_falls_back_to_sounddevice():
-    # PyAudio broken (not installed) -> open_mic must return the sounddevice backend instead.
+def test_open_mic_prefers_sounddevice_over_pyaudio():
+    """sounddevice must WIN, not merely be a fallback.
+
+    PyAudio used to be tried first while this module's own docstring claimed sounddevice
+    was the default. PyAudio has no macOS/Linux wheel, so it builds against whatever
+    PortAudio is on the box — it is the app's most common voice failure, and it must not
+    get first refusal on the microphone.
+    """
+    orig_pa, orig_sd = lv._PyAudioMic, lv._SoundDeviceMic
+    wanted, unwanted = _FakeDev(), _FakeDev()
+    try:
+        lv._PyAudioMic = _make_returning_backend("PyAudio", unwanted)
+        lv._SoundDeviceMic = _make_returning_backend("sounddevice", wanted)
+        assert lv.open_mic() is wanted          # even when BOTH work
+    finally:
+        lv._PyAudioMic, lv._SoundDeviceMic = orig_pa, orig_sd
+
+
+def test_open_mic_falls_back_to_pyaudio_when_sounddevice_is_broken():
     orig_pa, orig_sd = lv._PyAudioMic, lv._SoundDeviceMic
     picked = _FakeDev()
     try:
-        lv._PyAudioMic = _raising_backend("PyAudio", "no pyaudio")
-        lv._SoundDeviceMic = _make_returning_backend("sounddevice", picked)
+        lv._SoundDeviceMic = _raising_backend("sounddevice", "no sounddevice")
+        lv._PyAudioMic = _make_returning_backend("PyAudio", picked)
         assert lv.open_mic() is picked
+    finally:
+        lv._PyAudioMic, lv._SoundDeviceMic = orig_pa, orig_sd
+
+
+def test_a_backend_that_opens_but_delivers_no_audio_is_rejected():
+    """PyAudio's worst failure: open() succeeds, then the stream never yields a frame.
+
+    Without verification that silently-dead backend wins and the voice session just sits
+    there hearing nothing, which is far harder to diagnose than an outright failure.
+    """
+    orig_pa, orig_sd = lv._PyAudioMic, lv._SoundDeviceMic
+    good = _FakeDev()
+
+    class _Silent(_FakeDev):
+        async def read(self):
+            return b""                          # opens fine, produces nothing
+
+    try:
+        lv._SoundDeviceMic = _make_returning_backend("sounddevice", _Silent())
+        lv._PyAudioMic = _make_returning_backend("PyAudio", good)
+        assert lv.open_mic() is good            # the dead one is skipped
     finally:
         lv._PyAudioMic, lv._SoundDeviceMic = orig_pa, orig_sd
 

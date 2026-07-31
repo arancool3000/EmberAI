@@ -30,8 +30,12 @@ source .venv/bin/activate
 python -m pip install --quiet --upgrade pip
 echo "Installing Ember's dependencies (first run only, ~1-2 min)…"
 python -m pip install --quiet -r requirements.txt
-# Microphone input: pyaudio compiles against the portaudio we installed above.
-python -m pip install --quiet pyaudio || echo "(pyaudio failed to install — voice input may not work)"
+# Microphone input is already covered: requirements.txt installs sounddevice, whose wheels
+# bundle PortAudio. PyAudio is NOT installed here on purpose — it has no macOS wheel, so it
+# compiles against whatever PortAudio is on the machine and is by far the most common cause
+# of "voice doesn't work". It stays available as an opt-in extra:
+#   brew install portaudio && python -m pip install pyaudio
+# Ember prefers sounddevice regardless, and falls back to PyAudio only if it is present.
 
 # 3) Launch. The first time, macOS will ask Terminal for Microphone / Accessibility /
 #    Screen Recording — say YES to all three (those grants attach to Terminal here).
