@@ -161,6 +161,9 @@ SAFE_READONLY = {
     "octopus_discuss", "octopus_status",              # Octopus Mode — asks the user's own AIs, reads text back
     "wifi_security", "remote_access_audit", "network_security_report",  # network-security checks (read-only)
     "known_places", "browser_info",     # where the user's folders are / which browser they use
+    # Blender link — probe the addon socket / read the scene / viewport screenshot; none mutate
+    # anything (blender_run_python is classified high below).
+    "blender_status", "blender_scene_info", "blender_object_info", "blender_screenshot",
 }
 
 SAFE_INTERACTION = {
@@ -309,6 +312,9 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
 
     if tool_name == "browser_evaluate":
         return "medium", "arbitrary JS in browser"
+
+    if tool_name == "blender_run_python":
+        return "high", "runs arbitrary Python inside Blender (full bpy + os access)"
 
     if tool_name == "kill_process":
         return "high", "terminating a process"

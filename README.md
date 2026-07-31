@@ -224,6 +224,10 @@ versions before Sequoia, right-click → **Open** also works). On **Windows** ch
 
 ## ✨ Recent additions
 
+- **Blender connection** — Ember talks straight to the free [Blender MCP addon](https://blendermcp.com)
+  (blender-mcp) in your running Blender: inspect the scene, run bpy Python (with confirmation),
+  and grab viewport screenshots — *"make me a donut in Blender."* No extra server needed: enable
+  the addon, press N → BlenderMCP → Connect, and ask.
 - **Organise your Gmail** — search, label, archive, star, mark read/unread, create labels, and
   trash email on request. Set it up in Settings → Models → Gmail (address + a Google App Password).
 - **Timers** — *"set a 10-minute timer"*; fires a notification + sound + a chat message.
@@ -455,6 +459,7 @@ tunnel up — and it never claims to be connected when it isn't.
 | `local_ai.py` | local AI via Ollama (offline, no API key / rate limit) |
 | `macros.py` | save/replay named task workflows |
 | `creative.py` | image generation, vision Q&A, audio transcription (Gemini) |
+| `blender_tools.py` | connect to Blender — read the scene, run bpy Python, screenshot the viewport (via the Blender MCP addon) |
 | `security_extras.py` | aggregate security checkup + score |
 | `extension/` | Ember Chrome extension (summarize / ask / AI-check, uses your Gemini key) |
 | `voice.py` | speech input + text-to-speech for Voice Chat (Edge neural / system / Gemini) |

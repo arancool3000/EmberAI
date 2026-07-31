@@ -51,6 +51,7 @@ import bulk_tools
 import security_suite
 import octopus
 import netsecurity
+import blender_tools
 # --- roadmap backlog feature modules ---
 import usage as usage_tracker           # imported aliased: _send_streaming has a local var named `usage`
 import api_health
@@ -2280,7 +2281,7 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
               self_extend, song_id, app_builder,
               network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge,
-              mcp_setup, octopus, netsecurity):
+              mcp_setup, octopus, netsecurity, blender_tools):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
