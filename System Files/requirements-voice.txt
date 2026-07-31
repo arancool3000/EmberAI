@@ -8,10 +8,12 @@
 # Install these only for the specific optional features noted below:
 #   uv pip install -r requirements-voice.txt   (or pip install -r ...)
 
-# Optional: PyAudio — an ALTERNATE microphone backend. Ember tries it FIRST when present
-# (it keeps the OS "mic in use" indicator steady), then falls back to sounddevice, so
-# installing it is purely optional. It has no prebuilt wheel on macOS/Linux and compiles
-# against the PortAudio C library, which you must install first:
+# Optional: PyAudio — a FALLBACK microphone backend, used only when sounddevice can't open
+# the device. You almost certainly do not want this: it has no prebuilt wheel on
+# macOS/Linux, so it compiles against whatever PortAudio is on your machine, breaks when
+# that library is upgraded, and can open a device successfully and then deliver no audio at
+# all. Ember detects that last case and falls back, but the simplest fix is not to install
+# it. If you do want it, install the PortAudio C library first:
 #   macOS:         brew install portaudio
 #   Debian/Ubuntu: sudo apt install portaudio19-dev
 #   Windows:       nothing extra (a prebuilt wheel is used)

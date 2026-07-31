@@ -280,10 +280,22 @@ class _PyAudioMic:
     backend = "PyAudio"
 
     def __init__(self):
-        import pyaudio
-        self._pa = pyaudio.PyAudio()
-        self._stream = self._pa.open(format=pyaudio.paInt16, channels=1,
-                                     rate=AUDIO_IN_RATE, input=True, frames_per_buffer=CHUNK)
+        import audio_backend
+        with audio_backend.quiet_stderr():   # PortAudio dumps ALSA/JACK probes to fd 2
+            import pyaudio
+            self._pa = pyaudio.PyAudio()
+            try:
+                self._stream = self._pa.open(
+                    format=pyaudio.paInt16, channels=1, rate=AUDIO_IN_RATE,
+                    input=True, frames_per_buffer=CHUNK)
+            except Exception:
+                # A PyAudio instance whose open() failed still holds a PortAudio context.
+                # Dropping the reference does not release it, so every retry leaked one and
+                # eventually exhausted the device handles.
+                try:
+                    self._pa.terminate()
+                finally:
+                    raise
 
     async def read(self):
         return await asyncio.to_thread(self._stream.read, CHUNK, False)
@@ -300,10 +312,18 @@ class _PyAudioPlayer:
     backend = "PyAudio"
 
     def __init__(self):
-        import pyaudio
-        self._pa = pyaudio.PyAudio()
-        self._out = self._pa.open(format=pyaudio.paInt16, channels=1,
-                                  rate=AUDIO_OUT_RATE, output=True)
+        import audio_backend
+        with audio_backend.quiet_stderr():
+            import pyaudio
+            self._pa = pyaudio.PyAudio()
+            try:
+                self._out = self._pa.open(format=pyaudio.paInt16, channels=1,
+                                          rate=AUDIO_OUT_RATE, output=True)
+            except Exception:
+                try:
+                    self._pa.terminate()   # same leak as the mic path
+                finally:
+                    raise
 
     async def feed(self, pcm: bytes):
         await asyncio.to_thread(self._out.write, pcm)
@@ -382,27 +402,65 @@ class _SoundDevicePlayer:
                 pass
 
 
+#: Backend classes by NAME, not by reference — resolved from the module namespace at call
+#: time so tests (and anything else) can substitute a class by assigning the attribute.
+#: Capturing the classes here directly would freeze whatever existed at import.
+_BACKENDS = {
+    "mic": {"sounddevice": "_SoundDeviceMic", "pyaudio": "_PyAudioMic"},
+    "player": {"sounddevice": "_SoundDevicePlayer", "pyaudio": "_PyAudioPlayer"},
+}
+
+
+def _ordered(kind: str):
+    """(name, factory) pairs in preference order — sounddevice first."""
+    import audio_backend
+    table = _BACKENDS[kind]
+    out = []
+    for name in audio_backend.preferred_order():
+        attr = table.get(name)
+        factory = globals().get(attr) if attr else None
+        if factory is not None:
+            # Report the backend by its own label ("PyAudio", not "pyaudio") so the
+            # combined failure message names what the user actually installed.
+            out.append((getattr(factory, "backend", name), factory))
+    return out
+
+
+def _verify_mic(stream) -> None:
+    """Prove the microphone actually delivers a frame before we rely on it.
+
+    PyAudio's nastiest failure is an open() that succeeds against a dead or exclusively-held
+    device and then never yields audio. Without this check that silently-dead backend wins
+    the race and shadows the working one, and the session just sits there hearing nothing.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        return          # can't block an active loop; the read loop surfaces a dead device
+    data = asyncio.run(asyncio.wait_for(stream.read(), timeout=2.0))
+    if not data:
+        raise RuntimeError("opened but produced no audio")
+
+
 def open_mic():
-    """Open the best available microphone backend (PyAudio if installed, else sounddevice).
-    Raises RuntimeError with a combined reason only if NEITHER backend is usable."""
-    errors = []
-    for backend in (_PyAudioMic, _SoundDeviceMic):
-        try:
-            return backend()
-        except Exception as exc:
-            errors.append(f"{backend.backend}: {exc}")
-    raise RuntimeError("; ".join(errors) or "no microphone backend is installed")
+    """Open the best available microphone backend.
+
+    sounddevice is tried FIRST: it ships prebuilt wheels bundling PortAudio, whereas
+    PyAudio compiles against whatever is on the machine and is the app's most common voice
+    failure. (This function's own docstring used to claim sounddevice was the default while
+    the code tried PyAudio first.) Raises only if NEITHER backend yields a working stream.
+    """
+    import audio_backend
+    return audio_backend.open_with_fallback(_ordered("mic"), verify=_verify_mic)
 
 
 def open_player():
-    """Open the best available speaker backend (PyAudio if installed, else sounddevice)."""
-    errors = []
-    for backend in (_PyAudioPlayer, _SoundDevicePlayer):
-        try:
-            return backend()
-        except Exception as exc:
-            errors.append(f"{backend.backend}: {exc}")
-    raise RuntimeError("; ".join(errors) or "no audio output backend is installed")
+    """Open the best available speaker backend (sounddevice first, PyAudio as fallback)."""
+    import audio_backend
+    return audio_backend.open_with_fallback(_ordered("player"))
 
 
 def available() -> bool:
@@ -414,13 +472,8 @@ def available() -> bool:
     except Exception:
         return False
     try:
-        import sounddevice  # noqa: F401
-        return True
-    except Exception:
-        pass
-    try:
-        import pyaudio  # noqa: F401
-        return True
+        import audio_backend
+        return bool(audio_backend.available_backends())
     except Exception:
         return False
 
