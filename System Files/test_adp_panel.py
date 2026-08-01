@@ -15,16 +15,39 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("EMBER_SAFE_MODE", "1")
 os.environ.setdefault("EMBER_SUPPORT_DIR", tempfile.mkdtemp(prefix="ember_adp_panel_"))
 
+import sys
+import types
+
 import pytest
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout
+
+# The phone-setup handler reaches remote_server, which imports pyautogui/tools at module level
+# for the screen-mirroring half. Neither is available headless. Same stubbing as test_pairing.py.
+if "pyautogui" not in sys.modules:
+    _pg = types.ModuleType("pyautogui")
+    _pg.FAILSAFE = False
+    _pg.PAUSE = 0
+    _pg.size = lambda: (1920, 1080)
+    sys.modules["pyautogui"] = _pg
+if "tools" not in sys.modules:
+    _t = types.ModuleType("tools")
+    _t.run_powershell = lambda cmd, timeout=60: {"ok": True, "ran": cmd}
+    _t.press_key = lambda *a, **k: None
+    _t.type_text = lambda *a, **k: None
+    sys.modules["tools"] = _t
 
 import key_vault as KV
 import data_protect as DP
 import ui
 
-_ADP_METHODS = ("_populate_adp_section", "_refresh_adp_status", "_adp_setup",
-                "_adp_show_identity", "_adp_add_device", "_adp_protect_folder",
-                "_adp_unprotect_folder", "_adp_grant_access", "_adp_report")
+def _adp_methods():
+    """Every ADP method on SettingsDialog, discovered rather than listed.
+
+    A hard-coded list silently goes stale the moment a handler is added — the panel would build
+    fine here while raising AttributeError in the real dialog.
+    """
+    return [n for n in dir(ui.SettingsDialog)
+            if n.startswith(("_adp_", "_refresh_adp")) or n == "_populate_adp_section"]
 
 
 @pytest.fixture(scope="session")
@@ -38,9 +61,11 @@ def panel(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(KV, "VAULT_FILE", tmp_path / "vault.enc")
     monkeypatch.setattr(KV, "KEY_FILE", tmp_path / "vault.key")
     monkeypatch.setattr(DP, "RECIPIENTS_FILE", tmp_path / "adp_recipients.json")
+    import adp_watch
+    monkeypatch.setattr(adp_watch, "CONFIG_FILE", tmp_path / "adp_watch.json")
 
     host_cls = type("AdpHost", (QWidget,),
-                    {n: getattr(ui.SettingsDialog, n) for n in _ADP_METHODS})
+                    {n: getattr(ui.SettingsDialog, n) for n in _adp_methods()})
     host = host_cls()
     host._populate_adp_section(QVBoxLayout(host))
     return host
@@ -197,3 +222,36 @@ def test_panel_text_has_no_hard_coded_platform(panel):
     assert "this_device()" in body
     # And the live label reflects whatever platform the tests are running on.
     assert ui.this_device() in panel._adp_status_lbl.text() or "Off" in panel._adp_status_lbl.text()
+
+
+def test_every_panel_handler_is_reachable():
+    """Guard the discovery above: the panel must not reference a handler that doesn't exist."""
+    src = open("ui.py", encoding="utf-8").read()
+    body = src.split("def _populate_adp_section", 1)[1].split("def _adp_report", 1)[0]
+    import re
+    # Only call sites — `self._adp_status_lbl` is a widget attribute, not a handler.
+    referenced = set(re.findall(r"self\.(_adp_[a-z_]+|_refresh_adp_[a-z_]+)\s*\(", body))
+    defined = set(_adp_methods())
+    assert referenced <= defined, referenced - defined
+
+
+def test_watcher_state_shows_in_the_panel(panel, tmp_path):
+    import adp_watch
+    assert "Auto-protect is off" in panel._adp_watch_lbl.text()
+    DP.adp_setup("a good long passphrase")
+    src = tmp_path / "import"
+    src.mkdir()
+    assert adp_watch.adp_watch_start(str(src))["ok"] is True
+    try:
+        panel._refresh_adp_watch_label()
+        assert str(src) in panel._adp_watch_lbl.text()
+        assert panel._adp_watch_btn.text() == "Stop auto-protect"
+    finally:
+        adp_watch.stop_watching(persist=False)
+
+
+def test_phone_setup_refuses_before_protection(panel, monkeypatch):
+    seen = []
+    monkeypatch.setattr(ui.QMessageBox, "information", lambda *a, **k: seen.append(a[2]))
+    panel._adp_phone_setup()
+    assert seen and "Turn on data protection first" in seen[0]

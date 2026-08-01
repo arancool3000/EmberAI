@@ -57,6 +57,9 @@ _AUTH_MAX_FAILS = 5         # failures within the window before lockout
 _AUTH_WINDOW_S = 60.0       # rolling window for counting failures
 _AUTH_LOCKOUT_S = 120.0     # cooldown once locked out
 _MAX_POST_BYTES = 2_000_000  # cap request bodies (input events + chat are tiny); avoids a huge alloc
+# Photo/video uploads need their own, much larger ceiling — but deliberately a SEPARATE one, so
+# raising it never widens what /api/event or /api/chat will read into memory.
+_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
 
 
 # Pairing tokens: a phone pairs once on the LAN (proves it knows the PIN) and gets a LONG random
@@ -382,6 +385,7 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
   <button id=m_mouse onclick="setMode('mouse')">Mouse</button>
   <button id=m_kb onclick="setMode('kb')">Keys</button>
   <button id=m_chat onclick="setMode('chat')">Chat</button>
+  <button id=m_photos onclick="setMode('photos')">Photos</button>
   <button id=fsbtn onclick="toggleFS()" title=Fullscreen>⛶</button>
 </nav>
 <button id=fsexit onclick="toggleFS()">✕ Exit fullscreen</button>
@@ -511,6 +515,19 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
   </div>
 </section>
 
+<section id=photoPane class=modepane data-mode=photos>
+  <div class="pane glass">
+    <h3 style="margin:0 0 6px">Protect photos</h3>
+    <p class=hint>Encrypted on the computer before anything syncs. The originals stay on this
+    phone until you delete them yourself.</p>
+    <p class=hint id=photoWarn><b>Turn off iCloud Photos first.</b> While it is on, Apple
+    already has the original before Ember sees it — this cannot filter that.</p>
+    <input id=photoPick type=file accept="image/*,video/*" multiple style="display:none">
+    <button onclick="document.getElementById('photoPick').click()">Choose photos…</button>
+    <div id=photoProg class=hint style="margin-top:8px"></div>
+  </div>
+</section>
+
 <script>
 let PIN=localStorage.getItem("ember_pin")||"",TOK=localStorage.getItem("ember_tok")||"",SW=0,SH=0,MODE="full",lastUrl="",fetching=false,dragLock=false,chatLoop=false,FAKEFS=false;
 let front=document.getElementById("screenA"),back=document.getElementById("screenB"),hit=document.getElementById("screenhit");
@@ -585,7 +602,7 @@ async function runcmd(){let i=document.getElementById("cmdx");if(!i||!i.value)re
 function sendtext(){let i=document.getElementById("tx");if(i.value){post({t:"type",text:i.value});i.value=""}}
 function toggleFsKb(){let on=document.getElementById("screenwrap").classList.toggle("fskb");if(on)setTimeout(()=>document.getElementById("fsKbInput").focus(),60)}
 function sendFsText(){let i=document.getElementById("fsKbInput");if(i.value){post({t:"type",text:i.value});i.value=""}}
-function setMode(m){MODE=m;document.querySelectorAll(".modepane").forEach(el=>{el.style.display=el.dataset.mode===m?(m==="chat"?"grid":""):"none"});["full","mouse","kb","chat"].forEach(x=>document.getElementById("m_"+x).classList.toggle("on",x===m));if(m==="kb")setTimeout(()=>document.getElementById("livekb").focus(),60);if(m==="chat")pollChat()}
+function setMode(m){MODE=m;document.querySelectorAll(".modepane").forEach(el=>{el.style.display=el.dataset.mode===m?(m==="chat"?"grid":""):"none"});["full","mouse","kb","chat","photos"].forEach(x=>document.getElementById("m_"+x).classList.toggle("on",x===m));if(m==="kb")setTimeout(()=>document.getElementById("livekb").focus(),60);if(m==="chat")pollChat()}
 function fakeFS(on){FAKEFS=on;document.body.classList.toggle("fakefs",FAKEFS);flash(FAKEFS?"landscape":"live")}
 function toggleFS(){
  if(FAKEFS){fakeFS(false);return}   // exit button / re-tap while already in fake-fullscreen
@@ -601,6 +618,23 @@ function cycleQuality(){QI=(QI+1)%QUAL.length;document.getElementById("qbtn").te
 function cycleSpeed(){SPI=(SPI+1)%SPEEDS.length;SPEED=SPEEDS[SPI];document.getElementById("spdbtn").textContent=SLABEL[SPI]}
 function toggleDragLock(){dragLock=!dragLock;["dragBtn","dragBtn2"].forEach(id=>{let b=document.getElementById(id);if(b){b.classList.toggle("dragOn",dragLock);b.textContent=dragLock?"Dragging On":"Drag Lock"}});if(!dragLock)post({t:"up"})}
 let livekb=document.getElementById("livekb");livekb.addEventListener("keydown",e=>{let k=e.key;if(k.length===1){post({t:"type",text:k});e.preventDefault()}else if(k==="Backspace"){key("backspace");e.preventDefault()}else if(k==="Enter"){key("enter");e.preventDefault()}else if(k==="Tab"){key("tab");e.preventDefault()}else if(k.indexOf("Arrow")===0){key(k.slice(5).toLowerCase());e.preventDefault()}livekb.value=""});
+async function sendPhotos(files){
+ let prog=document.getElementById("photoProg"),done=0,failed=[];
+ for(let i=0;i<files.length;i++){
+  let f=files[i];
+  prog.textContent="Sending "+(i+1)+" of "+files.length+" — "+f.name;
+  try{
+   let h={"X-Ember-Filename":encodeURIComponent(f.name)};
+   if(TOK)h["X-Ember-Token"]=TOK; if(PIN)h["X-Ember-Pin"]=PIN;
+   let r=await fetch("/api/upload",{method:"POST",headers:h,body:f});
+   let j=await r.json().catch(()=>({ok:false}));
+   if(j&&j.ok)done++;else failed.push(f.name+(j&&j.error?" ("+j.error+")":""));
+  }catch(e){failed.push(f.name+" (could not reach Ember)")}
+ }
+ prog.textContent=done+" protected"+(failed.length?(", "+failed.length+" failed: "+failed.join(", ")):"");
+ flash(failed.length?"some failed":"protected ✓");
+}
+document.getElementById("photoPick").addEventListener("change",e=>{let f=[...e.target.files];e.target.value="";if(f.length)sendPhotos(f)});
 function esc(s){return String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
 function renderChat(items){let log=document.getElementById("chatLog");log.innerHTML=(items&&items.length?items:[{role:"system",text:"Remote chat is ready. Tell Ember what to do on the desktop."}]).map(m=>`<div class="msg ${esc(m.role)}">${esc(m.text)}</div>`).join("");log.scrollTop=log.scrollHeight}
 function pollChat(){if(chatLoop||(!PIN&&!TOK))return;chatLoop=true;chatTick()}
@@ -747,6 +781,71 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.send_response(404); self.end_headers()
 
+    def _json(self, code: int, obj: dict) -> None:
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_upload(self) -> None:
+        """Receive a photo from the phone (Ember Link picker, or an iOS Shortcuts automation)
+        and encrypt it on this machine.
+
+        Credentials come from HEADERS rather than a JSON body: the body is the file. Shortcuts'
+        "Get Contents of URL" can set custom headers, so the same endpoint serves both callers.
+        Putting the token in a header rather than the query string also keeps it out of proxy
+        and tunnel access logs.
+        """
+        import urllib.parse
+        pin = self.headers.get("X-Ember-Pin")
+        tok = self.headers.get("X-Ember-Token")
+        if not self._auth(pin, tok):
+            self._json(403, {"ok": False, "error": "not authorised"})
+            return
+        try:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            n = 0
+        if n <= 0:
+            self._json(400, {"ok": False, "error": "empty upload"})
+            return
+        if n > _MAX_UPLOAD_BYTES:
+            # Refuse up front on the declared length, so an oversized upload costs no memory
+            # and no transfer time before being rejected.
+            self._json(413, {"ok": False,
+                             "error": f"too large (max {_MAX_UPLOAD_BYTES // (1024*1024)} MB)"})
+            return
+        # Read in chunks rather than one rfile.read(n): a truncated or lying Content-Length
+        # then fails as a short read instead of blocking on a single huge allocation.
+        buf = bytearray()
+        remaining = n
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            buf.extend(chunk)
+            remaining -= len(chunk)
+        if len(buf) != n:
+            self._json(400, {"ok": False, "error": "incomplete upload"})
+            return
+        name = self.headers.get("X-Ember-Filename") or ""
+        try:
+            name = urllib.parse.unquote(name)
+        except Exception:
+            name = ""
+        try:
+            import phone_intake
+            r = phone_intake.receive(name, bytes(buf))
+        except Exception as e:
+            r = {"ok": False, "error": str(e)}
+        finally:
+            # Drop the plaintext promptly; it is never written to disk in the first place.
+            del buf
+        self._json(200 if r.get("ok") else 500, r)
+
     def do_POST(self):
         if self.path == "/api/pair":
             # A device on the LAN proves it knows the PIN (or already holds a token) and gets a
@@ -793,6 +892,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/api/upload":
+            self._handle_upload()
             return
         if self.path != "/api/event":
             self.send_response(404); self.end_headers(); return
@@ -1057,6 +1159,9 @@ def start(port: int = 8765, pin: str | None = None, idle_timeout: float = 1800.0
         return {"ok": False, "error": f"could not bind port {port}: {e}"}
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
+    # Record the port actually bound, not the one asked for: with port=0 the OS picks an
+    # ephemeral one, and reporting the request would hand out a URL that goes nowhere.
+    port = srv.server_address[1]
     _STATE.update(server=srv, thread=th, pin=pin, port=port, ip=ip,
                   url=f"http://{ip}:{port}", last_active=time.time(),
                   idle_timeout=idle_timeout)

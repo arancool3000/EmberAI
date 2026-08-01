@@ -81,14 +81,18 @@ def test_exec_tool_runs_and_emits(monkey_call=None):
     assert "tool_call" in kinds and "tool_result" in kinds
 
 
-def test_exec_tool_confirmation_denied_blocks_run():
+def test_exec_tool_confirmation_denied_blocks_run(monkeypatch):
     a, events = _agent_with_capture()
     import safety
-    # Force "needs confirmation" and auto-deny on the confirm event.
-    safety.classify = lambda n, ar: ("EXFIL", "test risk")
-    safety.needs_confirmation = lambda risk: True
+    # Force "needs confirmation" and auto-deny on the confirm event. Patched through
+    # monkeypatch so the stubs are undone afterwards: these were previously assigned
+    # directly onto the module, which left every later test in the process seeing a
+    # classify() that returns ("EXFIL", "test risk") for everything.
+    monkeypatch.setattr(safety, "classify", lambda n, ar: ("EXFIL", "test risk"))
+    monkeypatch.setattr(safety, "needs_confirmation", lambda risk: True)
     ran = {"count": 0}
-    ot.call = lambda name, args: ran.__setitem__("count", ran["count"] + 1) or {"ok": True}
+    monkeypatch.setattr(ot, "call",
+                        lambda name, args: ran.__setitem__("count", ran["count"] + 1) or {"ok": True})
 
     def on_event(ev):
         if ev.kind == "confirm":
