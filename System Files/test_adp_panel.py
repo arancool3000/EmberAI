@@ -177,3 +177,23 @@ def test_shredding_needs_a_second_yes(panel, monkeypatch, tmp_path):
     panel._adp_protect_folder()
     assert (src / "a.jpg").read_bytes() == b"original bytes"  # nothing shredded
     assert not (src / "a.jpg.ember").exists()                 # and nothing encrypted either
+
+
+@pytest.mark.parametrize("platform,expected", [
+    ("darwin", "this Mac"), ("win32", "this PC"), ("linux", "this computer"),
+])
+def test_device_wording_is_not_mac_only(monkeypatch, platform, expected):
+    """Ember ships for macOS and Windows from one source; 'this Mac' on a PC reads as a bug."""
+    monkeypatch.setattr(ui.sys, "platform", platform)
+    assert ui.this_device() == expected
+    assert ui.this_device(capitalized=True) == expected[0].upper() + expected[1:]
+
+
+def test_panel_text_has_no_hard_coded_platform(panel):
+    """The status line and setup prompts must go through the helper, not say 'Mac' outright."""
+    src = open("ui.py", encoding="utf-8").read()
+    body = src.split("def _populate_adp_section", 1)[1].split("def _adp_report", 1)[0]
+    assert "this Mac" not in body and "this PC" not in body
+    assert "this_device()" in body
+    # And the live label reflects whatever platform the tests are running on.
+    assert ui.this_device() in panel._adp_status_lbl.text() or "Off" in panel._adp_status_lbl.text()
