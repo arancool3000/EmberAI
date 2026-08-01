@@ -23,8 +23,17 @@ def test_macos_install_folder_is_self_explanatory():
     installer = (folder / "Install Ember.command").read_text(encoding="utf-8")
     guide = (folder / "Installation Guide.html").read_text(encoding="utf-8")
     assert 'open "$HERE/Installation Guide.html"' in installer
-    assert 'exec "$ROOT/System Files/Ember.command"' in installer
-    assert "private environment" in guide
+    assert "Applications" in guide
+
+
+def test_macos_installer_installs_rather_than_running_from_source():
+    """It used to `exec System Files/Ember.command`, which launches Ember from source in a
+    Terminal under the venv's python and installs nothing — no app in /Applications, and the
+    Dock showing a Python process. See test_mac_installer.py for the behavioural tests."""
+    installer = (REPO / "macOS Install" / "Install Ember.command").read_text(encoding="utf-8")
+    assert 'exec "$ROOT/System Files/Ember.command"' not in installer
+    assert "BUILD_DESKTOP_APP.command" in installer
+    assert "EMBER_APPS_DIR" in installer
 
 
 def test_readme_leads_with_platform_install_folders():

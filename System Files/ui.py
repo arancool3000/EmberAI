@@ -2181,22 +2181,47 @@ class SettingsDialog(QDialog):
 
     def _quick_capture(self):
         """Listen briefly and try to transcribe. Returns (text, error). error='' means audio was
-        captured even if it couldn't be transcribed (e.g. offline)."""
+        captured even if it couldn't be transcribed (e.g. offline).
+
+        Records through Ember's own audio_backend (sounddevice, whose wheels bundle PortAudio)
+        rather than `sr.Microphone`. SpeechRecognition's Microphone class hard-requires PyAudio,
+        which Ember deliberately does not ship — it has no macOS wheel. The result was a mic
+        test that opened the device successfully via sounddevice and then failed at the capture
+        step with SpeechRecognition's own "Could not find PyAudio; check installation", telling
+        the user to install something they should not need.
+
+        sr.AudioFile has no such dependency, so the recording is handed over as a WAV.
+        """
+        import os
+        import tempfile
+        wav = os.path.join(tempfile.gettempdir(), "ember_mic_test.wav")
         try:
-            import speech_recognition as sr
+            import audio_backend
+            audio_backend.record_wav(3, wav, rate=16000, channels=1)
         except Exception as e:
-            return "", f"SpeechRecognition not installed ({e})"
+            detail = str(e) or type(e).__name__
+            return "", detail
+        # The recording exists from here on, so every exit below must clean it up — including
+        # the "SpeechRecognition isn't installed" one, which used to return before the finally.
         try:
-            r = sr.Recognizer()
-            with sr.Microphone() as src:
-                r.adjust_for_ambient_noise(src, duration=0.3)
-                audio = r.listen(src, timeout=4, phrase_time_limit=3)
-        except Exception as e:
-            return "", str(e)
-        try:
-            return r.recognize_google(audio), ""      # best-effort; free + no key
-        except Exception:
-            return "", ""                              # captured, just couldn't transcribe offline
+            try:
+                import speech_recognition as sr
+            except Exception:
+                # Audio was captured; we simply cannot turn it into words here. That is a
+                # working microphone, so say so rather than reporting a failure.
+                return "", ""
+            try:
+                r = sr.Recognizer()
+                with sr.AudioFile(wav) as src:
+                    audio = r.record(src)
+                return r.recognize_google(audio), ""   # best-effort; free + no key
+            except Exception:
+                return "", ""                          # captured, just couldn't transcribe
+        finally:
+            try:
+                os.remove(wav)
+            except OSError:
+                pass
 
     def _setup_mcp_claude(self):
         self._start_mcp_setup("claude")
@@ -3861,9 +3886,14 @@ class SettingsDialog(QDialog):
             import ember_fx
             # A low intensity: this is a bed of embers under the content, not a bonfire
             # in front of it. Anything brighter competes with the controls.
-            self._hearth = ember_fx.FlameBackground(140, 74, intensity=0.55)
+            # Grid resolution drives how sharp the flames read once upscaled. The old 140x74
+            # had to be blurred on the way up to hide its own lattice; this is dense enough to
+            # scale cleanly, and the simulation still costs well under a millisecond a frame.
+            self._hearth = ember_fx.FlameBackground(320, 180, intensity=0.85)
             self._hearth_timer = QTimer(self)
-            self._hearth_timer.setInterval(50)      # 20fps is plenty for fire, and idles cheap
+            # 20fps made the fire flicker rather than burn — real flames move slower than the
+            # simulation's per-step decay implies. 12fps reads as a settled hearth.
+            self._hearth_timer.setInterval(83)
             self._hearth_timer.timeout.connect(self._tick_ember_hearth)
             self._hearth_timer.start()
         except Exception:
@@ -3876,7 +3906,7 @@ class SettingsDialog(QDialog):
         hearth.step()
         # Only the strip the fire occupies needs repainting; invalidating the whole dialog
         # every frame would make every control in it redraw 20 times a second.
-        h = max(40, int(self.height() * 0.30))
+        h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
         self.update(0, self.height() - h, self.width(), h)
 
     def paintEvent(self, event):
@@ -3888,7 +3918,7 @@ class SettingsDialog(QDialog):
             from PyQt6.QtCore import QRect
             painter = QPainter(self)
             painter.setOpacity(0.5)     # sits under the content, never fights it for attention
-            h = max(40, int(self.height() * 0.30))
+            h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
             hearth.paint(painter, QRect(0, self.height() - h, self.width(), h))
             painter.end()
         except Exception:
