@@ -1,12 +1,19 @@
 #!/bin/bash
 # Double-click to build a REAL standalone Ember.app (no Terminal, no Python needed to run it).
 # Free: uses PyInstaller. Output lands in dist/Ember.app — drag it to /Applications.
+#
+# Set EMBER_NONINTERACTIVE=1 to run it as a build step: no final "press Enter", no Finder
+# window. "Install Ember.command" drives it that way.
 cd "$(dirname "$0")"
 
 # macOS Gatekeeper: once this file runs, clear the "quarantine" flag from the
 # whole folder so the other .command files open without the "Apple cannot
 # verify" prompt. (The very first launch still needs right-click -> Open.)
 xattr -dr com.apple.quarantine "$(pwd)" 2>/dev/null || true
+
+# Waiting on a keypress is right for a double-click, and wrong when another script is driving
+# this one — it would hang the install forever with nobody to press anything.
+hold() { [ -n "${EMBER_NONINTERACTIVE:-}" ] || read -r _; }
 
 # Live progress for long build steps. The real command writes to a log while the terminal gets
 # an ETA and rotating low-stakes joke; CI/non-TTY runs still preserve the command's exit code.
@@ -76,20 +83,20 @@ export PATH="$HOME/.local/bin:$PATH"
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installing uv (Python toolchain, no admin needed)…"
   curl -LsSf https://astral.sh/uv/install.sh | sh \
-    || { echo "Could not install uv. Install Python 3.12 from https://www.python.org/downloads/ and retry."; read _; exit 1; }
+    || { echo "Could not install uv. Install Python 3.12 from https://www.python.org/downloads/ and retry."; hold; exit 1; }
   export PATH="$HOME/.local/bin:$PATH"
 fi
-[ -d ".venv" ] || uv venv --python 3.12 || { echo "Could not create the Python 3.12 environment."; read _; exit 1; }
+[ -d ".venv" ] || uv venv --python 3.12 || { echo "Could not create the Python 3.12 environment."; hold; exit 1; }
 PYBIN=".venv/bin/python"
 
 echo "Installing Ember's dependencies…"
 run_with_progress 180 "Installing dependencies" uv pip install -r requirements.txt \
-  || { echo "Dependency install failed. Last lines:"; tail -20 "$LAST_LOG"; echo "Press Enter."; read _; exit 1; }
+  || { echo "Dependency install failed. Last lines:"; tail -20 "$LAST_LOG"; echo "Press Enter."; hold; exit 1; }
 uv pip install --upgrade pyinstaller
 
 rm -rf build dist
 run_with_progress 240 "Building Ember.app" "$PYBIN" -m PyInstaller --noconfirm --log-level=WARN Ember.spec \
-  || { echo "Build failed. Last lines:"; tail -30 "$LAST_LOG"; echo "Press Enter."; read _; exit 1; }
+  || { echo "Build failed. Last lines:"; tail -30 "$LAST_LOG"; echo "Press Enter."; hold; exit 1; }
 
 # Verify the bundle actually exists before claiming success. PyInstaller can fail late
 # (a missing hidden import, a full disk) and still exit 0 from the progress wrapper, which
@@ -101,7 +108,7 @@ if [ ! -d "dist/Ember.app" ]; then
   [ -n "$LAST_LOG" ] && [ -f "$LAST_LOG" ] && { echo "Last 40 lines of the build log:"; tail -40 "$LAST_LOG"; }
   echo ""
   echo "Press Enter to close."
-  read -r _
+  hold
   exit 1
 fi
 
@@ -131,6 +138,8 @@ echo "     & Security → Open Anyway  (older macOS: right-click → Open)."
 echo "  3. Grant Screen Recording + Accessibility in"
 echo "     System Settings → Privacy & Security."
 echo "==============================================="
-open dist 2>/dev/null
-echo "Press Enter to close."
-read _
+if [ -z "${EMBER_NONINTERACTIVE:-}" ]; then
+  open dist 2>/dev/null
+  echo "Press Enter to close."
+  hold
+fi

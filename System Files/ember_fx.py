@@ -347,26 +347,24 @@ class FlameBackground:
         return img
 
     def paint(self, painter, rect) -> None:
-        """Draw the current frame stretched across ``rect`` with smooth upscaling.
+        """Draw the current frame stretched across ``rect``.
 
         Scaled as a QImage rather than a QPixmap: the pixmap path went through the window
         system's own transform and came out nearest-neighbour on some platforms, which
-        turned the simulation into visible blocks. Scaling in two passes also softens the
-        lattice — a single jump from a 96px-wide grid to a full-width panel leaves stair
-        stepping that reads as pixel art rather than fire.
+        turned the simulation into visible blocks.
+
+        This used to scale in TWO passes — down to half the target, then up to full — to hide
+        the lattice of the source grid. It hid the lattice by blurring everything, and the
+        flames came out soft and indistinct. A single smooth upscale from a grid that is
+        actually big enough keeps the edges of the tongues readable.
         """
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QPainter
         if rect.width() <= 0 or rect.height() <= 0:
             return
-        img = self._image()
-        mid = img.scaled(max(1, rect.width() // 2), max(1, rect.height() // 2),
-                         Qt.AspectRatioMode.IgnoreAspectRatio,
-                         Qt.TransformationMode.SmoothTransformation)
-        full = mid.scaled(rect.width(), rect.height(),
-                          Qt.AspectRatioMode.IgnoreAspectRatio,
-                          Qt.TransformationMode.SmoothTransformation)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawImage(rect, full)
+        painter.drawImage(rect, self._image().scaled(
+            rect.width(), rect.height(), Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
         painter.restore()
