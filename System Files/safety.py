@@ -382,6 +382,12 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
         return "high", "issues a pairing token granting this phone full Ember Link access"
     if tool_name == "adp_phone_set_folder":
         return "medium", "changes where protected phone uploads are saved"
+    if tool_name == "adp_organise":
+        if str(a.get("allow_cloud", "false")).lower() == "true":
+            return "high", "decrypts your photos and sends them to a cloud model"
+        return "medium", "decrypts photos in memory to sort them (stays on this machine)"
+    if tool_name == "adp_set_level":
+        return "medium", "changes how strongly new files are encrypted"
     if tool_name == "adp_watch_stop":
         return "medium", "stops auto-protecting a folder (new files stop being encrypted)"
     if tool_name in {"adp_protect_file", "adp_protect_folder", "adp_watch_start"}:

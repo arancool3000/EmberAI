@@ -47,20 +47,24 @@ Honest limits (read before relying on this)
 
 Crypto
 ------
-Payload: Fernet (AES-128-CBC + HMAC-SHA256) under a random per-file CEK.
-Passphrase wrap: PBKDF2-HMAC-SHA256, 600,000 iterations, fresh 16-byte salt per file.
+Payload: **AES-256-GCM** under a random 256-bit per-file CEK, with the file header passed as
+authenticated data.
+Passphrase wrap: PBKDF2-HMAC-SHA256, 600,000 iterations, fresh 16-byte salt per file, then
+AES-256-GCM around the CEK.
 Recipient wrap: X25519 ECDH to an ephemeral key, HKDF-SHA256 over the shared secret and both
-public keys, then Fernet-wrapping the CEK.
+public keys, then AES-256-GCM around the CEK.
 
-File layout (v2)::
+File layout (v3)::
 
-    b"EMBERADP2" | uint32be header_len | header JSON | Fernet token
+    b"EMBERADP3" | uint32be header_len | header JSON | nonce (12) | ciphertext+tag
 
-The header carries only wrapped keys and public values. It is not itself authenticated, but the
-payload is: tampering with the header can at worst cause unwrapping to fail or produce a wrong
-CEK, and the body's HMAC then rejects it. No forged plaintext can result.
+**The header is authenticated.** Binding it into the payload's GCM tag closes the gap v2 had:
+there, someone who could write to your sync folder could strip a recipient slot out of the
+header undetected, because the payload's MAC said nothing about the header. Here any edit to
+the header — reordering, removing or adding a slot — breaks decryption of the body outright.
 
-Files written by the earlier v1 format (``EMBERADP1``, passphrase-only) still decrypt.
+Files written by v1 (``EMBERADP1``, passphrase-only) and v2 (``EMBERADP2``, Fernet payload)
+still decrypt. ``adp_grant_access`` re-seals them as v3.
 
 Secrets live in ``key_vault`` (OS keychain where available): the passphrase under
 ``adp_passphrase`` and this machine's X25519 private key under ``adp_device_key``. No tool in
@@ -78,14 +82,18 @@ import secrets
 import struct
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 MAGIC_V1 = b"EMBERADP1"
-MAGIC = b"EMBERADP2"
+MAGIC_V2 = b"EMBERADP2"
+MAGIC = b"EMBERADP3"
+NONCE_LEN = 12
 SALT_LEN = 16
 KDF_ITERATIONS = 600_000
 EXT = ".ember"
@@ -94,6 +102,43 @@ PUBKEY_PREFIX = "ember1:"
 
 VAULT_KEY = "adp_passphrase"
 DEVICE_KEY = "adp_device_key"
+LEVEL_KEY = "adp_level"          # stored in settings, not the vault — it is not a secret
+
+#: How hard to make it. Each level is a real, describable difference — not a marketing ladder.
+#:
+#: "double" cascades TWO DIFFERENT ciphers under independent keys, rather than running AES
+#: twice. Encrypting twice with the same algorithm buys almost nothing: if AES-256-GCM is ever
+#: broken, both layers fall together. Cascading AES-256-GCM inside ChaCha20-Poly1305 means an
+#: attacker needs a break in *both* primitives, which is a genuinely different bet. It is not
+#: "twice as strong" and nothing in the UI says so — it is insurance against one construction
+#: turning out to be flawed, paid for with roughly double the CPU time.
+LEVELS = {
+    "standard": {
+        "cipher": "aes256gcm",
+        "iterations": 600_000,
+        "label": "Standard",
+        "summary": "AES-256-GCM. The same cipher that protects most HTTPS traffic.",
+        "cost": "Instant.",
+    },
+    "high": {
+        "cipher": "aes256gcm",
+        "iterations": 2_400_000,
+        "label": "High",
+        "summary": "AES-256-GCM, with four times the work to turn your recovery code into a "
+                   "key — so guessing the code is four times slower for an attacker.",
+        "cost": "Adds about a second whenever the recovery code is used.",
+    },
+    "double": {
+        "cipher": "aes256gcm+chacha20",
+        "iterations": 2_400_000,
+        "label": "Double",
+        "summary": "AES-256-GCM inside ChaCha20-Poly1305, under two independent keys. An "
+                   "attacker would need a break in both ciphers, not just one.",
+        "cost": "Roughly twice the time to encrypt and decrypt. Not twice the strength — "
+                "insurance against one of the two ciphers turning out to be flawed.",
+    },
+}
+DEFAULT_LEVEL = "standard"
 
 
 def _data_dir() -> Path:
@@ -237,27 +282,50 @@ def _save_recipients(recips: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Key wrapping
 # ---------------------------------------------------------------------------
-def _passphrase_key(passphrase: str, salt: bytes, iterations: int = KDF_ITERATIONS) -> Fernet:
+def _passphrase_bits(passphrase: str, salt: bytes, iterations: int = KDF_ITERATIONS) -> bytes:
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=iterations)
-    return Fernet(base64.urlsafe_b64encode(kdf.derive(passphrase.encode("utf-8"))))
+    return kdf.derive(passphrase.encode("utf-8"))
+
+
+def _passphrase_key(passphrase: str, salt: bytes, iterations: int = KDF_ITERATIONS) -> Fernet:
+    """Fernet form of the passphrase key — v1/v2 files only."""
+    return Fernet(base64.urlsafe_b64encode(_passphrase_bits(passphrase, salt, iterations)))
+
+
+def _ecdh_bits(shared: bytes, epk_raw: bytes, pub_raw: bytes) -> bytes:
+    """Bind the wrapping key to both public keys so a wrap can't be replayed at a different
+    recipient."""
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+                info=HKDF_INFO + epk_raw + pub_raw).derive(shared)
 
 
 def _ecdh_key(shared: bytes, epk_raw: bytes, pub_raw: bytes) -> Fernet:
-    """Bind the wrapping key to both public keys so a wrap can't be replayed at a different
-    recipient."""
-    derived = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
-                   info=HKDF_INFO + epk_raw + pub_raw).derive(shared)
-    return Fernet(base64.urlsafe_b64encode(derived))
+    """Fernet form of the recipient key — v2 files only."""
+    return Fernet(base64.urlsafe_b64encode(_ecdh_bits(shared, epk_raw, pub_raw)))
 
 
-def _wrap_for_recipients(cek: bytes, passphrase: str, recips: list[dict]) -> list[dict]:
+def _gcm_wrap(key: bytes, cek: bytes) -> dict:
+    """Wrap the content key under AES-256-GCM. Fresh nonce per wrap."""
+    nonce = secrets.token_bytes(NONCE_LEN)
+    return {"nonce": base64.b64encode(nonce).decode(),
+            "wrapped": base64.b64encode(AESGCM(key).encrypt(nonce, cek, None)).decode()}
+
+
+def _gcm_unwrap(key: bytes, slot: dict) -> bytes:
+    return AESGCM(key).decrypt(base64.b64decode(slot["nonce"]),
+                               base64.b64decode(slot["wrapped"]), None)
+
+
+def _wrap_for_recipients(cek: bytes, passphrase: str, recips: list[dict],
+                         level: str | None = None) -> list[dict]:
+    """Wrap the content key for the passphrase and every recipient, under AES-256-GCM."""
+    spec = LEVELS[level or current_level()]
+    iters = int(spec["iterations"])
     salt = secrets.token_bytes(SALT_LEN)
-    slots = [{
-        "type": "passphrase",
-        "salt": base64.b64encode(salt).decode(),
-        "iterations": KDF_ITERATIONS,
-        "wrapped": _passphrase_key(passphrase, salt).encrypt(cek).decode(),
-    }]
+    slot = {"type": "passphrase", "salt": base64.b64encode(salt).decode(),
+            "iterations": iters, "cipher": spec["cipher"]}
+    slot.update(_gcm_wrap(_passphrase_bits(passphrase, salt, iters), cek))
+    slots = [slot]
     for r in recips:
         try:
             pub_raw = decode_pubkey(r["pub"])
@@ -266,18 +334,18 @@ def _wrap_for_recipients(cek: bytes, passphrase: str, recips: list[dict]) -> lis
         esk = X25519PrivateKey.generate()
         epk_raw = _pub_raw(esk)
         shared = esk.exchange(X25519PublicKey.from_public_bytes(pub_raw))
-        slots.append({
-            "type": "x25519",
-            "kid": key_id(pub_raw),
-            "label": r.get("label", ""),
-            "epk": base64.b64encode(epk_raw).decode(),
-            "wrapped": _ecdh_key(shared, epk_raw, pub_raw).encrypt(cek).decode(),
-        })
+        slot = {"type": "x25519", "kid": key_id(pub_raw), "label": r.get("label", ""),
+                "epk": base64.b64encode(epk_raw).decode()}
+        slot.update(_gcm_wrap(_ecdh_bits(shared, epk_raw, pub_raw), cek))
+        slots.append(slot)
     return slots
 
 
-def _unwrap_cek(slots: list[dict], passphrase: str | None) -> bytes:
-    """Recover the content key from whichever slot this machine can open."""
+def _unwrap_cek(slots: list[dict], passphrase: str | None, gcm: bool) -> bytes:
+    """Recover the content key from whichever slot this machine can open.
+
+    `gcm` selects the wrap format: v3 uses AES-256-GCM, v2 used Fernet.
+    """
     priv = _device_private()
     if priv is not None:
         my_pub = _pub_raw(priv)
@@ -288,6 +356,8 @@ def _unwrap_cek(slots: list[dict], passphrase: str | None) -> bytes:
             try:
                 epk_raw = base64.b64decode(s["epk"])
                 shared = priv.exchange(X25519PublicKey.from_public_bytes(epk_raw))
+                if gcm:
+                    return _gcm_unwrap(_ecdh_bits(shared, epk_raw, my_pub), s)
                 return _ecdh_key(shared, epk_raw, my_pub).decrypt(s["wrapped"].encode())
             except Exception:
                 continue
@@ -298,6 +368,8 @@ def _unwrap_cek(slots: list[dict], passphrase: str | None) -> bytes:
             try:
                 salt = base64.b64decode(s["salt"])
                 iters = int(s.get("iterations", KDF_ITERATIONS))
+                if gcm:
+                    return _gcm_unwrap(_passphrase_bits(passphrase, salt, iters), s)
                 return _passphrase_key(passphrase, salt, iters).decrypt(s["wrapped"].encode())
             except Exception:
                 continue
@@ -321,20 +393,119 @@ def _atomic_write(dest: Path, blob: bytes, private: bool) -> None:
     os.replace(tmp, dest)
 
 
-def _pack(slots: list[dict], token: bytes) -> bytes:
-    header = json.dumps({"v": 2, "recipients": slots}, separators=(",", ":")).encode("utf-8")
-    return MAGIC + struct.pack(">I", len(header)) + header + token
+def _header_bytes(slots: list[dict], version: int) -> bytes:
+    return json.dumps({"v": version, "recipients": slots}, separators=(",", ":")).encode("utf-8")
 
 
-def _unpack(blob: bytes) -> tuple[list[dict], bytes]:
-    off = len(MAGIC)
+def _cipher_name(slots: list[dict]) -> str:
+    """The cipher a file was written with, carried on its passphrase slot.
+
+    Kept inside the header so it is covered by the GCM tag: an attacker cannot downgrade a
+    double-encrypted file to single by editing the field.
+    """
+    for s in slots:
+        if s.get("type") == "passphrase":
+            return s.get("cipher") or "aes256gcm"
+    return "aes256gcm"
+
+
+def _pack(slots: list[dict], body: bytes, magic: bytes = MAGIC, version: int = 3) -> bytes:
+    header = _header_bytes(slots, version)
+    return magic + struct.pack(">I", len(header)) + header + body
+
+
+def _unpack(blob: bytes, magic: bytes = MAGIC) -> tuple[list[dict], bytes, bytes]:
+    """Return (slots, raw header bytes, body). The raw header is needed verbatim as v3's
+    authenticated data — re-serialising it could differ by a byte and fail the tag."""
+    off = len(magic)
     (hlen,) = struct.unpack(">I", blob[off:off + 4])
     off += 4
-    header = json.loads(blob[off:off + hlen].decode("utf-8"))
+    raw_header = blob[off:off + hlen]
+    header = json.loads(raw_header.decode("utf-8"))
     slots = header.get("recipients")
     if not isinstance(slots, list):
         raise ValueError("protected file has no recipient list")
-    return slots, blob[off + hlen:]
+    return slots, raw_header, blob[off + hlen:]
+
+
+# ---------------------------------------------------------------------------
+# Encryption level
+# ---------------------------------------------------------------------------
+LEVEL_FILE = _data_dir() / "adp_level.json"
+
+
+def current_level() -> str:
+    try:
+        p = Path(LEVEL_FILE)
+        if p.exists():
+            lv = json.loads(p.read_text(encoding="utf-8")).get("level")
+            if lv in LEVELS:
+                return lv
+    except Exception:
+        pass
+    return DEFAULT_LEVEL
+
+
+def set_level(level: str) -> dict:
+    """Choose the encryption level for files protected from now on."""
+    lv = str(level).lower().strip()
+    if lv not in LEVELS:
+        return {"ok": False, "error": f"unknown level {level!r}; choose one of "
+                                      f"{', '.join(LEVELS)}"}
+    p = Path(LEVEL_FILE)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"level": lv}), encoding="utf-8")
+    return {"ok": True, "level": lv, **{k: v for k, v in LEVELS[lv].items() if k != "cipher"},
+            "note": "Applies to files protected from now on. Existing files keep the level "
+                    "they were written with; adp_grant_access re-seals them at the new one."}
+
+
+def _cipher_for(name: str):
+    """AEAD object(s) for a cipher name. Returns a list applied inner-to-outer."""
+    if name == "aes256gcm":
+        return [AESGCM]
+    if name == "aes256gcm+chacha20":
+        return [AESGCM, ChaCha20Poly1305]
+    raise ValueError(f"unknown cipher {name!r}")
+
+
+def _cek_len(cipher: str) -> int:
+    return 32 * len(_cipher_for(cipher))
+
+
+def _seal(data: bytes, cek: bytes, slots: list[dict]) -> bytes:
+    """v3: AES-256-GCM over the payload, with the header as authenticated data.
+
+    Binding the header into the tag is what closes the v2 gap. There, an attacker who could
+    write to your sync folder could strip a recipient slot out of the header undetected — the
+    payload's own MAC said nothing about the header. Here any edit to the header breaks
+    decryption of the body outright.
+    """
+    header = _header_bytes(slots, 3)
+    cipher = _cipher_name(slots)
+    body = data
+    nonces = b""
+    # Each layer gets its own 32-byte slice of the CEK and its own nonce, applied inner-to-outer.
+    for i, alg in enumerate(_cipher_for(cipher)):
+        nonce = secrets.token_bytes(NONCE_LEN)
+        nonces += nonce
+        body = alg(cek[i * 32:(i + 1) * 32]).encrypt(nonce, body, header)
+    return MAGIC + struct.pack(">I", len(header)) + header + nonces + body
+
+
+def _open(blob: bytes, passphrase: str | None) -> tuple[bytes, bytes, list[dict]]:
+    """v3: returns (plaintext, cek, slots)."""
+    slots, raw_header, body = _unpack(blob, MAGIC)
+    cipher = _cipher_name(slots)
+    algs = _cipher_for(cipher)
+    cek = _unwrap_cek(slots, passphrase, gcm=True)
+    n = len(algs)
+    nonces, ct = body[:NONCE_LEN * n], body[NONCE_LEN * n:]
+    # Unwind outermost first.
+    for i in reversed(range(n)):
+        nonce = nonces[i * NONCE_LEN:(i + 1) * NONCE_LEN]
+        ct = algs[i](cek[i * 32:(i + 1) * 32]).decrypt(nonce, ct, raw_header)
+    return ct, cek, slots
 
 
 def encrypt_bytes(data: bytes, dest: Path, passphrase: str, recips: list[dict]) -> list[dict]:
@@ -343,10 +514,10 @@ def encrypt_bytes(data: bytes, dest: Path, passphrase: str, recips: list[dict]) 
     Used by the phone intake so an uploaded photo is never written to disk in the clear —
     there is no plaintext temp file to shred, race, or leave behind on a crash.
     """
-    cek = Fernet.generate_key()
-    token = Fernet(cek).encrypt(data)
-    slots = _wrap_for_recipients(cek, passphrase, recips)
-    _atomic_write(dest, _pack(slots, token), private=True)
+    level = current_level()
+    cek = secrets.token_bytes(_cek_len(LEVELS[level]["cipher"]))
+    slots = _wrap_for_recipients(cek, passphrase, recips, level)
+    _atomic_write(dest, _seal(data, cek, slots), private=True)
     return slots
 
 
@@ -359,8 +530,10 @@ def decrypt_file(src: Path, dest: Path, passphrase: str | None) -> None:
     """Decrypt `src` to `dest` using whichever key this machine holds. Raises on failure."""
     blob = src.read_bytes()
     if blob.startswith(MAGIC):
-        slots, token = _unpack(blob)
-        data = Fernet(_unwrap_cek(slots, passphrase)).decrypt(token)
+        data, _cek, _slots = _open(blob, passphrase)
+    elif blob.startswith(MAGIC_V2):
+        slots, _raw, token = _unpack(blob, MAGIC_V2)
+        data = Fernet(_unwrap_cek(slots, passphrase, gcm=False)).decrypt(token)
     elif blob.startswith(MAGIC_V1):
         # v1: passphrase-only, the key derived directly over the whole payload.
         if not passphrase:
@@ -377,20 +550,24 @@ def rewrap_file(path: Path, passphrase: str, recips: list[dict]) -> list[dict]:
     Requires that this machine can already open the file."""
     blob = path.read_bytes()
     if blob.startswith(MAGIC):
-        slots, token = _unpack(blob)
-        cek = _unwrap_cek(slots, passphrase)
+        data, _cek, _slots = _open(blob, passphrase)
+    elif blob.startswith(MAGIC_V2):
+        slots, _raw, token = _unpack(blob, MAGIC_V2)
+        data = Fernet(_unwrap_cek(slots, passphrase, gcm=False)).decrypt(token)
     elif blob.startswith(MAGIC_V1):
-        # Upgrade v1 in place: decrypt with the passphrase, then re-seal under a fresh CEK.
         if not passphrase:
             raise InvalidToken("this file predates device keys and needs the passphrase")
         salt = blob[len(MAGIC_V1):len(MAGIC_V1) + SALT_LEN]
         data = _passphrase_key(passphrase, salt).decrypt(blob[len(MAGIC_V1) + SALT_LEN:])
-        cek = Fernet.generate_key()
-        token = Fernet(cek).encrypt(data)
     else:
         raise ValueError("not an Ember-protected file (bad header)")
-    new_slots = _wrap_for_recipients(cek, passphrase, recips)
-    _atomic_write(path, _pack(new_slots, token), private=True)
+    # v3 binds the header into the payload's tag, so re-wrapping means re-sealing rather than
+    # swapping headers under an untouched body. A fresh content key costs nothing here and
+    # means a removed recipient's old wrap is not merely dropped but useless.
+    level = current_level()
+    cek = secrets.token_bytes(_cek_len(LEVELS[level]["cipher"]))
+    new_slots = _wrap_for_recipients(cek, passphrase, recips, level)
+    _atomic_write(path, _seal(data, cek, new_slots), private=True)
     return new_slots
 
 
@@ -502,9 +679,13 @@ def adp_status() -> dict:
         return {
             "ok": True,
             "configured": is_set_up(),
-            "payload_encryption": "Fernet (AES-128-CBC + HMAC-SHA256) under a random per-file key",
-            "key_wrapping": "PBKDF2-HMAC-SHA256 (passphrase) + X25519/HKDF-SHA256 (devices)",
-            "iterations": KDF_ITERATIONS,
+            "level": current_level(),
+            "level_summary": LEVELS[current_level()]["summary"],
+            "payload_encryption": LEVELS[current_level()]["cipher"],
+            "key_wrapping": "PBKDF2-HMAC-SHA256 (passphrase) + X25519/HKDF-SHA256 (devices), "
+                            "each wrapped with AES-256-GCM",
+            "iterations": LEVELS[current_level()]["iterations"],
+            "header_authenticated": True,
             "extension": EXT,
             "recipients": [{"label": r.get("label", ""), "key_id": r.get("kid", ""),
                             "this_device": bool(r.get("this_device"))} for r in recips],
@@ -673,7 +854,7 @@ def adp_unprotect_file(path: str, dest_dir: str = "") -> dict:
         decrypt_file(src, dest, pw)
         return {"ok": True, "source": str(src), "restored": str(dest),
                 "bytes": dest.stat().st_size}
-    except InvalidToken:
+    except (InvalidToken, InvalidTag):
         return {"ok": False, "error": ("cannot decrypt: this device is not a recipient and the "
                                        "passphrase is wrong or missing, or the file was modified")}
     except Exception as e:
@@ -754,8 +935,10 @@ def adp_unprotect_folder(folder: str, dest_dir: str = "", recursive: bool = Fals
             try:
                 decrypt_file(f, dest, pw)
                 restored.append(str(dest))
-            except InvalidToken:
-                failed.append({"path": str(f), "error": "not a recipient, or wrong passphrase"})
+            except (InvalidToken, InvalidTag):
+                failed.append({"path": str(f),
+                               "error": "not a recipient, wrong passphrase, or the file was "
+                                        "modified"})
             except Exception as e:
                 failed.append({"path": str(f), "error": str(e)})
         return {"ok": True, "folder": str(root), "restored_count": len(restored),
@@ -782,7 +965,7 @@ def adp_grant_access(folder: str, recursive: bool = False) -> dict:
             try:
                 rewrap_file(f, pw, recips)
                 updated.append(str(f))
-            except InvalidToken:
+            except (InvalidToken, InvalidTag):
                 failed.append({"path": str(f),
                                "error": "this device cannot open it, so it cannot be shared "
                                         "from here"})
@@ -806,16 +989,40 @@ def adp_inspect(path: str) -> dict:
             return {"ok": True, "path": str(p), "format": "v1",
                     "readable_by": [{"type": "passphrase"}],
                     "note": "Predates device keys. Run adp_grant_access to upgrade it."}
-        if not blob.startswith(MAGIC):
+        if blob.startswith(MAGIC_V2):
+            slots, _raw, _body = _unpack(blob, MAGIC_V2)
+            fmt, note = "v2", ("Uses the older AES-128 payload with an unauthenticated header. "
+                               "Run adp_grant_access to re-seal it as v3.")
+        elif blob.startswith(MAGIC):
+            slots, _raw, _body = _unpack(blob, MAGIC)
+            fmt, note = "v3", ""
+        else:
             return {"ok": False, "error": "not an Ember-protected file"}
-        slots, _ = _unpack(blob)
         priv = _device_private()
         my_kid = key_id(_pub_raw(priv)) if priv is not None else None
-        return {"ok": True, "path": str(p), "format": "v2", "readable_by": [
+        out = {"ok": True, "path": str(p), "format": fmt, "readable_by": [
             {"type": s.get("type"), "key_id": s.get("kid", ""), "label": s.get("label", ""),
              "this_device": s.get("kid") == my_kid} for s in slots]}
+        if note:
+            out["note"] = note
+        return out
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def adp_levels() -> dict:
+    """List the encryption levels, what each actually does, and what it costs."""
+    try:
+        return {"ok": True, "current": current_level(), "levels": [
+            {"id": k, "label": v["label"], "summary": v["summary"], "cost": v["cost"],
+             "current": k == current_level()} for k, v in LEVELS.items()]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def adp_set_level(level: str) -> dict:
+    """Choose how strongly new files are encrypted: standard, high, or double."""
+    return set_level(level)
 
 
 def adp_icloud_targets() -> dict:
@@ -940,6 +1147,21 @@ TOOL_DECLARATIONS = [
             "required": ["path"]},
     },
     {
+        "name": "adp_levels",
+        "description": "List the available encryption levels (standard, high, double), what "
+                       "each one actually does, and what it costs in speed.",
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []},
+    },
+    {
+        "name": "adp_set_level",
+        "description": "Set how strongly new files are encrypted. 'standard' is AES-256-GCM; "
+                       "'high' raises the key-derivation work; 'double' cascades AES-256-GCM "
+                       "with ChaCha20-Poly1305 under independent keys.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "level": {"type": "STRING", "description": "standard, high, or double"}},
+            "required": ["level"]},
+    },
+    {
         "name": "adp_icloud_targets",
         "description": "List the iCloud/Dropbox/OneDrive/Google Drive folders on this machine "
                        "and say which ones protected files can be stored in.",
@@ -961,13 +1183,15 @@ TOOL_DISPATCH = {
     "adp_unprotect_folder": adp_unprotect_folder,
     "adp_grant_access": adp_grant_access,
     "adp_inspect": adp_inspect,
+    "adp_levels": adp_levels,
+    "adp_set_level": adp_set_level,
     "adp_icloud_targets": adp_icloud_targets,
 }
 
 READONLY_TOOLS = {"adp_status", "adp_icloud_targets", "adp_list_recipients", "adp_identity",
-                  "adp_inspect"}
+                  "adp_inspect", "adp_levels"}
 INTERACTION_TOOLS = {
     "adp_setup", "adp_reset", "adp_add_recipient", "adp_remove_recipient",
     "adp_protect_file", "adp_unprotect_file", "adp_protect_folder", "adp_unprotect_folder",
-    "adp_grant_access",
+    "adp_grant_access", "adp_set_level",
 }

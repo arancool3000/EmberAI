@@ -59,6 +59,7 @@ import key_vault
 import data_protect
 import adp_watch
 import phone_intake
+import adp_organise
 import download_guard
 import fileless_guard
 import security_center
@@ -2283,7 +2284,7 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
               workflow_recorder, productivity_tools, plugin_system, custom_tools,
               self_extend, song_id, app_builder,
               network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge,
-              mcp_setup, octopus, netsecurity, data_protect, adp_watch, phone_intake):
+              mcp_setup, octopus, netsecurity, data_protect, adp_watch, phone_intake, adp_organise):
     for _decl in _feat.TOOL_DECLARATIONS:
         if _decl["name"] not in TOOL_DISPATCH:
             TOOL_DECLARATIONS.append(_decl)
@@ -2303,6 +2304,7 @@ safety.SAFE_READONLY |= set(getattr(netsecurity, "READONLY_TOOLS", set()))
 safety.SAFE_READONLY |= set(getattr(data_protect, "READONLY_TOOLS", set()))
 safety.SAFE_READONLY |= set(getattr(adp_watch, "READONLY_TOOLS", set()))
 safety.SAFE_READONLY |= set(getattr(phone_intake, "READONLY_TOOLS", set()))
+safety.SAFE_READONLY |= set(getattr(adp_organise, "READONLY_TOOLS", set()))
 
 # Tell custom_tools the full live tool registry so create_custom_tool can reject a recipe
 # step that names a tool Ember doesn't actually have. (run_custom_tool is host-executed, so

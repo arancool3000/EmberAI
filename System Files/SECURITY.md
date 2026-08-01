@@ -103,15 +103,50 @@ both encrypt (for everyone) and decrypt. `adp_grant_access` re-wraps files alrea
 a newly-added device can read the back catalogue — the header is rewritten, the ciphertext body
 is not.
 
-- Payload: Fernet (AES-128-CBC + HMAC-SHA256) under the per-file CEK. Passphrase wrap:
-  PBKDF2-HMAC-SHA256, 600,000 iterations, fresh 16-byte salt per file. Recipient wrap: X25519
-  ECDH to an ephemeral key, HKDF-SHA256 bound to *both* public keys so a wrap cannot be replayed
-  at a different recipient. Layout: `EMBERADP2 | header_len | header JSON | token`, extension
-  `.ember`. Files in the earlier passphrase-only `EMBERADP1` format still decrypt, and
-  `adp_grant_access` upgrades them.
-- The header is not itself authenticated, but the payload is: tampering with it can only cause
-  unwrapping to fail or yield a wrong CEK, which the body's HMAC then rejects. No forged
-  plaintext can result.
+- Payload: **AES-256-GCM** under a random 256-bit per-file CEK. Passphrase wrap:
+  PBKDF2-HMAC-SHA256, fresh 16-byte salt per file, then AES-256-GCM around the CEK. Recipient
+  wrap: X25519 ECDH to an ephemeral key, HKDF-SHA256 bound to *both* public keys so a wrap
+  cannot be replayed at a different recipient, then AES-256-GCM. Layout:
+  `EMBERADP3 | header_len | header JSON | nonce | ciphertext+tag`, extension `.ember`.
+- **The header is authenticated.** It is passed as GCM additional data, so any edit —
+  reordering, removing or adding a recipient slot, or rewriting the cipher name to force a
+  downgrade — breaks decryption outright. This closes the v2 gap, where someone able to write to
+  your sync folder could strip a recipient out of the header undetected.
+- Files in the earlier `EMBERADP1` (passphrase-only) and `EMBERADP2` (Fernet/AES-128) formats
+  still decrypt, and `adp_grant_access` re-seals them as v3.
+
+### Encryption levels
+
+`adp_levels` / Settings ▸ Security ▸ Encryption. Each states its cost as well as its benefit,
+because a picker that only says "stronger" pushes everyone to the slowest option for no reason.
+
+| Level | What it does | Cost |
+|---|---|---|
+| Standard | AES-256-GCM, 600k PBKDF2 | Instant |
+| High | AES-256-GCM, 2.4M PBKDF2 — guessing the recovery code is 4× slower | ~1s per unlock |
+| Double | AES-256-GCM **inside ChaCha20-Poly1305**, two independent keys | ~2× encrypt/decrypt |
+
+"Double" cascades two *different* ciphers rather than running AES twice: encrypting twice with
+the same algorithm buys almost nothing, since a break in AES-256-GCM would fell both layers. It
+is **not twice the strength** — it is insurance against one construction turning out to be
+flawed, and nothing in the UI claims otherwise. Files keep the level they were written with;
+`adp_grant_access` re-seals at the current one.
+
+### Sorting photos (`adp_organise.py`)
+
+Encrypted photos stop being browsable, so Ember can look inside and group them. Two rules:
+
+- **The plaintext never touches the disk.** Each photo is decrypted into memory, shown to a
+  model, and discarded; the *encrypted* file is what moves.
+- **The classifier is local by default.** Ollama on this machine. A cloud provider requires
+  `allow_cloud=true` and the result says the decrypted photos were sent there. The one exception
+  is the cloud path itself, which must hand `describe_image` a file — that temp file is shredded
+  in a `finally` block.
+
+Folder names are **not** encrypted, so albums called "documents" or "receipts" would hand Apple
+a searchable index of exactly what the encryption was for. `private_names=True` (the default)
+writes `group-01`, `group-02` and keeps the real names in an index encrypted with the same key
+as the photos. The readable-names option returns a warning saying what it costs.
 - The passphrase and each device's private key live in `key_vault` (OS keychain where
   available). Neither is ever uploaded, written into an encrypted file, or returned by a tool.
 - Writes go to a `.part` sibling then `os.replace`, so an interrupted run can't leave a

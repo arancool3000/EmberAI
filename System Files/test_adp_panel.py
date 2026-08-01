@@ -86,7 +86,7 @@ def test_on_state_lists_who_can_decrypt(panel):
     assert DP.adp_setup("a good long passphrase")["ok"] is True
     panel._refresh_adp_status()
     text = panel._adp_status_lbl.text()
-    assert "On —" in text and "passphrase and 1 device(s)" in text
+    assert "On (standard)" in text and "passphrase and 1 device(s)" in text
     # Once on, the primary button becomes "set up another phone" rather than going dead —
     # adding a second phone is the commonest next thing anyone wants.
     assert panel._adp_setup_btn.isEnabled()
@@ -180,7 +180,7 @@ def test_setup_completes_when_confirmed(panel, monkeypatch):
     monkeypatch.setattr(ui.QMessageBox, "information", lambda *a, **k: None)
     panel._adp_setup()
     assert DP.is_set_up() is True
-    assert "On —" in panel._adp_status_lbl.text()
+    assert panel._adp_status_lbl.text().startswith("On (")
 
 
 def test_shredding_needs_a_second_yes(panel, monkeypatch, tmp_path):
@@ -272,8 +272,9 @@ def test_the_panel_leads_with_one_button(panel):
     Advanced."""
     from PyQt6.QtWidgets import QPushButton
     labels = [b.text() for b in panel.findChildren(QPushButton)]
-    assert labels[:2] == ["Protect my photos", "Advanced…"]
-    assert len(labels) == 2
+    assert labels[0] == "Protect my photos"          # one obvious primary action
+    assert labels[1:] == ["Encryption…", "Advanced…"]  # everything else is a submenu
+    assert len(labels) == 3
 
 
 def test_quick_setup_does_everything_in_one_go(panel, monkeypatch):
@@ -315,3 +316,35 @@ def test_second_run_does_not_claim_a_new_recovery_code(panel, monkeypatch):
     r = phone_intake.quick_setup()
     assert r["ok"] is True
     assert r["recovery_code"] is None and r["already_configured"] is True
+
+
+# --- encryption levels ----------------------------------------------------------
+def test_encryption_menu_offers_every_level(panel, monkeypatch, tmp_path):
+    import data_protect
+    monkeypatch.setattr(data_protect, "LEVEL_FILE", tmp_path / "level.json")
+    from PyQt6.QtWidgets import QRadioButton
+    seen = {}
+    monkeypatch.setattr(ui.QDialog, "exec",
+                        lambda self: seen.update(
+                            labels=[r.text() for r in self.findChildren(QRadioButton)])
+                        or ui.QDialog.DialogCode.Rejected)
+    panel._adp_encryption_menu()
+    assert seen["labels"] == ["Standard", "High", "Double"]
+
+
+def test_encryption_menu_states_the_cost_of_each(panel, monkeypatch, tmp_path):
+    """A strength picker that only says "stronger" pushes everyone to the slowest option for
+    no reason. Every level must show what it costs."""
+    import data_protect
+    monkeypatch.setattr(data_protect, "LEVEL_FILE", tmp_path / "level.json")
+    from PyQt6.QtWidgets import QLabel as QL
+    seen = {}
+    monkeypatch.setattr(ui.QDialog, "exec",
+                        lambda self: seen.update(text=" ".join(l.text() for l in
+                                                               self.findChildren(QL)))
+                        or ui.QDialog.DialogCode.Rejected)
+    panel._adp_encryption_menu()
+    assert "Instant." in seen["text"]
+    assert "twice the time" in seen["text"]
+    # And it must not claim double is twice as strong.
+    assert "Not twice the strength" in seen["text"]
