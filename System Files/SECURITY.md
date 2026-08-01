@@ -130,6 +130,39 @@ they could already decrypt, and `adp_remove_recipient` says so in its own result
 **no recovery**: lose the passphrase *and* every enrolled device and the data is gone, to you
 and to Ember alike. That is the property that makes the guarantee real.
 
+### Closing the phone gap
+
+Ember runs on macOS and Windows; photos taken on an iPhone sync to iCloud from the phone, and
+**Apple exposes no hook for encrypting them first**. iOS Shortcuts has no "photo taken" trigger
+either. So there is no way to filter that path — the only workable shape is to stop using it.
+Three pieces support that:
+
+- **`adp_watch.py`** — watch a folder and encrypt whatever lands in it. Turn iCloud Photos off,
+  import from the phone into a local folder, point the watcher at it with the destination set to
+  iCloud Drive. A file is only encrypted once its size and mtime stop changing *and* it is past
+  `min_age`; encrypting a photo mid-copy would otherwise produce a valid encryption of half a
+  JPEG, which looks like success. Shredding originals is opt-in and only ever runs after the
+  encrypted file exists.
+- **`/api/upload` in `remote_server.py`** — send photos from the phone over Ember Link, either
+  from the Photos tab in the web app or from a Shortcuts automation. Credentials travel in
+  headers (`X-Ember-Token`, or `X-Ember-Pin` on the LAN) rather than the query string, keeping
+  the token out of tunnel and proxy logs. Uploads have their own `_MAX_UPLOAD_BYTES` ceiling,
+  deliberately separate from the 2 MB `_MAX_POST_BYTES` used by `/api/event` and `/api/chat`, so
+  raising one never widens the other.
+- **`phone_intake.py`** — encrypts the upload straight from memory via
+  `data_protect.encrypt_bytes`. **The plaintext is never written to this machine's disk**, so
+  there is no temp file to shred, race against, or leave behind after a crash. Uploaded
+  filenames are untrusted and reduced to a single safe component, so `../../.ssh/authorized_keys`
+  becomes a plain name inside the destination folder.
+
+`adp_phone_setup` issues the pairing token and prints the Shortcut recipe. That token grants
+**full Ember Link access, not upload-only** — it is the existing pairing credential, and the
+tool result says so. Revoke it with `revoke_pairings` if the phone is lost.
+
+The honest limit stays: while iCloud Photos is on, Apple has the original before Ember sees
+anything. Every surface leads with that — the tool advice, the setup dialog, and the phone page
+itself.
+
 ## Known residual risks (honest list)
 
 - A holder of a valid pairing token can still drive input and chat remotely (by design — that's
@@ -142,6 +175,11 @@ and to Ember alike. That is the property that makes the guarantee real.
   *update authenticity*, which is distinct from **OS code-signing**: making macOS/Windows stop
   warning about an "unidentified developer" requires a paid Apple/Microsoft developer certificate
   and notarization, which is an account/credential step, not a code change.
+- A phone pairing token used for photo uploads is a full Ember Link credential: anyone holding
+  it can also drive the screen and keyboard remotely. There is no upload-only scope today.
+- Auto-protect with "shred originals" runs unattended. A destination that silently becomes
+  unwritable (an unmounted drive, a full disk) surfaces as failures in `adp_watch_status` and
+  the Security panel, and the shred is skipped — but nothing interrupts you to say so.
 - The encrypted-file key vault stores its key next to the ciphertext, so a local attacker with
   read access to your user directory can recover keys. The OS-keychain backend does not have
   this weakness — prefer it where available.

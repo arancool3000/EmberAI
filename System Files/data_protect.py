@@ -337,13 +337,22 @@ def _unpack(blob: bytes) -> tuple[list[dict], bytes]:
     return slots, blob[off + hlen:]
 
 
-def encrypt_file(src: Path, dest: Path, passphrase: str, recips: list[dict]) -> list[dict]:
-    """Encrypt `src` to `dest` for the passphrase plus every recipient. Raises on failure."""
+def encrypt_bytes(data: bytes, dest: Path, passphrase: str, recips: list[dict]) -> list[dict]:
+    """Encrypt in-memory `data` to `dest`. Raises on failure.
+
+    Used by the phone intake so an uploaded photo is never written to disk in the clear —
+    there is no plaintext temp file to shred, race, or leave behind on a crash.
+    """
     cek = Fernet.generate_key()
-    token = Fernet(cek).encrypt(src.read_bytes())
+    token = Fernet(cek).encrypt(data)
     slots = _wrap_for_recipients(cek, passphrase, recips)
     _atomic_write(dest, _pack(slots, token), private=True)
     return slots
+
+
+def encrypt_file(src: Path, dest: Path, passphrase: str, recips: list[dict]) -> list[dict]:
+    """Encrypt `src` to `dest` for the passphrase plus every recipient. Raises on failure."""
+    return encrypt_bytes(src.read_bytes(), dest, passphrase, recips)
 
 
 def decrypt_file(src: Path, dest: Path, passphrase: str | None) -> None:

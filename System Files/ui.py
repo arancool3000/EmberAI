@@ -2962,6 +2962,11 @@ class SettingsDialog(QDialog):
         row1.addStretch()
         v.addLayout(row1)
 
+        self._adp_watch_lbl = QLabel()
+        self._adp_watch_lbl.setWordWrap(True)
+        self._adp_watch_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
+        v.addWidget(self._adp_watch_lbl)
+
         row2 = QHBoxLayout()
         b = QPushButton("Protect a folder…")
         b.clicked.connect(self._adp_protect_folder)
@@ -2974,6 +2979,16 @@ class SettingsDialog(QDialog):
         row2.addWidget(b)
         row2.addStretch()
         v.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        self._adp_watch_btn = QPushButton("Auto-protect a folder…")
+        self._adp_watch_btn.clicked.connect(self._adp_toggle_watch)
+        row3.addWidget(self._adp_watch_btn)
+        b = QPushButton("Send photos from my phone…")
+        b.clicked.connect(self._adp_phone_setup)
+        row3.addWidget(b)
+        row3.addStretch()
+        v.addLayout(row3)
 
         self._refresh_adp_status()
 
@@ -3005,6 +3020,30 @@ class SettingsDialog(QDialog):
         note = st.get("apple_adp_unavailable_here")
         self._adp_region_lbl.setText(note or "")
         self._adp_region_lbl.setVisible(bool(note))
+        self._refresh_adp_watch_label()
+
+    def _refresh_adp_watch_label(self):
+        if getattr(self, "_adp_watch_lbl", None) is None:
+            return
+        try:
+            import adp_watch
+            w = adp_watch.adp_watch_status()
+        except Exception as e:
+            self._adp_watch_lbl.setText(f"Auto-protect unavailable: {e}")
+            return
+        if w.get("running"):
+            dest = w.get("dest") or "alongside the originals"
+            extra = " and shredding the originals" if w.get("delete_originals") else ""
+            self._adp_watch_lbl.setText(
+                f"Auto-protect is watching {w.get('source')} → {dest}{extra}. "
+                f"{w.get('protected_count', 0)} encrypted so far"
+                + (f", {w['failed_count']} failed." if w.get("failed_count") else "."))
+            self._adp_watch_btn.setText("Stop auto-protect")
+        else:
+            self._adp_watch_lbl.setText(
+                "Auto-protect is off. Point it at the folder your phone imports into and "
+                "everything that lands there is encrypted automatically.")
+            self._adp_watch_btn.setText("Auto-protect a folder…")
 
     def _adp_setup(self):
         """Take the passphrase twice, and make the no-recovery consequence explicit before
@@ -3207,6 +3246,129 @@ class SettingsDialog(QDialog):
             return
         r = data_protect.adp_grant_access(src, recursive=rec)
         self._adp_report("Share existing files", r, "updated_count", "updated")
+
+    def _adp_toggle_watch(self):
+        """Start or stop the folder auto-protect watcher."""
+        import adp_watch, data_protect
+        if adp_watch.is_running():
+            adp_watch.adp_watch_stop()
+            self._refresh_adp_watch_label()
+            return
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Auto-protect", "Turn on data protection first.")
+            return
+        src = QFileDialog.getExistingDirectory(self, "Choose the folder to auto-protect",
+                                               str(Path.home()))
+        if not src:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            self, "Where should the encrypted copies go? (Cancel to keep them alongside)",
+            str(Path.home()))
+        shred = QMessageBox.question(
+            self, "Auto-protect",
+            "Shred each original once it has been encrypted?\n\n"
+            "This is irreversible, and it will run unattended on every file that lands in the "
+            "folder from now on. Only choose Yes once you have confirmed the encrypted copies "
+            "open correctly.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        r = adp_watch.adp_watch_start(src, dest_dir=dest or "", delete_originals=shred,
+                                      all_files=True)
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Auto-protect", r.get("error", "failed"))
+            return
+        self._refresh_adp_watch_label()
+        QMessageBox.information(
+            self, "Auto-protect",
+            f"Watching {src}. Anything that lands there is encrypted automatically, and it "
+            "resumes the next time Ember starts.")
+
+    def _adp_phone_setup(self):
+        """Show the phone setup: where uploads land, the Ember Link URL, and the Shortcut."""
+        import data_protect, phone_intake, remote_server
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Send photos from my phone",
+                                    "Turn on data protection first.")
+            return
+        if not remote_server.status().get("running"):
+            if QMessageBox.question(
+                    self, "Send photos from my phone",
+                    "Ember Link is not running — the phone needs it to reach this computer. "
+                    "Start it now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+                return
+            r = remote_server.start()
+            if not r.get("ok"):
+                QMessageBox.warning(self, "Send photos from my phone",
+                                    r.get("error", "could not start Ember Link"))
+                return
+        away = QMessageBox.question(
+            self, "Send photos from my phone",
+            "Should this work away from your home Wi-Fi?\n\n"
+            "Yes opens a public tunnel to this computer. No keeps it to your own network, "
+            "which is the safer default.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        info = phone_intake.adp_phone_setup(public=away)
+        if not info.get("ok"):
+            QMessageBox.warning(self, "Send photos from my phone", info.get("error", "failed"))
+            return
+
+        box = QDialog(self)
+        box.setWindowTitle("Send photos from my phone")
+        lay = QVBoxLayout(box)
+        head = QLabel("<b>Turn off iCloud Photos on the iPhone first.</b> While it is on, Apple "
+                      "already has the original before Ember sees it — nothing here can change "
+                      "that.")
+        head.setWordWrap(True)
+        head.setStyleSheet("color:#e0a44c;")
+        lay.addWidget(head)
+        where = QLabel(f"Protected photos are saved to:\n{info['dest']}")
+        where.setWordWrap(True)
+        lay.addWidget(where)
+        simple = QLabel(f"<b>The easy way:</b> open {info['url']} on the phone, add it to the "
+                        "Home Screen, then use the Photos tab to pick photos to protect.")
+        simple.setWordWrap(True)
+        lay.addWidget(simple)
+        auto = QLabel("<b>To automate it</b>, build this Shortcut on the phone:")
+        auto.setWordWrap(True)
+        lay.addWidget(auto)
+        steps = QPlainTextEdit("\n\n".join(f"{i}. {s}" for i, s in
+                                            enumerate(info["steps"], 1)))
+        steps.setReadOnly(True)
+        steps.setMinimumHeight(200)
+        lay.addWidget(steps)
+        warn = QLabel(f"Reachable: {info['reachable']}. {info['note']}")
+        warn.setWordWrap(True)
+        warn.setStyleSheet("color:#8f99ad; font-size:11px;")
+        lay.addWidget(warn)
+        row = QHBoxLayout()
+        copy = QPushButton("Copy the steps")
+        copy.setObjectName("send")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(steps.toPlainText()))
+        row.addWidget(copy)
+        folder = QPushButton("Change folder…")
+        folder.clicked.connect(lambda: self._adp_phone_folder(where))
+        row.addWidget(folder)
+        close = QPushButton("Close")
+        close.clicked.connect(box.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        box.exec()
+
+    def _adp_phone_folder(self, label=None):
+        import phone_intake
+        d = QFileDialog.getExistingDirectory(self, "Where should phone photos be saved?",
+                                             str(Path.home()))
+        if not d:
+            return
+        r = phone_intake.adp_phone_set_folder(d)
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Send photos from my phone", r.get("error", "failed"))
+            return
+        if label is not None:
+            label.setText(f"Protected photos are saved to:\n{r['dest']}")
 
     def _adp_report(self, title, r, count_key, list_key):
         """Report a folder operation, never hiding partial failure behind the success count."""
@@ -6971,6 +7133,11 @@ class EmberWindow(QWidget):
             # Unified always-on Security Center: continuously scans processes, files,
             # network and persistence, and keeps the other monitors alive (watchdog).
             QTimer.singleShot(2600, self._autostart_security_center)
+        if not _SAFE_MODE:
+            # Folder auto-protect: resume encrypting a watched folder if the user left it on.
+            # Gated on its own persisted config rather than a setting, so it can never start
+            # watching a folder the user never chose.
+            QTimer.singleShot(2800, self._autostart_adp_watch)
         if self.settings.get("agent_scheduler", True) and not _SAFE_MODE:
             # Background agent scheduler: runs saved agents on their schedules.
             QTimer.singleShot(3000, self._autostart_agent_scheduler)
@@ -10526,6 +10693,19 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             dlg.exec()
         except Exception:
             traceback.print_exc()
+
+    def _autostart_adp_watch(self):
+        """Resume the data-protection folder watcher. Best-effort and failure-silent so it
+        never blocks the app."""
+        try:
+            import adp_watch
+            r = adp_watch.resume_if_enabled()
+            if r.get("resumed"):
+                print(f"[Auto-protect on: watching {adp_watch.adp_watch_status().get('source')}]")
+            elif r.get("reason"):
+                print(f"[Auto-protect not resumed: {r.get('reason')}]")
+        except Exception as e:
+            print(f"[Auto-protect autostart failed: {e}]")
 
     def _autostart_fileless_protection(self):
         """Start always-on fileless / behavioral malware protection (the background
