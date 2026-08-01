@@ -482,3 +482,41 @@ def test_every_tool_is_classified():
             continue
         risk, why = safety.classify(name, {})
         assert why != "unclassified tool", name
+
+
+# --- Settings UI wiring ---------------------------------------------------------
+def _ui_source():
+    return open("ui.py", encoding="utf-8").read()
+
+
+def test_security_tab_hosts_the_panel():
+    """PyQt6 isn't installed here, so assert the wiring statically: the Security tab must call
+    the panel builder, and every button handler must exist. (test_settings_dialog_methods.py
+    separately proves those handlers resolve on the right class.)"""
+    src = _ui_source()
+    assert "self._populate_adp_section(v)" in src
+    for handler in ("_adp_setup", "_adp_show_identity", "_adp_add_device", "_adp_protect_folder",
+                    "_adp_unprotect_folder", "_adp_grant_access", "_refresh_adp_status",
+                    "_adp_report"):
+        assert f"def {handler}(self" in src, handler
+
+
+def test_destructive_ui_paths_confirm_first():
+    """Shredding originals and widening who can decrypt must each require an explicit yes —
+    the panel is the one place a user can trigger them without the tool-risk prompt."""
+    src = _ui_source()
+    shred = src.split("def _adp_protect_folder", 1)[1].split("def _adp_unprotect_folder", 1)[0]
+    assert "Shred the originals?" in shred
+    # Default to Cancel, so a reflexive Return keypress never shreds.
+    assert "QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes" in shred
+
+    share = src.split("def _adp_grant_access", 1)[1].split("def _adp_report", 1)[0]
+    assert "cannot be taken back" in share
+    assert "QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes" in share
+
+    setup = src.split("def _adp_setup", 1)[1].split("def _adp_show_identity", 1)[0]
+    assert "There is no recovery" in setup  # stated before anything is encrypted with it
+
+
+def test_ui_is_discoverable():
+    assert "Advanced Data Protection" in _ui_source().split("Security & privacy", 1)[1][:2000]
