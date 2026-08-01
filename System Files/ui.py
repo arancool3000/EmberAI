@@ -2955,6 +2955,10 @@ class SettingsDialog(QDialog):
                                        "shows a code to scan with your phone — in one step.")
         self._adp_setup_btn.clicked.connect(self._adp_quick_setup)
         row1.addWidget(self._adp_setup_btn)
+        b = QPushButton("Encryption…")
+        b.setToolTip("Choose how strongly new files are encrypted.")
+        b.clicked.connect(self._adp_encryption_menu)
+        row1.addWidget(b)
         b = QPushButton("Advanced…")
         b.clicked.connect(self._adp_advanced)
         row1.addWidget(b)
@@ -2985,7 +2989,8 @@ class SettingsDialog(QDialog):
         if st.get("configured"):
             names = [r.get("label") or r.get("key_id", "") for r in st.get("recipients", [])]
             self._adp_status_lbl.setText(
-                f"On — files are encrypted on {this_device()} before they sync. "
+                f"On ({st.get('level', 'standard')}) — files are encrypted on "
+                f"{this_device()} before they sync. "
                 f"Readable by your passphrase and {len(names)} device(s): {', '.join(names)}.")
             self._adp_setup_btn.setText("Set up another phone")
             self._adp_setup_btn.setEnabled(True)
@@ -3135,6 +3140,66 @@ class SettingsDialog(QDialog):
             saved.stateChanged.connect(lambda st: done.setEnabled(bool(st)))
         box.exec()
 
+    def _adp_encryption_menu(self):
+        """Pick an encryption level. Each option states what it does AND what it costs, so the
+        choice is informed rather than a 'more is better' ladder."""
+        import data_protect
+        info = data_protect.adp_levels()
+        if not info.get("ok"):
+            QMessageBox.warning(self, "Encryption", info.get("error", "unavailable"))
+            return
+        box = QDialog(self)
+        box.setWindowTitle("Encryption")
+        lay = QVBoxLayout(box)
+        head = QLabel("How strongly should new files be encrypted?")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+
+        from PyQt6.QtWidgets import QRadioButton, QButtonGroup
+        group = QButtonGroup(box)
+        buttons = {}
+        for lv in info["levels"]:
+            rb = QRadioButton(lv["label"])
+            rb.setChecked(bool(lv["current"]))
+            group.addButton(rb)
+            lay.addWidget(rb)
+            buttons[rb] = lv["id"]
+            for text, colour in ((lv["summary"], "#8f99ad"), (lv["cost"], "#e0a44c")):
+                sub = QLabel(text)
+                sub.setWordWrap(True)
+                sub.setStyleSheet(f"color:{colour}; font-size:11px; margin-left:22px;")
+                lay.addWidget(sub)
+
+        foot = QLabel("Changing this affects files protected from now on. Files you already "
+                      "protected keep the level they were written with — \"Share existing "
+                      "files…\" under Advanced re-seals them at the new level.")
+        foot.setWordWrap(True)
+        foot.setStyleSheet("color:#8f99ad; font-size:11px; margin-top:8px;")
+        lay.addWidget(foot)
+
+        row = QHBoxLayout()
+        save = QPushButton("Save")
+        save.setObjectName("send")
+
+        def _save():
+            for rb, lv in buttons.items():
+                if rb.isChecked():
+                    r = data_protect.adp_set_level(lv)
+                    if not r.get("ok"):
+                        QMessageBox.warning(self, "Encryption", r.get("error", "failed"))
+                        return
+                    break
+            box.accept()
+            self._refresh_adp_status()
+
+        save.clicked.connect(_save)
+        row.addWidget(save)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(box.reject)
+        row.addWidget(cancel)
+        lay.addLayout(row)
+        box.exec()
+
     def _adp_advanced(self):
         """Everything the one-button flow doesn't need: devices, folders, sharing, the watcher."""
         box = QDialog(self)
@@ -3155,6 +3220,9 @@ class SettingsDialog(QDialog):
              "Continuously encrypt whatever lands in a folder."),
             ("Phone setup and Shortcut…", self._adp_phone_setup,
              "The iOS automation, and where uploads are saved."),
+            ("Sort photos into albums…", self._adp_organise,
+             "Let Ember look inside your protected photos and group them, without decrypting "
+             "them to disk."),
         ):
             b = QPushButton(label)
             b.setToolTip(hint)
@@ -3490,6 +3558,55 @@ class SettingsDialog(QDialog):
             return
         if label is not None:
             label.setText(f"Protected photos are saved to:\n{r['dest']}")
+
+    def _adp_organise(self):
+        """Group protected photos by content. Local model by default; the cloud option states
+        plainly that it sends the decrypted photos off this machine."""
+        import adp_organise, data_protect
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Sort photos", "Turn on data protection first.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder of protected photos",
+                                                  str(Path.home()))
+        if not folder:
+            return
+        local = bool(adp_organise.local_vision_models())
+        allow_cloud = False
+        if not local:
+            if QMessageBox.question(
+                    self, "Sort photos",
+                    "No local vision model is installed, so Ember cannot sort these photos "
+                    "privately.\n\nUse your configured cloud model instead? Each photo will be "
+                    "decrypted and sent to that provider.\n\nInstalling Ollama and running "
+                    "'ollama pull llava' keeps it entirely on this machine.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+                return
+            allow_cloud = True
+        private = QMessageBox.question(
+            self, "Sort photos",
+            "Hide the album topics from iCloud?\n\nFolder names are not encrypted. Albums "
+            "called 'documents' or 'receipts' give Apple a searchable index of exactly what you "
+            "encrypted these photos to hide.\n\nYes uses folders named group-01, group-02 and "
+            "keeps the real names in an encrypted index.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes
+        r = adp_organise.adp_organise(folder, allow_cloud=allow_cloud, private_names=private,
+                                      recursive=False)
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Sort photos",
+                                r.get("error", "failed") + "\n\n" + r.get("hint", ""))
+            return
+        albums = r.get("albums") or {}
+        msg = f"Sorted {r.get('sorted_count', 0)} photo(s)."
+        if albums:
+            msg += "\n\n" + "\n".join(f"  {k}: {v}" for k, v in sorted(albums.items()))
+        if r.get("failed"):
+            msg += f"\n\n{len(r['failed'])} could not be sorted."
+        for key in ("note", "warning", "warning_cloud"):
+            if r.get(key):
+                msg += "\n\n" + r[key]
+        QMessageBox.information(self, "Sort photos", msg)
 
     def _adp_report(self, title, r, count_key, list_key):
         """Report a folder operation, never hiding partial failure behind the success count."""

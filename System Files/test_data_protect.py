@@ -10,6 +10,8 @@ can only have come from that device's own key slot.
 import base64
 import contextlib
 
+import pytest
+
 import key_vault as KV
 import data_protect as DP
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -259,17 +261,21 @@ def test_grant_access_extends_to_existing_files(monkeypatch, tmp_path):
         assert (tmp_path / "old.jpg").read_bytes() == b"encrypted-before-they-joined"
 
 
-def test_grant_access_preserves_the_payload(monkeypatch, tmp_path):
-    """Re-wrapping rewrites the header only — the ciphertext body must be byte-identical."""
+def test_grant_access_reseals_and_keeps_the_content(monkeypatch, tmp_path):
+    """v3 binds the header into the payload's GCM tag, so sharing re-seals rather than swapping
+    a header under an untouched body. The bytes must change; the photo must not."""
     _setup(monkeypatch, tmp_path)
     src = _file(tmp_path, "big.jpg", b"x" * 5000)
-    DP.adp_protect_file(str(src))
+    DP.adp_protect_file(str(src), delete_original=True)
     enc = tmp_path / "big.jpg.ember"
-    before = DP._unpack(enc.read_bytes())[1]
+    before = enc.read_bytes()
     DP.adp_add_recipient(DP.encode_pubkey(
         DP._pub_raw(X25519PrivateKey.generate())), "someone else")
     assert DP.adp_grant_access(str(tmp_path))["ok"] is True
-    assert DP._unpack(enc.read_bytes())[1] == before
+    after = enc.read_bytes()
+    assert after != before                      # re-sealed under a fresh content key
+    assert DP.adp_unprotect_file(str(enc))["ok"] is True
+    assert (tmp_path / "big.jpg").read_bytes() == b"x" * 5000
 
 
 def test_remove_recipient_is_honest_about_what_it_cannot_do(monkeypatch, tmp_path):
@@ -410,7 +416,7 @@ def test_v1_files_upgrade_on_grant_access(monkeypatch, tmp_path):
     _write_v1(enc, "correct horse battery", b"old-but-still-mine")
     DP.adp_add_recipient(other_pub, "iPad")
     assert DP.adp_grant_access(str(tmp_path))["updated_count"] == 1
-    assert DP.adp_inspect(str(enc))["format"] == "v2"
+    assert DP.adp_inspect(str(enc))["format"] == "v3"
 
     with _second_device(monkeypatch, tmp_path, WRONG_PW):
         assert DP.adp_unprotect_file(str(enc))["ok"] is True
@@ -520,3 +526,119 @@ def test_destructive_ui_paths_confirm_first():
 
 def test_ui_is_discoverable():
     assert "Advanced Data Protection" in _ui_source().split("Security & privacy", 1)[1][:2000]
+
+
+# --- encryption levels ----------------------------------------------------------
+def _level(monkeypatch, tmp_path, lv):
+    monkeypatch.setattr(DP, "LEVEL_FILE", tmp_path / "level.json")
+    assert DP.set_level(lv)["ok"] is True
+
+
+def test_default_level_is_standard(monkeypatch, tmp_path):
+    monkeypatch.setattr(DP, "LEVEL_FILE", tmp_path / "nothing.json")
+    assert DP.current_level() == "standard"
+
+
+def test_unknown_level_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(DP, "LEVEL_FILE", tmp_path / "level.json")
+    r = DP.set_level("unbreakable")
+    assert r["ok"] is False and "unknown level" in r["error"]
+    assert DP.current_level() == "standard"
+
+
+@pytest.mark.parametrize("lv", ["standard", "high", "double"])
+def test_every_level_round_trips(monkeypatch, tmp_path, lv):
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, lv)
+    src = _file(tmp_path, "x.jpg", b"the photo bytes")
+    assert DP.adp_protect_file(str(src), delete_original=True)["ok"] is True
+    enc = tmp_path / "x.jpg.ember"
+    assert b"the photo bytes" not in enc.read_bytes()
+    assert DP.adp_unprotect_file(str(enc))["ok"] is True
+    assert (tmp_path / "x.jpg").read_bytes() == b"the photo bytes"
+
+
+def test_double_really_uses_two_ciphers(monkeypatch, tmp_path):
+    """Not AES twice — AES-256-GCM inside ChaCha20-Poly1305, under independent keys."""
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, "double")
+    src = _file(tmp_path, "x.jpg", b"secret")
+    DP.adp_protect_file(str(src))
+    slots, _raw, _body = DP._unpack((tmp_path / "x.jpg.ember").read_bytes(), DP.MAGIC)
+    assert DP._cipher_name(slots) == "aes256gcm+chacha20"
+    assert len(DP._cipher_for("aes256gcm+chacha20")) == 2
+    # Two layers means two independent 32-byte keys, not one reused.
+    assert DP._cek_len("aes256gcm+chacha20") == 64
+    assert DP._cek_len("aes256gcm") == 32
+
+
+def test_double_is_larger_because_of_the_second_layer(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, "standard")
+    DP.adp_protect_file(str(_file(tmp_path, "a.jpg", b"x" * 500)))
+    _level(monkeypatch, tmp_path, "double")
+    DP.adp_protect_file(str(_file(tmp_path, "b.jpg", b"x" * 500)))
+    assert (tmp_path / "b.jpg.ember").stat().st_size > (tmp_path / "a.jpg.ember").stat().st_size
+
+
+def test_high_raises_the_kdf_work(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, "high")
+    DP.adp_protect_file(str(_file(tmp_path, "x.jpg")))
+    slots, _raw, _body = DP._unpack((tmp_path / "x.jpg.ember").read_bytes(), DP.MAGIC)
+    pw_slot = [s for s in slots if s["type"] == "passphrase"][0]
+    assert pw_slot["iterations"] == DP.LEVELS["high"]["iterations"] > DP.KDF_ITERATIONS
+
+
+def test_files_keep_the_level_they_were_written_with(monkeypatch, tmp_path):
+    """Switching the setting must not make older files unreadable."""
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, "double")
+    DP.adp_protect_file(str(_file(tmp_path, "old.jpg", b"older")), delete_original=True)
+    _level(monkeypatch, tmp_path, "standard")
+    assert DP.adp_unprotect_file(str(tmp_path / "old.jpg.ember"))["ok"] is True
+    assert (tmp_path / "old.jpg").read_bytes() == b"older"
+
+
+def test_the_header_is_authenticated(monkeypatch, tmp_path):
+    """The v2 gap: someone able to write to your sync folder could strip a recipient out of the
+    header undetected. v3 binds the header into the payload tag, so any edit breaks it."""
+    _setup(monkeypatch, tmp_path)
+    src = _file(tmp_path, "x.jpg", b"content")
+    DP.adp_protect_file(str(src), delete_original=True)
+    enc = tmp_path / "x.jpg.ember"
+    slots, raw, body = DP._unpack(enc.read_bytes(), DP.MAGIC)
+    # Flip one byte inside the header's base64 (a label edit an attacker might attempt).
+    tampered = bytearray(raw)
+    tampered[len(raw) // 2] ^= 0x01
+    import struct as _s
+    enc.write_bytes(DP.MAGIC + _s.pack(">I", len(tampered)) + bytes(tampered) + body)
+    r = DP.adp_unprotect_file(str(enc))
+    assert r["ok"] is False
+    assert not (tmp_path / "x.jpg").exists()
+
+
+def test_a_downgrade_of_the_cipher_field_is_rejected(monkeypatch, tmp_path):
+    """The cipher name lives inside the authenticated header, so it cannot be edited to make a
+    double-encrypted file decrypt as single."""
+    _setup(monkeypatch, tmp_path)
+    _level(monkeypatch, tmp_path, "double")
+    DP.adp_protect_file(str(_file(tmp_path, "x.jpg", b"content")), delete_original=True)
+    enc = tmp_path / "x.jpg.ember"
+    slots, raw, body = DP._unpack(enc.read_bytes(), DP.MAGIC)
+    forged = raw.replace(b"aes256gcm+chacha20", b"aes256gcm\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000")
+    if len(forged) == len(raw):
+        import struct as _s
+        enc.write_bytes(DP.MAGIC + _s.pack(">I", len(forged)) + forged + body)
+        assert DP.adp_unprotect_file(str(enc))["ok"] is False
+
+
+def test_levels_tool_states_cost_as_well_as_benefit(monkeypatch, tmp_path):
+    monkeypatch.setattr(DP, "LEVEL_FILE", tmp_path / "level.json")
+    r = DP.adp_levels()
+    assert r["ok"] is True and len(r["levels"]) == 3
+    for lv in r["levels"]:
+        assert lv["summary"] and lv["cost"]
+    dbl = [l for l in r["levels"] if l["id"] == "double"][0]
+    # Must not oversell: two ciphers is not two times the strength.
+    assert "Not twice the strength" in dbl["cost"]
