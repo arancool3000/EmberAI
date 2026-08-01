@@ -42,6 +42,21 @@ import icons
 # annotations`), and the EventBridge signal is pyqtSignal(object) — so no runtime import needed here.
 
 
+def this_device(capitalized: bool = False) -> str:
+    """What to call the machine Ember is running on, in user-facing text.
+
+    Ember ships for both macOS and Windows from one source, so hard-coding "this Mac" reads as
+    a bug to half the users. Falls back to "this computer" on anything else.
+    """
+    if sys.platform == "darwin":
+        word = "this Mac"
+    elif sys.platform.startswith("win"):
+        word = "this PC"
+    else:
+        word = "this computer"
+    return word[0].upper() + word[1:] if capitalized else word
+
+
 SLASH_COMMANDS = {
     "/autopilot": "Take over the next computer task end-to-end. Use the screen, apps, browser, files, shell, and automation tools as needed. Ask only for credentials, payments, CAPTCHA/2FA, or irreversible decisions.",
     "/do": "Take over the next computer task end-to-end. Use the screen, apps, browser, files, shell, and automation tools as needed. Ask only for credentials, payments, CAPTCHA/2FA, or irreversible decisions.",
@@ -296,7 +311,7 @@ FEATURE_CATALOG = [
         ("🛰️", "Remote-access security", "Find remote-control services (Remote Desktop, SSH, VNC, Screen Sharing, SMB) exposed to the network, and check the firewall.", ("open", "__network_inspector__")),
         ("🔐", "Password manager", "Saved website logins, encrypted on your machine.", ("open", "__passwords__")),
         ("🗝️", "Encrypted key vault", "Store your API keys encrypted instead of in plaintext. Settings ▸ Models.", ("settings", "Models")),
-        ("☁️", "Advanced Data Protection", "Encrypt files on this Mac before they sync to iCloud, readable only by you and the devices you enrol. Settings ▸ Security.", ("settings", "Security")),
+        ("☁️", "Advanced Data Protection", f"Encrypt files on {this_device()} before they sync to iCloud, readable only by you and the devices you enrol. Settings ▸ Security.", ("settings", "Security")),
     ]),
     ("AI brain & models", [
         ("✨", "Gemini (free)", "Runs day-to-day on Google's free tier. Settings ▸ Models.", ("settings", "Models")),
@@ -2978,7 +2993,7 @@ class SettingsDialog(QDialog):
         if st.get("configured"):
             names = [r.get("label") or r.get("key_id", "") for r in st.get("recipients", [])]
             self._adp_status_lbl.setText(
-                "On — files are encrypted on this Mac before they sync. "
+                f"On — files are encrypted on {this_device()} before they sync. "
                 f"Readable by your passphrase and {len(names)} device(s): {', '.join(names)}.")
             self._adp_setup_btn.setText("Turn on…")
             self._adp_setup_btn.setEnabled(False)
@@ -2996,7 +3011,8 @@ class SettingsDialog(QDialog):
         anything is encrypted with it."""
         pw, ok = QInputDialog.getText(self, "Advanced Data Protection",
                                       "Choose a passphrase (at least 8 characters).\n"
-                                      "It never leaves this Mac and cannot be recovered:",
+                                      f"It never leaves {this_device()} and cannot be "
+                                      "recovered:",
                                       QLineEdit.EchoMode.Password)
         if not ok or not pw:
             return
@@ -3024,7 +3040,7 @@ class SettingsDialog(QDialog):
         self._refresh_adp_status()
         QMessageBox.information(
             self, "Advanced Data Protection",
-            "On. Files you protect are now encrypted on this Mac first.\n\n"
+            f"On. Files you protect are now encrypted on {this_device()} first.\n\n"
             "To let another device read them, open this panel there, use \"This device's key\", "
             "and add each machine to the other.")
 
