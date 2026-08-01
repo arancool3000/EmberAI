@@ -21,7 +21,17 @@ pyautogui.doubleClick = lambda *a, **k: None
 pyautogui.hotkey = lambda *a, **k: None
 pyautogui.press = lambda *a, **k: None
 
-if "PIL" not in sys.modules:
+# Only stub PIL when it genuinely isn't installed. The old check was "not already imported",
+# which replaced a perfectly good Pillow with a SimpleNamespace whenever this module happened to
+# run first — poisoning sys.modules for every later test in the process (qrcode, which imports
+# PIL.Image, then failed with "SimpleNamespace has no attribute 'new'").
+try:
+    import PIL  # noqa: F401
+    _HAVE_PIL = True
+except ImportError:
+    _HAVE_PIL = False
+
+if not _HAVE_PIL and "PIL" not in sys.modules:
     pil = types.ModuleType("PIL")
     pil.Image = types.SimpleNamespace()
     pil.ImageDraw = types.SimpleNamespace()
@@ -31,7 +41,13 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.ImageDraw"] = pil.ImageDraw
     sys.modules["PIL.ImageFont"] = pil.ImageFont
 
-if "requests" not in sys.modules:
+try:
+    import requests  # noqa: F401
+    _HAVE_REQUESTS = True
+except ImportError:
+    _HAVE_REQUESTS = False
+
+if not _HAVE_REQUESTS and "requests" not in sys.modules:
     req = types.ModuleType("requests")
     req.exceptions = types.SimpleNamespace(RequestException=Exception)
     sys.modules["requests"] = req
