@@ -323,3 +323,61 @@ def test_phone_pane_exists_in_the_link_app():
     assert "X-Ember-Token" in remote_server.PAGE
     # The precondition has to be visible on the phone, not only in the docs.
     assert "iCloud Photos" in remote_server.PAGE
+
+
+# --- the one-tap link -----------------------------------------------------------
+def test_lan_magic_link_signs_in_without_a_pin(server):
+    """The LAN case previously made the phone type a 6-digit PIN for no benefit — the token in
+    the link is a stronger credential than the PIN it replaces."""
+    _base, rs, _tok = server
+    link = rs.magic_link(go="photos")
+    assert link.startswith("http://") and "#tok=" in link and "go=photos" in link
+    tok = link.split("#tok=", 1)[1].split("&", 1)[0]
+    assert rs._token_valid(tok) is True
+
+
+def test_magic_link_is_empty_when_link_is_down():
+    import remote_server
+    remote_server.stop()
+    assert remote_server.magic_link(go="photos") == ""
+
+
+def test_each_magic_link_is_a_fresh_token(server):
+    _base, rs, _tok = server
+    a = rs.magic_link().split("#tok=", 1)[1]
+    b = rs.magic_link().split("#tok=", 1)[1]
+    assert a != b and rs._token_valid(a) and rs._token_valid(b)
+
+
+def test_the_page_honours_the_go_fragment():
+    import remote_server
+    # The QR lands on the Photos tab rather than the screen mirror.
+    assert "go=([a-z]+)" in remote_server.PAGE
+    assert "if(GOTO)" in remote_server.PAGE
+
+
+def test_recovery_code_is_strong_and_transcribable():
+    seen = {PI.generate_recovery_code() for _ in range(200)}
+    assert len(seen) == 200                       # no repeats
+    code = PI.generate_recovery_code()
+    assert code.count("-") == PI._CODE_GROUPS - 1
+    # Characters that get misread off paper must not appear.
+    assert not (set(code.replace("-", "")) & set("01OIl"))
+
+
+def test_quick_setup_turns_everything_on_in_one_call(server):
+    _base, rs, _tok = server
+    r = PI.quick_setup()
+    assert r["ok"] is True
+    assert "go=photos" in r["link"]
+    assert r["dest"] and r["reachable"] == "home Wi-Fi only"
+
+
+def test_quick_setup_reports_a_tunnel_failure_instead_of_hanging(server, monkeypatch):
+    """Clicking 'yes, away from home' without cloudflared must fail fast and say why."""
+    import remote_server
+    monkeypatch.setattr(remote_server, "remote_url", lambda: "")
+    monkeypatch.setattr(remote_server, "enable_remote",
+                        lambda *a, **k: {"ok": False, "error": "cloudflared is not installed"})
+    r = PI.quick_setup(public=True)
+    assert r["ok"] is False and "cloudflared" in r["error"]

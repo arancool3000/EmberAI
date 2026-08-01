@@ -378,7 +378,7 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
     # --- Advanced Data Protection (client-side encryption) -------------------------------------
     if tool_name == "adp_reset":
         return "high", "forgets the passphrase and device key (protected files become unreadable)"
-    if tool_name == "adp_phone_setup":
+    if tool_name in {"adp_phone_setup", "adp_quick_setup"}:
         return "high", "issues a pairing token granting this phone full Ember Link access"
     if tool_name == "adp_phone_set_folder":
         return "medium", "changes where protected phone uploads are saved"

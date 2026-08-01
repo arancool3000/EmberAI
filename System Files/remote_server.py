@@ -540,7 +540,7 @@ async function post(o){o.pin=PIN;o.tok=TOK;try{return (await fetch("/api/event",
 async function postR(o){o.pin=PIN;o.tok=TOK;try{let r=await fetch("/api/event",{method:"POST",body:JSON.stringify(o)});if(!r.ok)return{ok:false};try{return await r.json();}catch(e){return{ok:true};}}catch(e){return{ok:false,detail:"can't reach Ember"};}}
 function screenUrl(){let q=QUAL[QI];return `/api/screen?pin=${encodeURIComponent(PIN)}&tok=${encodeURIComponent(TOK)}&hd=${q.hd}&maxw=${q.maxw}&q=${q.q}&t=${Date.now()}`}
 async function pair(){try{let r=await fetch("/api/pair",{method:"POST",body:JSON.stringify({pin:PIN,tok:TOK})});if(r.ok){let j=await r.json();if(j&&j.token){TOK=j.token;localStorage.setItem("ember_tok",TOK);}}}catch(e){}}
-function go(){document.getElementById("gate").style.display="none";loop();pollChat()}
+function go(){document.getElementById("gate").style.display="none";loop();pollChat();if(GOTO){let t=GOTO;GOTO="";setMode(t)}}
 async function connect(){PIN=document.getElementById("pin").value.trim();let e=document.getElementById("err");e.textContent="";try{let r=await fetch(screenUrl(),{cache:"no-store"});if(!r.ok){e.textContent="Wrong PIN";return}SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");localStorage.setItem("ember_pin",PIN);await pair();go()}catch(err){e.textContent="Can't reach Ember - check you're on the same Wi-Fi and that Ember Link is running."}}
 async function tryAuto(){if(!TOK&&!PIN)return false;try{let r=await fetch(screenUrl(),{cache:"no-store"});if(r.ok){SW=+r.headers.get("X-Screen-W");SH=+r.headers.get("X-Screen-H");go();return true;}}catch(e){}return false;}
 async function loop(){if(MODE!=="full"||document.hidden){setTimeout(loop,450);return}if(fetching){setTimeout(loop,70);return}fetching=true;let start=performance.now();
@@ -647,7 +647,10 @@ document.getElementById("chatInput").addEventListener("keydown",e=>{if(e.key==="
 // the public tunnel origin (https://…trycloudflare.com) - "open the link from anywhere" could
 // never authenticate. Read the token out of the URL, persist it for this origin, then strip it
 // from the address bar so it isn't left in history or a screenshot.
-(function(){try{let m=(location.hash||"").match(/tok=([^&]+)/);if(m&&m[1]){TOK=decodeURIComponent(m[1]);localStorage.setItem("ember_tok",TOK);history.replaceState(null,"",location.pathname+location.search);}}catch(e){}})();
+let GOTO="";
+(function(){try{let h=location.hash||"";let m=h.match(/tok=([^&]+)/);if(m&&m[1]){TOK=decodeURIComponent(m[1]);localStorage.setItem("ember_tok",TOK);}
+let g=h.match(/go=([a-z]+)/);if(g&&g[1])GOTO=g[1];
+if(m||g)history.replaceState(null,"",location.pathname+location.search);}catch(e){}})();
 // Already paired on this device? Reconnect automatically (works from any network via the token).
 tryAuto();
 </script></body></html>"""
@@ -1224,6 +1227,25 @@ def remote_url() -> str:
 def remote_link() -> str:
     """The full shareable magic link (tunnel URL + embedded token), or '' if remote is off."""
     return _REMOTE.get("link") or ""
+
+
+def magic_link(go: str = "", public: bool = False) -> str:
+    """A sign-in-free link to Ember Link: the URL plus a fresh pairing token in the fragment.
+
+    The tunnel has had one of these all along; the LAN case did not, so a phone on the same
+    Wi-Fi was made to type a 6-digit PIN for no security benefit — the token in the link is a
+    stronger credential than the PIN it replaces. `go` preselects a tab (e.g. "photos") so a
+    scanned QR lands the user exactly where they need to be.
+
+    Treat the result as a root credential: anyone holding it has Ember Link access.
+    """
+    base = (remote_url() if public else _STATE.get("url", "")) or ""
+    if not base:
+        return ""
+    frag = f"tok={issue_pair_token()}"
+    if go:
+        frag += f"&go={go}"
+    return f"{base.rstrip('/')}/#{frag}"
 
 
 def stop() -> dict:

@@ -64,6 +64,10 @@ def panel(qapp, monkeypatch, tmp_path):
     import adp_watch
     monkeypatch.setattr(adp_watch, "CONFIG_FILE", tmp_path / "adp_watch.json")
 
+    # Safety net: a modal exec() with nothing to click blocks the whole suite forever. Default
+    # every dialog to "cancelled"; tests that need it accepted override this themselves.
+    monkeypatch.setattr(ui.QDialog, "exec", lambda self: ui.QDialog.DialogCode.Rejected)
+
     host_cls = type("AdpHost", (QWidget,),
                     {n: getattr(ui.SettingsDialog, n) for n in _adp_methods()})
     host = host_cls()
@@ -83,8 +87,10 @@ def test_on_state_lists_who_can_decrypt(panel):
     panel._refresh_adp_status()
     text = panel._adp_status_lbl.text()
     assert "On —" in text and "passphrase and 1 device(s)" in text
-    # Nothing to turn on twice; setup refuses anyway, but the button shouldn't invite it.
-    assert not panel._adp_setup_btn.isEnabled()
+    # Once on, the primary button becomes "set up another phone" rather than going dead —
+    # adding a second phone is the commonest next thing anyone wants.
+    assert panel._adp_setup_btn.isEnabled()
+    assert panel._adp_setup_btn.text() == "Set up another phone"
 
 
 def test_new_device_appears_in_the_panel(panel):
@@ -236,8 +242,10 @@ def test_every_panel_handler_is_reachable():
 
 
 def test_watcher_state_shows_in_the_panel(panel, tmp_path):
+    """The watcher line appears only once it is running — an "it's off" line about a feature
+    nobody switched on is the clutter that made this panel hard to read."""
     import adp_watch
-    assert "Auto-protect is off" in panel._adp_watch_lbl.text()
+    assert panel._adp_watch_lbl.isVisible() is False
     DP.adp_setup("a good long passphrase")
     src = tmp_path / "import"
     src.mkdir()
@@ -245,9 +253,10 @@ def test_watcher_state_shows_in_the_panel(panel, tmp_path):
     try:
         panel._refresh_adp_watch_label()
         assert str(src) in panel._adp_watch_lbl.text()
-        assert panel._adp_watch_btn.text() == "Stop auto-protect"
     finally:
         adp_watch.stop_watching(persist=False)
+    panel._refresh_adp_watch_label()
+    assert panel._adp_watch_lbl.isVisible() is False
 
 
 def test_phone_setup_refuses_before_protection(panel, monkeypatch):
@@ -255,3 +264,54 @@ def test_phone_setup_refuses_before_protection(panel, monkeypatch):
     monkeypatch.setattr(ui.QMessageBox, "information", lambda *a, **k: seen.append(a[2]))
     panel._adp_phone_setup()
     assert seen and "Turn on data protection first" in seen[0]
+
+
+# --- the one-button flow --------------------------------------------------------
+def test_the_panel_leads_with_one_button(panel):
+    """The whole point of the simplification: one obvious action, everything else behind
+    Advanced."""
+    from PyQt6.QtWidgets import QPushButton
+    labels = [b.text() for b in panel.findChildren(QPushButton)]
+    assert labels[:2] == ["Protect my photos", "Advanced…"]
+    assert len(labels) == 2
+
+
+def test_quick_setup_does_everything_in_one_go(panel, monkeypatch):
+    import phone_intake, remote_server
+    monkeypatch.setattr(remote_server, "start",
+                        lambda *a, **k: {"ok": True, "url": "http://192.168.1.5:8765"})
+    monkeypatch.setattr(remote_server, "status", lambda: {"running": True})
+    monkeypatch.setattr(remote_server, "magic_link",
+                        lambda go="", public=False: f"http://192.168.1.5:8765/#tok=T&go={go}")
+    # Yes to the "continue?" confirmation, No to "away from home Wi-Fi?" — answering Yes to the
+    # second would spawn a real cloudflared tunnel and block.
+    answers = iter([ui.QMessageBox.StandardButton.Yes, ui.QMessageBox.StandardButton.No])
+    monkeypatch.setattr(ui.QMessageBox, "question", lambda *a, **k: next(answers))
+    shown = {}
+    # Patch the HOST class, not SettingsDialog: the host copied the methods at class-creation
+    # time, so patching the original has no effect on it.
+    monkeypatch.setattr(type(panel), "_adp_show_phone_link",
+                        lambda self, info: shown.update(info), raising=False)
+    panel._adp_quick_setup()
+    assert DP.is_set_up() is True                 # protection turned on
+    assert shown["recovery_code"]                 # a code was produced
+    assert "go=photos" in shown["link"]           # link opens the right tab
+    assert shown["dest"]                          # a destination was chosen
+
+
+def test_quick_setup_aborts_if_the_warning_is_declined(panel, monkeypatch):
+    monkeypatch.setattr(ui.QMessageBox, "question",
+                        lambda *a, **k: ui.QMessageBox.StandardButton.Cancel)
+    panel._adp_quick_setup()
+    assert DP.is_set_up() is False
+
+
+def test_second_run_does_not_claim_a_new_recovery_code(panel, monkeypatch):
+    """An existing passphrase cannot be recovered — the flow must not imply otherwise."""
+    import remote_server, phone_intake
+    DP.adp_setup("an existing passphrase")
+    monkeypatch.setattr(remote_server, "status", lambda: {"running": True})
+    monkeypatch.setattr(remote_server, "magic_link", lambda go="", public=False: "http://x/#tok=T")
+    r = phone_intake.quick_setup()
+    assert r["ok"] is True
+    assert r["recovery_code"] is None and r["already_configured"] is True

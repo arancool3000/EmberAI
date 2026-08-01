@@ -155,6 +155,21 @@ Three pieces support that:
   filenames are untrusted and reduced to a single safe component, so `../../.ssh/authorized_keys`
   becomes a plain name inside the destination folder.
 
+`adp_quick_setup` does the whole thing in one step — turns protection on with a generated
+recovery code, picks the iCloud Drive destination, starts Ember Link, and returns a magic link
+for the phone to scan. `remote_server.magic_link` now covers the LAN case too: previously only
+the tunnel had a sign-in-free link, so a phone on the same Wi-Fi was made to type a 6-digit PIN
+for no security benefit — the 43-character token in the link is a stronger credential than the
+PIN it replaces. The `#tok=` fragment is stripped from the address bar on arrival so it isn't
+left in history or a screenshot, and `go=photos` lands the user on the right tab.
+
+The generated **recovery code** is 6 groups of 4 over a 31-character alphabet (~119 bits), with
+`0`, `1`, `O`, `I` and `l` removed because it gets written on paper and read back under stress.
+It is deliberately not a memorable passphrase: day to day the enrolled devices do the
+decrypting, so the code is the disaster case and should be strong and written down rather than
+weak and remembered. It is shown exactly once, and the dialog cannot be dismissed until the
+user confirms they have saved it.
+
 `adp_phone_setup` issues the pairing token and prints the Shortcut recipe. That token grants
 **full Ember Link access, not upload-only** — it is the existing pairing credential, and the
 tool result says so. Revoke it with `revoke_pairings` if the phone is lost.
@@ -175,6 +190,9 @@ itself.
   *update authenticity*, which is distinct from **OS code-signing**: making macOS/Windows stop
   warning about an "unidentified developer" requires a paid Apple/Microsoft developer certificate
   and notarization, which is an account/credential step, not a code change.
+- A magic link (`#tok=…`) is a root credential in a URL. Anyone who obtains the link — over a
+  shoulder, in a screenshot, from a shared QR — has Ember Link access until the pairing is
+  revoked. This is the same trade the tunnel link has always made, now also on the LAN.
 - A phone pairing token used for photo uploads is a full Ember Link credential: anyone holding
   it can also drive the screen and keyboard remotely. There is no upload-only scope today.
 - Auto-protect with "shred originals" runs unattended. A destination that silently becomes
