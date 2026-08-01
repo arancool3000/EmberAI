@@ -296,6 +296,7 @@ FEATURE_CATALOG = [
         ("🛰️", "Remote-access security", "Find remote-control services (Remote Desktop, SSH, VNC, Screen Sharing, SMB) exposed to the network, and check the firewall.", ("open", "__network_inspector__")),
         ("🔐", "Password manager", "Saved website logins, encrypted on your machine.", ("open", "__passwords__")),
         ("🗝️", "Encrypted key vault", "Store your API keys encrypted instead of in plaintext. Settings ▸ Models.", ("settings", "Models")),
+        ("☁️", "Advanced Data Protection", "Encrypt files on this Mac before they sync to iCloud, readable only by you and the devices you enrol. Settings ▸ Security.", ("settings", "Security")),
     ]),
     ("AI brain & models", [
         ("✨", "Gemini (free)", "Runs day-to-day on Google's free tier. Settings ▸ Models.", ("settings", "Models")),
@@ -2898,6 +2899,13 @@ class SettingsDialog(QDialog):
         except Exception as e:
             v.addWidget(QLabel(f"VPN unavailable: {e}"))
 
+        # --- Advanced Data Protection ---
+        _section("Advanced Data Protection (encrypt files before they reach iCloud)")
+        try:
+            self._populate_adp_section(v)
+        except Exception as e:
+            v.addWidget(QLabel(f"Data protection unavailable: {e}"))
+
         # --- Audit log ---
         _section("Tamper-evident audit log")
         arow = QHBoxLayout()
@@ -2907,6 +2915,303 @@ class SettingsDialog(QDialog):
         arow.addStretch()
         v.addLayout(arow)
         v.addStretch()
+
+    # ---- Advanced Data Protection -------------------------------------------------
+    def _populate_adp_section(self, v):
+        """Client-side encryption controls. The pairing flow (show this device's key on one
+        machine, paste it on the other) is the part that genuinely needs a UI — as tool calls
+        it's two round-trips and a copy-paste."""
+        self._adp_status_lbl = QLabel()
+        self._adp_status_lbl.setWordWrap(True)
+        self._adp_status_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
+        v.addWidget(self._adp_status_lbl)
+
+        # Shown only where Apple's own ADP can't be switched on, so the user knows this isn't
+        # a second layer for them — it's the only one.
+        self._adp_region_lbl = QLabel()
+        self._adp_region_lbl.setWordWrap(True)
+        self._adp_region_lbl.setStyleSheet("color:#e0a44c; font-size:11px;")
+        v.addWidget(self._adp_region_lbl)
+
+        row1 = QHBoxLayout()
+        self._adp_setup_btn = QPushButton("Turn on…")
+        self._adp_setup_btn.setObjectName("send")
+        self._adp_setup_btn.clicked.connect(self._adp_setup)
+        row1.addWidget(self._adp_setup_btn)
+        b = QPushButton("This device's key…")
+        b.clicked.connect(self._adp_show_identity)
+        row1.addWidget(b)
+        b = QPushButton("Add a device…")
+        b.clicked.connect(self._adp_add_device)
+        row1.addWidget(b)
+        row1.addStretch()
+        v.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        b = QPushButton("Protect a folder…")
+        b.clicked.connect(self._adp_protect_folder)
+        row2.addWidget(b)
+        b = QPushButton("Unprotect a folder…")
+        b.clicked.connect(self._adp_unprotect_folder)
+        row2.addWidget(b)
+        b = QPushButton("Share existing files…")
+        b.clicked.connect(self._adp_grant_access)
+        row2.addWidget(b)
+        row2.addStretch()
+        v.addLayout(row2)
+
+        self._refresh_adp_status()
+
+    def _refresh_adp_status(self):
+        try:
+            import data_protect
+            st = data_protect.adp_status()
+        except Exception as e:
+            if getattr(self, "_adp_status_lbl", None) is not None:
+                self._adp_status_lbl.setText(f"Unavailable: {e}")
+            return
+        if getattr(self, "_adp_status_lbl", None) is None:
+            return
+        if not st.get("ok"):
+            self._adp_status_lbl.setText(st.get("error", "unavailable"))
+            return
+        if st.get("configured"):
+            names = [r.get("label") or r.get("key_id", "") for r in st.get("recipients", [])]
+            self._adp_status_lbl.setText(
+                "On — files are encrypted on this Mac before they sync. "
+                f"Readable by your passphrase and {len(names)} device(s): {', '.join(names)}.")
+            self._adp_setup_btn.setText("Turn on…")
+            self._adp_setup_btn.setEnabled(False)
+        else:
+            self._adp_status_lbl.setText(
+                "Off — anything you put in iCloud is readable by Apple, and by anyone who "
+                "obtains it from them. Turning this on encrypts it here first.")
+            self._adp_setup_btn.setEnabled(True)
+        note = st.get("apple_adp_unavailable_here")
+        self._adp_region_lbl.setText(note or "")
+        self._adp_region_lbl.setVisible(bool(note))
+
+    def _adp_setup(self):
+        """Take the passphrase twice, and make the no-recovery consequence explicit before
+        anything is encrypted with it."""
+        pw, ok = QInputDialog.getText(self, "Advanced Data Protection",
+                                      "Choose a passphrase (at least 8 characters).\n"
+                                      "It never leaves this Mac and cannot be recovered:",
+                                      QLineEdit.EchoMode.Password)
+        if not ok or not pw:
+            return
+        again, ok = QInputDialog.getText(self, "Advanced Data Protection",
+                                         "Type it again to confirm:", QLineEdit.EchoMode.Password)
+        if not ok:
+            return
+        if again != pw:
+            QMessageBox.warning(self, "Advanced Data Protection",
+                                "Those don't match. Nothing was changed.")
+            return
+        if QMessageBox.question(
+                self, "There is no recovery",
+                "If you lose this passphrase and every device you enrol, your protected files "
+                "cannot be decrypted — by you, by Ember, or by anyone else.\n\n"
+                "That is what makes the protection real. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        import data_protect
+        r = data_protect.adp_setup(pw)
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Advanced Data Protection", r.get("error", "failed"))
+            return
+        self._refresh_adp_status()
+        QMessageBox.information(
+            self, "Advanced Data Protection",
+            "On. Files you protect are now encrypted on this Mac first.\n\n"
+            "To let another device read them, open this panel there, use \"This device's key\", "
+            "and add each machine to the other.")
+
+    def _adp_show_identity(self):
+        """Show this machine's public key so another machine can enrol it."""
+        import data_protect
+        r = data_protect.adp_identity()
+        if not r.get("ok"):
+            QMessageBox.warning(self, "This device's key", r.get("error", "failed"))
+            return
+        box = QDialog(self)
+        box.setWindowTitle("This device's key")
+        lay = QVBoxLayout(box)
+        head = QLabel("Add this key on your other devices so they can decrypt your files.\n"
+                      "It is a public key — safe to send over email or messages.")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        field = QLineEdit(r["public_key"])
+        field.setReadOnly(True)
+        field.setCursorPosition(0)
+        lay.addWidget(field)
+        # A QR is far easier to carry to a phone than a 50-character string, but `qrcode` is
+        # optional — fall back to copy/paste rather than failing.
+        try:
+            import quick_tools
+            png = Path(tempfile.gettempdir()) / "ember_adp_key.png"
+            q = quick_tools.qr_make(r["public_key"], str(png))
+            if q.get("ok"):
+                pic = QLabel()
+                pic.setPixmap(QPixmap(str(png)).scaled(
+                    200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+                pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lay.addWidget(pic)
+        except Exception:
+            pass
+        foot = QLabel(f"Fingerprint: {r['key_id']}")
+        foot.setStyleSheet("color:#8f99ad; font-size:11px;")
+        lay.addWidget(foot)
+        row = QHBoxLayout()
+        copy = QPushButton("Copy key")
+        copy.setObjectName("send")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(r["public_key"]))
+        row.addWidget(copy)
+        close = QPushButton("Close")
+        close.clicked.connect(box.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        box.exec()
+
+    def _adp_add_device(self):
+        """Enrol another device/person by their public key."""
+        import data_protect
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Add a device", "Turn on data protection first.")
+            return
+        key, ok = QInputDialog.getText(
+            self, "Add a device",
+            "Paste the other device's key (it starts with 'ember1:'):")
+        if not ok or not key.strip():
+            return
+        label, ok = QInputDialog.getText(self, "Add a device",
+                                         "Name it (e.g. 'my iPad', 'work Mac'):")
+        if not ok:
+            return
+        r = data_protect.adp_add_recipient(key.strip(), label.strip())
+        if not r.get("ok"):
+            QMessageBox.warning(self, "Add a device", r.get("error", "failed"))
+            return
+        self._refresh_adp_status()
+        QMessageBox.information(
+            self, "Add a device",
+            f"Added ({r['key_id']}).\n\nIt can read files you protect from now on. To let it "
+            "read files you protected earlier, use \"Share existing files…\".")
+
+    def _adp_protect_folder(self):
+        import data_protect
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Protect a folder", "Turn on data protection first.")
+            return
+        src = QFileDialog.getExistingDirectory(self, "Choose a folder to protect", str(Path.home()))
+        if not src:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            self, "Where should the encrypted copies go? (Cancel to keep them alongside)",
+            str(Path.home()))
+        opts = QDialog(self)
+        opts.setWindowTitle("Protect a folder")
+        lay = QVBoxLayout(opts)
+        head = QLabel(f"Protecting {src}")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        c_all = QCheckBox("Every file type (otherwise photos and videos only)")
+        c_rec = QCheckBox("Include subfolders")
+        c_del = QCheckBox("Securely shred the unencrypted originals afterwards")
+        for c in (c_all, c_rec, c_del):
+            lay.addWidget(c)
+        warn = QLabel("Shredding is irreversible. Check the encrypted copies open before you "
+                      "rely on it.")
+        warn.setWordWrap(True)
+        warn.setStyleSheet("color:#e0a44c; font-size:11px;")
+        lay.addWidget(warn)
+        row = QHBoxLayout()
+        go = QPushButton("Protect")
+        go.setObjectName("send")
+        go.clicked.connect(opts.accept)
+        row.addWidget(go)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(opts.reject)
+        row.addWidget(cancel)
+        lay.addLayout(row)
+        if opts.exec() != QDialog.DialogCode.Accepted:
+            return
+        if c_del.isChecked() and QMessageBox.question(
+                self, "Shred the originals?",
+                "The unencrypted originals will be overwritten and deleted. This cannot be "
+                "undone. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        r = data_protect.adp_protect_folder(
+            src, dest_dir=dest or "", recursive=c_rec.isChecked(),
+            delete_originals=c_del.isChecked(), all_files=c_all.isChecked())
+        self._adp_report("Protect a folder", r, "protected_count", "protected")
+
+    def _adp_unprotect_folder(self):
+        import data_protect
+        src = QFileDialog.getExistingDirectory(self, "Choose a folder of protected files",
+                                               str(Path.home()))
+        if not src:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            self, "Where should the decrypted files go? (Cancel to keep them alongside)",
+            str(Path.home()))
+        rec = QMessageBox.question(
+            self, "Unprotect a folder", "Include subfolders?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        r = data_protect.adp_unprotect_folder(src, dest_dir=dest or "", recursive=rec)
+        self._adp_report("Unprotect a folder", r, "restored_count", "restored")
+
+    def _adp_grant_access(self):
+        import data_protect
+        if not data_protect.is_set_up():
+            QMessageBox.information(self, "Share existing files", "Turn on data protection first.")
+            return
+        names = [r.get("label") or r.get("key_id", "")
+                 for r in data_protect.load_recipients()]
+        src = QFileDialog.getExistingDirectory(self, "Choose a folder of protected files",
+                                               str(Path.home()))
+        if not src:
+            return
+        rec = QMessageBox.question(
+            self, "Share existing files", "Include subfolders?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        if QMessageBox.question(
+                self, "Share existing files",
+                "Every already-protected file in this folder will become readable by:\n\n"
+                + "\n".join(f"  • {n}" for n in names)
+                + "\n\nThis cannot be taken back for anyone who keeps a copy. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        r = data_protect.adp_grant_access(src, recursive=rec)
+        self._adp_report("Share existing files", r, "updated_count", "updated")
+
+    def _adp_report(self, title, r, count_key, list_key):
+        """Report a folder operation, never hiding partial failure behind the success count."""
+        if not r.get("ok"):
+            QMessageBox.warning(self, title, r.get("error", "failed"))
+            return
+        n = r.get(count_key, 0)
+        failed = r.get("failed") or []
+        skipped = r.get("skipped_existing") or []
+        msg = f"{n} file(s) done."
+        if skipped:
+            msg += f"\n{len(skipped)} skipped (a file of that name was already there)."
+        if failed:
+            msg += f"\n{len(failed)} failed:\n" + "\n".join(
+                f"  • {Path(f['path']).name}: {f['error']}" for f in failed[:5])
+            if len(failed) > 5:
+                msg += f"\n  … and {len(failed) - 5} more"
+            QMessageBox.warning(self, title, msg)
+        else:
+            QMessageBox.information(self, title, msg)
+        self._refresh_adp_status()
 
     def _refresh_vpn_status(self):
         try:

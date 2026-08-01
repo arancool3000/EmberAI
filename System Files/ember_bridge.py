@@ -46,6 +46,7 @@ _HOST_AGENT = None
 _DESTRUCTIVE_TOOLS = {
     "delete_quarantined", "secure_delete", "trash_file", "vault_delete_key",
     "agent_delete", "cancel_scheduled_task", "remove_vpn_location", "delete_file",
+    "adp_reset",
 }
 
 # Gemini's uppercase JSON-Schema type names → standard lowercase for MCP inputSchema.
