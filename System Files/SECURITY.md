@@ -69,28 +69,66 @@ on `/api/pull`, and the `llama-cpp-python` Jinja SSTI) are not reachable through
 output is parsed as JSON for tool calls — it is never `eval`'d, shelled, or used as a filesystem
 path. Keep your local Ollama bound to loopback (its default) and don't expose it.
 
-## Advanced Data Protection for photos (`photo_protect.py`)
+## Advanced Data Protection (`data_protect.py`)
 
-iCloud Photos is encrypted in transit and at rest, but by default **Apple holds the keys** —
-it is not end-to-end encrypted unless the user turns on Apple's own Advanced Data Protection
-(iOS 16.2+). Ember adds a provider-independent layer *underneath* that: photos are encrypted
-on your own machine, with a passphrase only you know, before the file ever lands in a synced
-folder. What reaches Apple (or Dropbox/OneDrive/Google Drive) is an opaque blob.
+iCloud is encrypted in transit and at rest, but by default **Apple holds the keys** — it is not
+end-to-end encrypted unless the user turns on Apple's own Advanced Data Protection (iOS 16.2+).
 
-- PBKDF2-HMAC-SHA256, 600,000 iterations, a fresh 16-byte salt per file, deriving a Fernet key
-  (AES-128-CBC + HMAC-SHA256). Files are `EMBERADP1 | salt | token` and end in `.ember`.
-- The passphrase lives in `key_vault` (OS keychain where available) and is never uploaded,
-  never written into an encrypted file, and never returned by any tool.
-- Encryption writes to a `.part` sibling and `os.replace`s it, so an interrupted run can't
-  leave a truncated "protected" file whose original you then delete.
-- Shredding the unencrypted originals is opt-in (`delete_original(s)`), reuses the existing
-  file shredder, and is classified **high** risk so it always prompts.
+**And that setting can be taken away.** In February 2025 Apple withdrew ADP from the United
+Kingdom rather than comply with a secret Technical Capability Notice served by the Home Office
+under the Investigatory Powers Act 2016 — a notice Apple was legally gagged from disclosing.
+A first, worldwide-scoped notice was dropped in August 2025; a second, narrowed to UK users,
+followed that October, and the challenges brought by Apple, Privacy International and Liberty
+are before the Investigatory Powers Tribunal. UK users still cannot enable ADP. `adp_status`
+reports this for the machine's region, because for those users Ember's encryption is not a
+second layer — it is the only end-to-end layer they have.
+
+This is the design argument for doing it locally: a cloud provider's strongest setting is
+subject to jurisdiction and can be revoked without the user being told, whereas a key that
+never leaves the user's machine cannot be served with a notice.
+
+Ember adds a provider-independent layer *underneath* that: files of any type are encrypted on
+your own machine before they ever land in a synced folder. What reaches Apple (or
+Dropbox/OneDrive/Google Drive) is an opaque blob.
+
+**Envelope encryption, so every device and person you choose can read it.** Each file gets its
+own random content key (CEK), and the CEK is wrapped separately for each recipient:
+
+- **the passphrase** — always present, so the data survives losing every device;
+- **each enrolled device or person** — an X25519 public key added with `adp_add_recipient`.
+
+Enrolling a device means exchanging public keys, not sharing the passphrase. The recipient list
+holds public keys only, so it is safe to sync through iCloud itself, and any enrolled device can
+both encrypt (for everyone) and decrypt. `adp_grant_access` re-wraps files already protected so
+a newly-added device can read the back catalogue — the header is rewritten, the ciphertext body
+is not.
+
+- Payload: Fernet (AES-128-CBC + HMAC-SHA256) under the per-file CEK. Passphrase wrap:
+  PBKDF2-HMAC-SHA256, 600,000 iterations, fresh 16-byte salt per file. Recipient wrap: X25519
+  ECDH to an ephemeral key, HKDF-SHA256 bound to *both* public keys so a wrap cannot be replayed
+  at a different recipient. Layout: `EMBERADP2 | header_len | header JSON | token`, extension
+  `.ember`. Files in the earlier passphrase-only `EMBERADP1` format still decrypt, and
+  `adp_grant_access` upgrades them.
+- The header is not itself authenticated, but the payload is: tampering with it can only cause
+  unwrapping to fail or yield a wrong CEK, which the body's HMAC then rejects. No forged
+  plaintext can result.
+- The passphrase and each device's private key live in `key_vault` (OS keychain where
+  available). Neither is ever uploaded, written into an encrypted file, or returned by a tool.
+- Writes go to a `.part` sibling then `os.replace`, so an interrupted run can't leave a
+  truncated "protected" file whose original you then delete.
+- Ember's own key material (`vault.enc`, `vault.key`, the recipient list) is never encrypted —
+  sealing the vault with a key stored inside it would be unrecoverable.
+- Shredding unencrypted originals is opt-in (`delete_original(s)`), reuses the existing file
+  shredder, and is **high** risk. So is `adp_add_recipient` / `adp_grant_access`: handing
+  another party the ability to decrypt deserves a prompt of its own.
 
 Honest limits: this does **not** encrypt an existing iCloud Photos *library* — iCloud Photos
 only syncs real images, so encrypted blobs can't live there. Export photos out of Photos,
 protect them into iCloud Drive, and delete the originals yourself. Anything already uploaded
-stays uploaded. And there is **no recovery**: lose the passphrase and the photos are gone, to
-you and to Ember alike. That is the property that makes the guarantee real.
+stays uploaded. Removing a recipient stops them receiving *new* files; it cannot un-see what
+they could already decrypt, and `adp_remove_recipient` says so in its own result. And there is
+**no recovery**: lose the passphrase *and* every enrolled device and the data is gone, to you
+and to Ember alike. That is the property that makes the guarantee real.
 
 ## Known residual risks (honest list)
 
