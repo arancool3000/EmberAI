@@ -375,6 +375,16 @@ def classify(tool_name: str, args: dict) -> tuple[str, str]:
     if tool_name == "vault_delete_key":
         return "medium", "deletes a stored secret from the key vault"
 
+    # --- Advanced Data Protection for photos -------------------------------------
+    if tool_name == "adp_reset":
+        return "high", "forgets the photo passphrase (protected photos become unreadable)"
+    if tool_name in {"adp_protect_photo", "adp_protect_folder"}:
+        if str(a.get("delete_original", a.get("delete_originals", "false"))).lower() == "true":
+            return "high", "encrypts photos and shreds the unencrypted originals"
+        return "medium", "encrypts photos before they sync to the cloud"
+    if tool_name in {"adp_setup", "adp_unprotect_photo", "adp_unprotect_folder"}:
+        return "medium", "changes photo protection / writes decrypted photos to disk"
+
     # Self-extension: the AI writing/editing code Ember will run. HIGH so the user sees the code
     # and approves at authoring time (the authored tool then runs automatically thereafter).
     if tool_name in {"create_python_tool", "self_edit_source", "build_app"}:

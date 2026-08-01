@@ -69,6 +69,29 @@ on `/api/pull`, and the `llama-cpp-python` Jinja SSTI) are not reachable through
 output is parsed as JSON for tool calls — it is never `eval`'d, shelled, or used as a filesystem
 path. Keep your local Ollama bound to loopback (its default) and don't expose it.
 
+## Advanced Data Protection for photos (`photo_protect.py`)
+
+iCloud Photos is encrypted in transit and at rest, but by default **Apple holds the keys** —
+it is not end-to-end encrypted unless the user turns on Apple's own Advanced Data Protection
+(iOS 16.2+). Ember adds a provider-independent layer *underneath* that: photos are encrypted
+on your own machine, with a passphrase only you know, before the file ever lands in a synced
+folder. What reaches Apple (or Dropbox/OneDrive/Google Drive) is an opaque blob.
+
+- PBKDF2-HMAC-SHA256, 600,000 iterations, a fresh 16-byte salt per file, deriving a Fernet key
+  (AES-128-CBC + HMAC-SHA256). Files are `EMBERADP1 | salt | token` and end in `.ember`.
+- The passphrase lives in `key_vault` (OS keychain where available) and is never uploaded,
+  never written into an encrypted file, and never returned by any tool.
+- Encryption writes to a `.part` sibling and `os.replace`s it, so an interrupted run can't
+  leave a truncated "protected" file whose original you then delete.
+- Shredding the unencrypted originals is opt-in (`delete_original(s)`), reuses the existing
+  file shredder, and is classified **high** risk so it always prompts.
+
+Honest limits: this does **not** encrypt an existing iCloud Photos *library* — iCloud Photos
+only syncs real images, so encrypted blobs can't live there. Export photos out of Photos,
+protect them into iCloud Drive, and delete the originals yourself. Anything already uploaded
+stays uploaded. And there is **no recovery**: lose the passphrase and the photos are gone, to
+you and to Ember alike. That is the property that makes the guarantee real.
+
 ## Known residual risks (honest list)
 
 - A holder of a valid pairing token can still drive input and chat remotely (by design — that's
