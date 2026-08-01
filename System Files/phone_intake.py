@@ -142,6 +142,71 @@ def receive(filename: str, data: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# One-step setup
+# ---------------------------------------------------------------------------
+#: Ambiguous characters removed — this gets written on paper and read back under stress.
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_CODE_GROUPS, _CODE_GROUP_LEN = 6, 4
+
+
+def generate_recovery_code() -> str:
+    """A high-entropy recovery code, grouped for transcription.
+
+    Deliberately NOT a memorable passphrase. Day to day the enrolled devices do the decrypting;
+    this is the disaster case, so it should be strong and written down rather than weak and
+    remembered. Six groups of four over a 31-character alphabet is ~119 bits.
+    """
+    import secrets
+    groups = ["".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_GROUP_LEN))
+              for _ in range(_CODE_GROUPS)]
+    return "-".join(groups)
+
+
+def quick_setup(public: bool = False) -> dict:
+    """Do the whole thing in one call: protection on, destination chosen, phone link ready.
+
+    Returns ``recovery_code`` ONLY when protection was created by this call — there is no way to
+    recover an existing one, and pretending otherwise would be worse than saying nothing.
+    """
+    try:
+        import remote_server
+        created = None
+        if not data_protect.is_set_up():
+            code = generate_recovery_code()
+            r = data_protect.adp_setup(code)
+            if not r.get("ok"):
+                return {"ok": False, "error": r.get("error", "could not turn on protection")}
+            created = code
+        # Default destination already prefers a real sync folder; persist it so what the user is
+        # shown is what later uploads actually use, even if the folder appears or moves later.
+        if not load_config().get("dest"):
+            set_dest(str(_default_dest()))
+        if not remote_server.status().get("running"):
+            r = remote_server.start()
+            if not r.get("ok"):
+                return {"ok": False, "error": r.get("error", "could not start Ember Link")}
+        if public and not remote_server.remote_url():
+            t = remote_server.enable_remote()
+            if not t.get("ok"):
+                return {"ok": False, "error": f"could not open a public tunnel: "
+                                              f"{t.get('error', 'unknown')}"}
+        link = remote_server.magic_link(go="photos", public=public)
+        if not link:
+            return {"ok": False, "error": "no reachable URL for Ember Link"}
+        return {"ok": True, "link": link, "recovery_code": created,
+                "already_configured": created is None, "dest": str(dest_dir()),
+                "reachable": "anywhere" if public else "home Wi-Fi only",
+                "advice": advice()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def adp_quick_setup(public: bool = False) -> dict:
+    """Turn on photo protection and produce a one-tap phone link, in a single step."""
+    return quick_setup(public)
+
+
+# ---------------------------------------------------------------------------
 # Setup guidance
 # ---------------------------------------------------------------------------
 def advice() -> list[str]:
@@ -240,6 +305,15 @@ def adp_phone_setup(public: bool = False) -> dict:
 
 TOOL_DECLARATIONS = [
     {
+        "name": "adp_quick_setup",
+        "description": "Set up photo protection end to end in one step: turn on encryption, "
+                       "pick the iCloud Drive destination, start Ember Link, and return a "
+                       "one-tap link for the phone. Use this instead of the individual steps.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "public": {"type": "BOOLEAN", "description": "also work away from home Wi-Fi via a public tunnel (default false)"}},
+            "required": []},
+    },
+    {
         "name": "adp_phone_status",
         "description": "Report where photos sent from a phone are saved, whether Ember Link is "
                        "running, and what still needs doing on the phone.",
@@ -264,10 +338,11 @@ TOOL_DECLARATIONS = [
 ]
 
 TOOL_DISPATCH = {
+    "adp_quick_setup": adp_quick_setup,
     "adp_phone_status": adp_phone_status,
     "adp_phone_set_folder": adp_phone_set_folder,
     "adp_phone_setup": adp_phone_setup,
 }
 
 READONLY_TOOLS = {"adp_phone_status"}
-INTERACTION_TOOLS = {"adp_phone_set_folder", "adp_phone_setup"}
+INTERACTION_TOOLS = {"adp_phone_set_folder", "adp_phone_setup", "adp_quick_setup"}

@@ -2949,15 +2949,14 @@ class SettingsDialog(QDialog):
         v.addWidget(self._adp_region_lbl)
 
         row1 = QHBoxLayout()
-        self._adp_setup_btn = QPushButton("Turn on…")
+        self._adp_setup_btn = QPushButton("Protect my photos")
         self._adp_setup_btn.setObjectName("send")
-        self._adp_setup_btn.clicked.connect(self._adp_setup)
+        self._adp_setup_btn.setToolTip("Turns on encryption, picks the iCloud Drive folder, and "
+                                       "shows a code to scan with your phone — in one step.")
+        self._adp_setup_btn.clicked.connect(self._adp_quick_setup)
         row1.addWidget(self._adp_setup_btn)
-        b = QPushButton("This device's key…")
-        b.clicked.connect(self._adp_show_identity)
-        row1.addWidget(b)
-        b = QPushButton("Add a device…")
-        b.clicked.connect(self._adp_add_device)
+        b = QPushButton("Advanced…")
+        b.clicked.connect(self._adp_advanced)
         row1.addWidget(b)
         row1.addStretch()
         v.addLayout(row1)
@@ -2965,30 +2964,8 @@ class SettingsDialog(QDialog):
         self._adp_watch_lbl = QLabel()
         self._adp_watch_lbl.setWordWrap(True)
         self._adp_watch_lbl.setStyleSheet("color:#8f99ad; font-size:11px;")
+        self._adp_watch_lbl.setVisible(False)   # only shown once auto-protect is running
         v.addWidget(self._adp_watch_lbl)
-
-        row2 = QHBoxLayout()
-        b = QPushButton("Protect a folder…")
-        b.clicked.connect(self._adp_protect_folder)
-        row2.addWidget(b)
-        b = QPushButton("Unprotect a folder…")
-        b.clicked.connect(self._adp_unprotect_folder)
-        row2.addWidget(b)
-        b = QPushButton("Share existing files…")
-        b.clicked.connect(self._adp_grant_access)
-        row2.addWidget(b)
-        row2.addStretch()
-        v.addLayout(row2)
-
-        row3 = QHBoxLayout()
-        self._adp_watch_btn = QPushButton("Auto-protect a folder…")
-        self._adp_watch_btn.clicked.connect(self._adp_toggle_watch)
-        row3.addWidget(self._adp_watch_btn)
-        b = QPushButton("Send photos from my phone…")
-        b.clicked.connect(self._adp_phone_setup)
-        row3.addWidget(b)
-        row3.addStretch()
-        v.addLayout(row3)
 
         self._refresh_adp_status()
 
@@ -3010,12 +2987,13 @@ class SettingsDialog(QDialog):
             self._adp_status_lbl.setText(
                 f"On — files are encrypted on {this_device()} before they sync. "
                 f"Readable by your passphrase and {len(names)} device(s): {', '.join(names)}.")
-            self._adp_setup_btn.setText("Turn on…")
-            self._adp_setup_btn.setEnabled(False)
+            self._adp_setup_btn.setText("Set up another phone")
+            self._adp_setup_btn.setEnabled(True)
         else:
             self._adp_status_lbl.setText(
                 "Off — anything you put in iCloud is readable by Apple, and by anyone who "
                 "obtains it from them. Turning this on encrypts it here first.")
+            self._adp_setup_btn.setText("Protect my photos")
             self._adp_setup_btn.setEnabled(True)
         note = st.get("apple_adp_unavailable_here")
         self._adp_region_lbl.setText(note or "")
@@ -3031,6 +3009,9 @@ class SettingsDialog(QDialog):
         except Exception as e:
             self._adp_watch_lbl.setText(f"Auto-protect unavailable: {e}")
             return
+        # Only surfaced once it is actually running — an "auto-protect is off" line on a panel
+        # nobody asked about is noise, and noise is what made this screen hard to read.
+        btn = getattr(self, "_adp_watch_btn", None)
         if w.get("running"):
             dest = w.get("dest") or "alongside the originals"
             extra = " and shredding the originals" if w.get("delete_originals") else ""
@@ -3038,12 +3019,152 @@ class SettingsDialog(QDialog):
                 f"Auto-protect is watching {w.get('source')} → {dest}{extra}. "
                 f"{w.get('protected_count', 0)} encrypted so far"
                 + (f", {w['failed_count']} failed." if w.get("failed_count") else "."))
-            self._adp_watch_btn.setText("Stop auto-protect")
+            self._adp_watch_lbl.setVisible(True)
+            if btn is not None:
+                btn.setText("Stop auto-protect")
         else:
-            self._adp_watch_lbl.setText(
-                "Auto-protect is off. Point it at the folder your phone imports into and "
-                "everything that lands there is encrypted automatically.")
-            self._adp_watch_btn.setText("Auto-protect a folder…")
+            self._adp_watch_lbl.setVisible(False)
+            if btn is not None:
+                btn.setText("Auto-protect a folder…")
+
+    def _adp_quick_setup(self):
+        """One button: turn protection on, choose the destination, start Ember Link, and show a
+        QR the phone can scan. The old flow was three dialogs and a copy-paste before anything
+        was protected."""
+        import phone_intake
+        first_time = not __import__("data_protect").is_set_up()
+        if first_time and QMessageBox.question(
+                self, "Protect my photos",
+                "This will encrypt photos on " + this_device() + " before they reach iCloud, "
+                "and give you a code to scan with your phone.\n\n"
+                "You will get a recovery code. If you lose it AND every device you have set up, "
+                "the photos cannot be recovered by anyone — that is what makes the protection "
+                "real.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+            return
+        away = QMessageBox.question(
+            self, "Protect my photos",
+            "Should the phone be able to send photos when you are away from home Wi-Fi?\n\n"
+            "No keeps everything on your own network, which is the safer default.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        info = phone_intake.adp_quick_setup(public=away)
+        if not info.get("ok"):
+            QMessageBox.warning(self, "Protect my photos", info.get("error", "failed"))
+            return
+        self._refresh_adp_status()
+        self._adp_show_phone_link(info)
+
+    def _adp_show_phone_link(self, info):
+        """The single screen that finishes setup: scan this, save that."""
+        box = QDialog(self)
+        box.setWindowTitle("Protect my photos")
+        lay = QVBoxLayout(box)
+
+        step1 = QLabel("<b>1. On your iPhone:</b> turn off iCloud Photos "
+                       "(Settings ▸ your name ▸ iCloud ▸ Photos). While it is on, Apple already "
+                       "has the original before Ember sees it.")
+        step1.setWordWrap(True)
+        lay.addWidget(step1)
+
+        step2 = QLabel("<b>2. Scan this with the iPhone camera.</b> It opens straight to the "
+                       "Photos tab, already signed in.")
+        step2.setWordWrap(True)
+        lay.addWidget(step2)
+        shown_qr = False
+        try:
+            import quick_tools
+            png = Path(tempfile.gettempdir()) / "ember_adp_link.png"
+            if quick_tools.qr_make(info["link"], str(png)).get("ok"):
+                pic = QLabel()
+                pic.setPixmap(QPixmap(str(png)).scaled(
+                    240, 240, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+                pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lay.addWidget(pic)
+                shown_qr = True
+        except Exception:
+            pass
+        if not shown_qr:
+            # qrcode is a declared dependency, but never make the flow depend on it.
+            fallback = QLabel("Open this on the phone:")
+            lay.addWidget(fallback)
+            f = QLineEdit(info["link"])
+            f.setReadOnly(True)
+            f.setCursorPosition(0)
+            lay.addWidget(f)
+
+        code = info.get("recovery_code")
+        if code:
+            step3 = QLabel("<b>3. Save this recovery code somewhere safe.</b> It is shown once "
+                           "and cannot be recovered. You only need it if you lose every device.")
+            step3.setWordWrap(True)
+            lay.addWidget(step3)
+            codebox = QLineEdit(code)
+            codebox.setReadOnly(True)
+            codebox.setStyleSheet("font-family:monospace; font-size:16px;")
+            lay.addWidget(codebox)
+            saved = QCheckBox("I have saved this code")
+            lay.addWidget(saved)
+        else:
+            saved = None
+            lay.addWidget(QLabel("Protection was already on, so your existing recovery code "
+                                 "still applies."))
+
+        foot = QLabel(f"Protected photos are saved to {info['dest']}. "
+                      f"Reachable: {info['reachable']}. The link is a full Ember Link "
+                      "credential — treat it like a password, and use revoke_pairings if the "
+                      "phone is lost.")
+        foot.setWordWrap(True)
+        foot.setStyleSheet("color:#8f99ad; font-size:11px;")
+        lay.addWidget(foot)
+
+        row = QHBoxLayout()
+        copy = QPushButton("Copy recovery code" if code else "Copy link")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(code or info["link"]))
+        row.addWidget(copy)
+        done = QPushButton("Done")
+        done.setObjectName("send")
+        done.clicked.connect(box.accept)
+        row.addWidget(done)
+        lay.addLayout(row)
+        if saved is not None:
+            # Can't dismiss until the code is acknowledged: it is shown exactly once.
+            done.setEnabled(False)
+            saved.stateChanged.connect(lambda st: done.setEnabled(bool(st)))
+        box.exec()
+
+    def _adp_advanced(self):
+        """Everything the one-button flow doesn't need: devices, folders, sharing, the watcher."""
+        box = QDialog(self)
+        box.setWindowTitle("Advanced Data Protection")
+        lay = QVBoxLayout(box)
+        for label, handler, hint in (
+            ("Turn on with my own passphrase…", self._adp_setup,
+             "Instead of a generated recovery code."),
+            ("This device's key…", self._adp_show_identity,
+             "Share it so another computer can decrypt your files."),
+            ("Add a device…", self._adp_add_device,
+             "Enrol another computer or person by their key."),
+            ("Protect a folder…", self._adp_protect_folder, "One-off encryption of a folder."),
+            ("Unprotect a folder…", self._adp_unprotect_folder, "Decrypt files back."),
+            ("Share existing files…", self._adp_grant_access,
+             "Let a newly-added device read files protected earlier."),
+            ("Auto-protect a folder…", self._adp_toggle_watch,
+             "Continuously encrypt whatever lands in a folder."),
+            ("Phone setup and Shortcut…", self._adp_phone_setup,
+             "The iOS automation, and where uploads are saved."),
+        ):
+            b = QPushButton(label)
+            b.setToolTip(hint)
+            b.clicked.connect(handler)
+            lay.addWidget(b)
+        close = QPushButton("Close")
+        close.clicked.connect(box.accept)
+        lay.addWidget(close)
+        box.exec()
+        self._refresh_adp_status()
 
     def _adp_setup(self):
         """Take the passphrase twice, and make the no-recovery consequence explicit before
