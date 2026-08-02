@@ -90,3 +90,49 @@ def migrate_legacy_data(legacy_dirs=None) -> list[str]:
                 continue
     return copied
 
+
+
+#: Keys that `ui.save_settings` moves into the encrypted vault, leaving settings.json blanked.
+#: Kept here, beside the loader, so any module that reads settings from disk gets the real
+#: values without having to import the (PyQt-heavy) ui module.
+VAULT_KEYS = ("gemini_api_key", "gemini_api_key_secondary", "gemini_api_key_3",
+              "gemini_api_key_4", "anthropic_api_key", "openai_api_key",
+              "soundtools_api_key", "gmail_app_password", "email_smtp_password")
+
+
+def read_settings() -> dict:
+    """Settings as written to disk, with no vault hydration. Rarely what you want."""
+    import json
+    p = data_dir() / "settings.json"
+    try:
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def settings_with_keys() -> dict:
+    """Settings with API keys resolved — from the encrypted vault when it is enabled.
+
+    With the key vault on (the default), ``settings.json`` holds *blanked* API keys and the
+    real ones live in the vault. A module that reads settings.json directly therefore sees no
+    Gemini key and reports "Add a Gemini API key in Ember Settings" — while the agent, whose
+    settings dict was hydrated at load, is happily using that very key. That is exactly the
+    state a user experiences as "I have and don't have a Gemini key".
+
+    Falls back to the environment, so a headless or CI run can supply keys without a vault.
+    """
+    settings = read_settings()
+    if settings.get("use_key_vault", True):
+        try:
+            import key_vault
+            for k in VAULT_KEYS:
+                if not settings.get(k):
+                    v = key_vault.get_key(k)
+                    if v:
+                        settings[k] = v
+        except Exception:
+            pass
+    return settings

@@ -11,14 +11,15 @@ from pathlib import Path
 
 
 def _settings() -> dict:
-    import json
-    from app_data import data_dir
-    d = data_dir()
-    p = d / "settings.json"
-    try:
-        return json.loads(p.read_text("utf-8")) if p.exists() else {}
-    except Exception:
-        return {}
+    """Settings with API keys resolved from the encrypted vault.
+
+    This used to read settings.json directly. With the key vault on — which is the default —
+    that file holds BLANKED keys, so every tool in this module reported "Add a Gemini API key
+    in Ember Settings" while the agent was actively using that same key. See
+    app_data.settings_with_keys.
+    """
+    from app_data import settings_with_keys
+    return settings_with_keys()
 
 
 def _gemini_key() -> str:
