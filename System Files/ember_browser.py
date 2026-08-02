@@ -1756,7 +1756,12 @@ class EmberBrowser(QWidget):
                 return "Add a Gemini API key in Ember Settings (⚙) to use AI features."
             from google import genai
             c = genai.Client(api_key=key)
-            mdl = model if model and "claude" not in model.lower() else "gemini-3.1-flash-lite"
+            # "auto" is a UI sentinel, not a model id. It is truthy and contains no
+            # "claude", so the old conditional handed it straight to the API and Gemini
+            # answered: models/auto is not found for API version v1beta. models.resolve
+            # maps the sentinel — and any retired model id — onto a live model.
+            import models as _models
+            mdl = _models.resolve(model if model and "claude" not in model.lower() else "")
             return (getattr(c.models.generate_content(model=mdl, contents=prompt), "text", None)
                     or "(no response)").strip()
         except Exception as e:
