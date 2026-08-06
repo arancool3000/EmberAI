@@ -12,6 +12,12 @@ teleport-and-jab. This module moves the pointer the way a person does:
   * sub-pixel micro-jitter along the way and a small overshoot-and-correct on long
     moves, which is what real hands do.
 
+Ember drives the ONE real system cursor — the same one you use. There is no second
+Ember-owned pointer and no "detached" input channel that clicks without moving your mouse;
+that existed, read as a strange growth attached to the user's own cursor, and was removed.
+The only concession to sharing is :class:`TakeoverMonitor`: if the cursor stops being where
+Ember last put it, a human has grabbed it, and Ember stops rather than fighting for it.
+
 The path math (``humanized_path``) is pure and import-light so it can be unit
 tested without a display. ``move`` / ``click`` / ``drag`` drive pyautogui, importing
 it lazily and falling back to a plain ``moveTo`` if anything is unavailable, so this
@@ -32,18 +38,59 @@ _OPTS = {
     "curve": 1.0,       # how much the path bows (0 = straight)
     "jitter": 1.0,      # scale of along-the-way micro deviations
     "overshoot": True,  # slight overshoot + settle on longer moves
-    "show_pointer": True,  # show Ember's distinct click-through pointer overlay
-    # How Ember relates to your physical cursor: "detached" (its own input channel,
-    # your mouse is never moved), "restore" (borrow it and put it straight back), or
-    # "shared" (the historical behaviour — Ember drives the one real cursor).
-    "mode": "detached",
     "yield_to_human": True,   # abort a move the moment you grab the mouse yourself
 }
 
-_POINTER_HOOK = None
-_LAST_MODE = ""          # effective mode of the most recent action, for the UI/status
 _YIELDED = False         # the last action stopped because the user grabbed the mouse
 _TAKEOVER_SAMPLE_EVERY = 4   # check the real cursor every Nth path point, not every one
+
+#: How far the real cursor may drift from where Ember last put it before we conclude a human
+#: is driving. Small enough to notice a deliberate grab, large enough to ignore pointer noise.
+TAKEOVER_TOLERANCE = 24
+
+
+def detect_takeover(expected, actual, tolerance: int = TAKEOVER_TOLERANCE) -> bool:
+    """True when the real cursor has drifted far enough from Ember's last write that a
+    human must be driving it."""
+    return math.hypot(int(actual[0]) - int(expected[0]),
+                      int(actual[1]) - int(expected[1])) > max(1, int(tolerance))
+
+
+class TakeoverMonitor:
+    """Tracks whether the user grabbed the mouse while Ember was moving it.
+
+    Ember writes each intermediate point through :meth:`expect`; before the next write it
+    calls :meth:`check` with the cursor position it actually reads back. A single sample
+    outside tolerance is treated as noise; ``strikes`` consecutive ones mean the human is
+    driving and Ember should yield.
+    """
+
+    def __init__(self, tolerance: int = TAKEOVER_TOLERANCE, strikes: int = 2):
+        self.tolerance = max(1, int(tolerance))
+        self.strikes = max(1, int(strikes))
+        self._expected = None
+        self._misses = 0
+        self.taken_over = False
+
+    def expect(self, x: int, y: int) -> None:
+        self._expected = (int(x), int(y))
+
+    def check(self, actual) -> bool:
+        """Feed an observed cursor position. Returns True once a takeover is confirmed."""
+        if actual is None or self._expected is None or self.taken_over:
+            return self.taken_over
+        if detect_takeover(self._expected, (int(actual[0]), int(actual[1])), self.tolerance):
+            self._misses += 1
+            if self._misses >= self.strikes:
+                self.taken_over = True
+        else:
+            self._misses = 0     # a single stray sample is pointer noise, not a takeover
+        return self.taken_over
+
+    def reset(self) -> None:
+        self._expected = None
+        self._misses = 0
+        self.taken_over = False
 
 
 def yielded_to_human() -> bool:
@@ -55,108 +102,6 @@ def yielded_to_human() -> bool:
     """
     return _YIELDED
 
-
-def _detached():
-    """Import the detached-input layer lazily so headless/минimal installs still work."""
-    try:
-        import detached_input
-        return detached_input
-    except Exception:
-        return None
-
-
-def normalize_pointer_mode(mode) -> str:
-    """Coerce a stored settings value to a valid pointer mode (UI-facing helper)."""
-    di = _detached()
-    return di.normalize_mode(mode) if di is not None else "shared"
-
-
-def effective_mode() -> tuple[str, str]:
-    """Resolve the configured mode against this machine's real capabilities."""
-    di = _detached()
-    if di is None:
-        return "shared", "Detached input layer unavailable; sharing the real cursor."
-    return di.select_mode(_OPTS.get("mode"), di.capabilities(_position))
-
-
-def last_mode() -> str:
-    """Mode actually used by the most recent action (empty before the first action)."""
-    return _LAST_MODE
-
-
-def _position():
-    """Current real cursor position, or None when it can't be read."""
-    pg = _pg()
-    if pg is None:
-        return None
-    try:
-        p = pg.position()
-        return (int(p[0]), int(p[1]))
-    except Exception:
-        return None
-
-
-def _screen_bounds(pg):
-    """Virtual-desktop rect ``(left, top, right, bottom)`` spanning every monitor.
-
-    ``pyautogui.size()`` only describes the primary display, so clamping a path to it
-    dragged any target on a second monitor back onto the primary one — Ember would trace
-    its move along the screen edge and, on a monitor positioned left of or above the
-    primary (negative coordinates), miss the target entirely.
-    """
-    try:
-        import mss
-        with mss.mss() as sct:
-            mons = [(m["left"], m["top"], m["width"], m["height"])
-                    for m in sct.monitors[1:]]
-        di = _detached()
-        if mons and di is not None:
-            box = di.virtual_bounds(mons)
-            if box:
-                return box
-    except Exception:
-        pass
-    try:
-        w, h = pg.size()
-        return (0, 0, int(w), int(h))
-    except Exception:
-        return None
-
-
-def set_options(**kw) -> dict:
-    for k, v in kw.items():
-        if k in _OPTS:
-            _OPTS[k] = v
-    return dict(_OPTS)
-
-
-def get_options() -> dict:
-    return dict(_OPTS)
-
-
-def set_pointer_hook(callback) -> None:
-    """Register ``callback(x, y, action)`` for Ember's visual pointer.
-
-    The driver is intentionally UI-agnostic.  The Qt app supplies a thread-safe signal
-    callback; tests and headless runs can leave this unset.
-    """
-    global _POINTER_HOOK
-    _POINTER_HOOK = callback if callable(callback) else None
-
-
-def _notify_pointer(x, y, action="move") -> None:
-    if not _OPTS.get("show_pointer", True) or _POINTER_HOOK is None:
-        return
-    try:
-        _POINTER_HOOK(int(x), int(y), str(action))
-    except Exception:
-        # A cosmetic overlay must never be allowed to interrupt an automation action.
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Easing + Bézier
-# ---------------------------------------------------------------------------
 
 def _ease_in_out(t: float) -> float:
     """Smooth acceleration then deceleration (cubic smoothstep), clamped to [0,1]."""
@@ -286,35 +231,20 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
 
     Returns True if a humanized move ran, False if it fell back to / used a plain move.
 
-    ``real=True`` moves the physical system cursor even in detached mode. Use it when the
-    move IS the requested action; leave it False for the internal travel that precedes a
-    click, which detached mode is meant to skip.
+    ``real`` is accepted and ignored — Ember always drives the one real cursor now. It is
+    kept so existing callers that passed it keep working.
     """
-    global _LAST_MODE, _YIELDED
+    global _YIELDED
     _YIELDED = False
     x, y = int(x), int(y)
     pg = _pg()
     if pg is None:
         return False
-    if effective_mode()[0] == "detached" and not real:
-        # Nothing to physically move: Ember's pointer is its own. Park the overlay on the
-        # target so the user can still see where Ember is about to act, and leave the
-        # real cursor exactly where they left it.
-        #
-        # `real=True` overrides this. Detached mode exists to stop Ember *hijacking* the
-        # cursor while it works — it is not meant to swallow "move my mouse to the corner",
-        # which is a direct instruction about the physical pointer and has no other
-        # possible meaning. Without the override the tool returned ok, nothing moved, and
-        # the agent looped taking screenshots trying to work out why.
-        _LAST_MODE = "detached"
-        _notify_pointer(x, y, "park")
-        return True
     if not _OPTS["enabled"]:
         # Plain (non-humanized) move still honours the speed setting: faster speed = shorter
         # travel time. duration=0 when speed is very high so it snaps instantly.
         if duration is None:
             duration = max(0.0, 0.2 / max(0.1, _OPTS.get("speed", 1.0)))
-        _notify_pointer(x, y)
         pg.moveTo(x, y, duration=duration)
         return False
     try:
@@ -324,7 +254,6 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
     screen = _screen_bounds(pg)
     dist = math.hypot(x - start[0], y - start[1])
     if dist < 2:
-        _notify_pointer(x, y)
         try:
             pg.moveTo(x, y, duration=0, _pause=False)
         except TypeError:
@@ -334,10 +263,7 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
     total = duration if duration is not None else duration_for(dist)
     per = max(0.001, total / len(path))
     saved_pause = getattr(pg, "PAUSE", 0.0)
-    di = _detached()
-    watch = None
-    if di is not None and _OPTS.get("yield_to_human", True):
-        watch = di.TakeoverMonitor()
+    watch = TakeoverMonitor() if _OPTS.get("yield_to_human", True) else None
     try:
         pg.PAUSE = 0.0   # our own cadence; don't let the global 50ms pause stutter it
         for i, (px, py) in enumerate(path):
@@ -349,10 +275,8 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
             # takeover.
             if watch is not None and i % _TAKEOVER_SAMPLE_EVERY == 0:
                 if watch.check(_position()):
-                    _notify_pointer(px, py, "yield")
                     _YIELDED = True
                     return False
-            _notify_pointer(px, py)
             try:
                 pg.moveTo(px, py, duration=0, _pause=False)
             except TypeError:
@@ -364,10 +288,74 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
             time.sleep(per * (0.6 + 0.8 * math.sin(math.pi * t)))
         # Land EXACTLY on target — never leave the pointer a rounded/jittered pixel off.
         _snap(pg, x, y)
-        _notify_pointer(x, y)
     finally:
         pg.PAUSE = saved_pause
     return True
+
+
+def _position():
+    """Current real cursor position, or None when it can't be read."""
+    pg = _pg()
+    if pg is None:
+        return None
+    try:
+        p = pg.position()
+        return (int(p[0]), int(p[1]))
+    except Exception:
+        return None
+
+
+def virtual_bounds(monitors):
+    """Union of every monitor rect as ``(left, top, right, bottom)``, exclusive right/bottom.
+
+    Each monitor is ``(left, top, width, height)``. Secondary displays legitimately sit at
+    negative coordinates (a monitor placed left of or above the primary), which is why
+    Ember must not clamp to a bare ``(width, height)`` primary-screen box.
+    """
+    rects = [m for m in (monitors or []) if m and len(m) >= 4]
+    if not rects:
+        return None
+    left = min(int(m[0]) for m in rects)
+    top = min(int(m[1]) for m in rects)
+    right = max(int(m[0]) + int(m[2]) for m in rects)
+    bottom = max(int(m[1]) + int(m[3]) for m in rects)
+    return (left, top, right, bottom)
+
+
+def _screen_bounds(pg):
+    """Virtual-desktop rect ``(left, top, right, bottom)`` spanning every monitor.
+
+    ``pyautogui.size()`` only describes the primary display, so clamping a path to it
+    dragged any target on a second monitor back onto the primary one — Ember would trace
+    its move along the screen edge and, on a monitor positioned left of or above the
+    primary (negative coordinates), miss the target entirely.
+    """
+    try:
+        import mss
+        with mss.mss() as sct:
+            mons = [(m["left"], m["top"], m["width"], m["height"])
+                    for m in sct.monitors[1:]]
+        box = virtual_bounds(mons)
+        if box:
+            return box
+    except Exception:
+        pass
+    try:
+        w, h = pg.size()
+        return (0, 0, int(w), int(h))
+    except Exception:
+        return None
+
+
+def set_options(**kw) -> dict:
+    for k, v in kw.items():
+        if k in _OPTS:
+            _OPTS[k] = v
+    return dict(_OPTS)
+
+
+def get_options() -> dict:
+    return dict(_OPTS)
 
 
 def _snap(pg, x, y) -> None:
@@ -380,41 +368,11 @@ def _snap(pg, x, y) -> None:
 
 def click(x, y, button: str = "left", double: bool = False,
           move_first: bool = True) -> bool:
-    """Click at (x, y), disturbing the user's own pointer as little as the mode allows.
-
-    In ``detached`` mode the click is posted straight to the window under the point and
-    the real cursor is never touched; ``restore`` borrows the cursor and puts it back;
-    ``shared`` leaves it on target. A detached backend that can't reach the target window
-    degrades to ``restore`` rather than dropping the agent's action.
-    """
-    global _LAST_MODE
+    """Click at (x, y) using the real system cursor."""
     pg = _pg()
     if pg is None:
         return False
-    x, y = int(x), int(y)
-
-    mode, _reason = effective_mode()
-    di = _detached()
-
-    if mode == "detached" and di is not None:
-        _notify_pointer(x, y, "double-click" if double else "click")
-        try:
-            if di.backend_for().click(x, y, button=button, double=double):
-                _LAST_MODE = "detached"
-                return True
-        except Exception:
-            pass
-        # The backend couldn't address that window (a screensaver, an elevated app, a
-        # non-native canvas). Borrowing the cursor still respects the user's pointer.
-        mode = "restore" if di.capabilities(_position).get("restore") else "shared"
-
-    if mode == "restore" and di is not None:
-        _LAST_MODE = "restore"
-        with di.CursorGuard(_position, lambda px, py: _snap(pg, px, py)):
-            return _click_shared(pg, x, y, button, double, move_first)
-
-    _LAST_MODE = "shared"
-    return _click_shared(pg, x, y, button, double, move_first)
+    return _click_shared(pg, int(x), int(y), button, double, move_first)
 
 
 def _click_shared(pg, x, y, button: str, double: bool, move_first: bool) -> bool:
@@ -422,7 +380,6 @@ def _click_shared(pg, x, y, button: str, double: bool, move_first: bool) -> bool
     if move_first:
         move(x, y)
     _snap(pg, x, y)                              # guarantee exact position before pressing
-    _notify_pointer(x, y, "double-click" if double else "click")
     time.sleep(random.uniform(0.03, 0.09))      # tiny human pause before the press
     # Press with EXPLICIT coordinates so the click lands on the exact target regardless
     # of any humanized-travel rounding — accuracy first, realism second.
@@ -439,36 +396,15 @@ def _click_shared(pg, x, y, button: str, double: bool, move_first: bool) -> bool
 
 def drag(from_x, from_y, to_x, to_y, button: str = "left",
          duration: float | None = None) -> bool:
-    """Press, travel, release.
+    """Press, travel, release, using the real system cursor.
 
-    A drag has no faithful posted-event equivalent — the intermediate motion *is* the
-    gesture, and apps track it through the real pointer — so this always uses the system
-    cursor. Detached mode therefore borrows it and hands it straight back rather than
-    pretending the gesture happened somewhere else.
+    The intermediate motion *is* the gesture — apps track a drag through the real pointer —
+    so there is no meaningful way to do this without moving it.
     """
-    global _LAST_MODE
     pg = _pg()
     if pg is None:
         return False
-    from_x, from_y, to_x, to_y = int(from_x), int(from_y), int(to_x), int(to_y)
-    di = _detached()
-    mode, _reason = effective_mode()
-    if mode in ("detached", "restore") and di is not None:
-        _LAST_MODE = "restore"
-        with di.CursorGuard(_position, lambda px, py: _snap(pg, px, py)):
-            return _drag_shared(pg, from_x, from_y, to_x, to_y, button, duration)
-    _LAST_MODE = "shared"
-    return _drag_shared(pg, from_x, from_y, to_x, to_y, button, duration)
-
-
-def _drag_shared(pg, from_x, from_y, to_x, to_y, button: str,
-                 duration: float | None) -> bool:
-    saved_mode = _OPTS.get("mode")
-    _OPTS["mode"] = "shared"      # the inner move() must drive the real cursor
-    try:
-        return _drag_real(pg, from_x, from_y, to_x, to_y, button, duration)
-    finally:
-        _OPTS["mode"] = saved_mode
+    return _drag_real(pg, int(from_x), int(from_y), int(to_x), int(to_y), button, duration)
 
 
 def _drag_real(pg, from_x, from_y, to_x, to_y, button: str,
@@ -483,7 +419,6 @@ def _drag_real(pg, from_x, from_y, to_x, to_y, button: str,
             pg.mouseDown(button=button, _pause=False)
         except TypeError:
             pg.mouseDown(button=button)
-        _notify_pointer(from_x, from_y, "down")
         time.sleep(random.uniform(0.03, 0.08))
         # hold the button and trace a human path to the destination
         move(to_x, to_y, duration=duration)
@@ -493,7 +428,6 @@ def _drag_real(pg, from_x, from_y, to_x, to_y, button: str,
             pg.mouseUp(button=button, _pause=False)
         except TypeError:
             pg.mouseUp(button=button)
-        _notify_pointer(to_x, to_y, "up")
     finally:
         pg.PAUSE = saved_pause
     return True

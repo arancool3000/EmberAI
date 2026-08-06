@@ -58,28 +58,16 @@ Tell me whether those are the right moves and what else matters. Specifically:
 - Should the fire respond to state — brighter when Ember is working, embers when idle? If so,
   what should the transition look like, and is that a good idea or a gimmick?
 
-### 3. Two distinct pointers
+### 3. (Removed — do not design a cursor)
 
-Ember draws its **own** cursor as a click-through overlay, so the user can see what it is doing
-while their real mouse stays untouched. Right now the user says: *"my mouse is still attached to
-Ember's oversized oddly shaped mouse — 2 standalone mouses please, not attached mouses."*
+Ember used to draw its own click-through pointer alongside the user's. It read as an oversized
+growth attached to their real cursor rather than a second, separate one, and the whole feature
+has been deleted. Ember now drives the one system cursor like any other automation tool.
 
-The overlay is currently a 72x72 canvas containing an iridescent liquid-look arrow with a glow,
-a contact shadow and an inner sheen. It is too big and too elaborate, and it reads as a weird
-growth on the user's own cursor rather than a second, separate pointer.
-
-Design me **a second cursor that is unmistakably not the user's**:
-
-- It must read as *a cursor*, at roughly the size of a real one (a system arrow is ~24px on a
-  1x display). Give me a target canvas size and hotspot.
-- It must be identifiable **at a glance, in peripheral vision**, from the user's own arrow —
-  without being a joke or a distraction.
-- It has to work over any background: white documents, dark terminals, photographs.
-- Give me the geometry as a description I can build with `QPainterPath` — points, curves, fill,
-  stroke, and any shadow — not an image.
-- Say what it should do at the moment of a **click** (the current version morphs into a pointing
-  hand and fires an expanding ring), and whether that is right.
-- Say what it should do when Ember is *thinking* but not moving.
+**Do not propose a custom cursor, an overlay, or a pointer "marker".** If you think the user
+needs to see where the agent is acting, say so and suggest something that is not a second
+cursor — but the default answer is that the operating system already draws a perfectly good
+pointer and we should use it.
 
 ## Constraints, please respect them
 
@@ -97,10 +85,8 @@ Design me **a second cursor that is unmistakably not the user's**:
 1. **Palette table** — hex, role, contrast ratio vs background.
 2. **Flame spec** — gradient stops with heat positions, frame rate, decay/drift numbers, edge
    falloff, and the reduced-motion variant.
-3. **Pointer spec** — canvas size, hotspot, path geometry described point by point, fill and
-   stroke, click behaviour, thinking behaviour, reduced-motion variant.
-4. **What you would cut.** Tell me which of the current effects — iridescence, contact shadow,
-   inner sheen, impact ring — are earning their keep and which are noise. I would rather have
-   three things that look deliberate than eight that look busy.
+3. **What you would cut.** Tell me which of the current effects are earning their keep and
+   which are noise. I would rather have three things that look deliberate than eight that look
+   busy — the custom cursor has already gone for exactly that reason.
 
 Be opinionated. If a request of mine is wrong, say so and tell me what to do instead.

@@ -79,24 +79,30 @@ def test_more_steps_for_longer_moves():
 
 
 def test_options_roundtrip():
-    hm.set_options(speed=2.0, enabled=False, show_pointer=False)
+    hm.set_options(speed=2.0, enabled=False)
     o = hm.get_options()
-    assert o["speed"] == 2.0 and o["enabled"] is False and o["show_pointer"] is False
-    hm.set_options(speed=1.0, enabled=True, show_pointer=True)
+    assert o["speed"] == 2.0 and o["enabled"] is False
+    hm.set_options(speed=1.0, enabled=True)
 
 
-def test_pointer_hook_tracks_move_and_click():
-    fake = _FakePG()
-    seen = []
-    hm._pg = lambda: fake
-    hm.set_pointer_hook(lambda x, y, action: seen.append((x, y, action)))
-    try:
-        hm.move(320, 180, duration=0)
-        hm.click(640, 360)
-        assert (320, 180, "move") in seen
-        assert (640, 360, "click") in seen
-    finally:
-        import importlib; importlib.reload(hm)
+def test_there_is_only_the_users_own_cursor():
+    """Ember used to draw a second, click-through pointer of its own and offer
+    detached/restore/shared modes for keeping the real cursor still. All of it is gone: Ember
+    drives the one system cursor, like any other automation."""
+    for gone in ("set_pointer_hook", "normalize_pointer_mode", "effective_mode", "last_mode"):
+        assert not hasattr(hm, gone), f"{gone} should have been removed with the overlay"
+    assert "show_pointer" not in hm.get_options()
+    assert "mode" not in hm.get_options()
+
+
+def test_the_pointer_modules_are_gone():
+    import importlib
+    for name in ("ember_pointer", "detached_input"):
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            continue
+        raise AssertionError(f"{name} still exists")
 
 
 # --- driver accuracy (fake pyautogui, no display) ------------------------------
