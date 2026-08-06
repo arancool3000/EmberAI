@@ -694,6 +694,46 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silence console spam
         pass
 
+    # ── CORS ────────────────────────────────────────────────────────────────
+    # Ember Link is reached by a BROWSER APP on a different origin (KindleHub
+    # runs on kindlehub.pro; Ember runs on your LAN). Without these headers the
+    # browser blocks the response, and the only way a page could talk to Ember
+    # at all was fetch(..., {mode: "no-cors"}) — which can send a command but
+    # can never READ a reply. That makes pairing impossible from a web page,
+    # because /api/pair answers with the token in a body no-cors will not let
+    # the caller see.
+    #
+    # This is NOT a weakening of the auth model. Every /api/* route still
+    # demands the PIN or a valid pairing token, the PIN is still refused off
+    # the LAN, and remote shell is still refused over the tunnel. CORS governs
+    # who may READ a reply inside a browser; it has never been the thing that
+    # stops a request arriving — curl and any native app could always reach
+    # these routes.
+    def _cors(self):
+        try:
+            origin = self.headers.get("Origin") or "*"
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Max-Age", "600")
+        except Exception:
+            pass
+
+    def end_headers(self):
+        # One interception point rather than editing every send_response call
+        # site — and it cannot be forgotten by the next route somebody adds.
+        self._cors()
+        BaseHTTPRequestHandler.end_headers(self)
+
+    def do_OPTIONS(self):
+        # Preflight. A JSON POST is not a "simple request", so the browser asks
+        # permission first; with no handler that 501'd and every command from a
+        # web page failed before it was ever sent.
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _auth(self, pin, tok=None):
         """Authorise a request by the short PIN (LAN-only) OR a long pairing token (anywhere).
         The PIN is deliberately rejected for non-LAN-looking source addresses - see _is_lan_ip -
@@ -967,6 +1007,26 @@ def _apply_locked(o: dict, is_lan: bool = True):
         pyautogui.scroll(int(o.get("a", 0)) * 80)
     elif t == "key":
         tools.press_key(str(o.get("k", "")))
+    elif t == "media":
+        # Whatever is playing, in whatever app. These are the OS-level transport
+        # keys, so they work with Spotify, a browser tab, VLC or a local file
+        # without Ember needing to know which is in front. Named by INTENT
+        # ("next") rather than by key spelling, because the caller is a Kindle
+        # and should not have to know the key is called "nexttrack".
+        _MEDIA = {
+            "playpause": "playpause", "play": "playpause", "pause": "playpause",
+            "next": "nexttrack", "prev": "prevtrack", "previous": "prevtrack",
+            "stop": "stop",
+            "volup": "volumeup", "voldown": "volumedown", "mute": "volumemute",
+        }
+        _k = _MEDIA.get(str(o.get("action", "")).lower())
+        if not _k:
+            return {"ok": False, "detail": "unknown media action"}
+        try:
+            tools.press_key(_k)
+            return {"ok": True, "detail": _k}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)[:120]}
     elif t == "type":
         tools.type_text(str(o.get("text", "")))
     elif t == "macro":
