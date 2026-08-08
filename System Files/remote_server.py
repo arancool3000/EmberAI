@@ -202,6 +202,15 @@ def _capture(hd: bool = True, max_w: int | None = None, quality: int | None = No
     if img.width > max_w:
         ratio = max_w / img.width
         img = img.resize((max_w, int(img.height * ratio)), Image.BILINEAR)
+    # WARNING: mss.grab() DOES NOT CAPTURE THE MOUSE CURSOR. That is true of
+    # mss on every platform, and it is why the mirror has never shown a
+    # pointer: "i cannot see the mouse on the mirror ... unless i use the
+    # mouse i can't see". Tapping the mirror moved a cursor nobody could
+    # find, so aiming at a button was guesswork.
+    # The pointer is drawn onto the frame here from pyautogui's position,
+    # which is the SAME coordinate space the click mapping already uses, so
+    # what you see is exactly where a tap will land.
+    _draw_cursor(img, lw, lh)
     buf = io.BytesIO()
     img.save(
         buf,
@@ -212,6 +221,43 @@ def _capture(hd: bool = True, max_w: int | None = None, quality: int | None = No
         subsampling=1 if quality >= 78 else 2,
     )
     return buf.getvalue(), lw, lh
+
+
+# Classic arrow, drawn at the origin pointing down-right, in a 12x20 box.
+_CURSOR_POLY = [(0, 0), (0, 17), (4.2, 13.2), (7.1, 19.6), (10.2, 18.3), (7.4, 12.2), (12, 12)]
+
+
+def _draw_cursor(img, lw, lh):
+    # Paint the mouse pointer onto a captured frame.
+    #
+    # WARNING: drawn BLACK-INSIDE-WHITE rather than one flat colour. The
+    # mirror is looked at on an e-ink reader, where a white arrow vanishes on
+    # a light window and a black one vanishes on a dark one; an outlined
+    # arrow is legible on both. It is also scaled up, because the frame is
+    # downscaled to at most ~1680px for the wire and a true-size cursor would
+    # be a handful of pixels on a 6-inch screen.
+    # WARNING: this must never break the frame. A failure costs the pointer,
+    # not the mirror.
+    try:
+        from PIL import ImageDraw
+        import pyautogui as _pg
+        pos = _pg.position()
+        cx, cy = float(pos[0]), float(pos[1])
+        if not lw or not lh:
+            return
+        # logical point -> fraction of the screen -> pixel in THIS image, so
+        # the arrow stays correct whatever max_w resized the frame to.
+        px = (cx / float(lw)) * img.width
+        py = (cy / float(lh)) * img.height
+        if px < -40 or py < -40 or px > img.width + 40 or py > img.height + 40:
+            return
+        scale = max(1.6, img.width / 900.0)
+        pts = [(px + x * scale, py + y * scale) for (x, y) in _CURSOR_POLY]
+        d = ImageDraw.Draw(img)
+        d.line(pts + [pts[0]], fill=(255, 255, 255), width=max(3, int(scale * 2.2)))
+        d.polygon(pts, fill=(20, 20, 20))
+    except Exception:
+        return
 
 
 def _lan_ip() -> str:
@@ -419,7 +465,7 @@ body.fakefs #fsexit{display:block;position:fixed;z-index:70;left:8px;top:50%;tra
     <button id=dragBtn onclick="toggleDragLock()">Drag Lock</button>
     <button onclick="toggleFS()">Fullscreen Mirror</button>
   </div>
-  <div class=hint style="padding-bottom:10px">Tap the mirror to click. Drag directly on it to drag items, sliders, or selections.</div>
+  <div class=hint style="padding-bottom:10px">The arrow shows where the mouse is. Tap the mirror to click there, and drag on it to move items, sliders or selections.</div>
 
   <div class=lbl>Quick actions</div>
   <div class=grid3>
@@ -573,8 +619,34 @@ function imgRect(){
 function pxy(e){let b=imgRect();let rx=(e.clientX-b.left)/b.width,ry=(e.clientY-b.top)/b.height;let x,y;
  if(FAKEFS){x=ry;y=1-rx;}else{x=rx;y=ry;}   // landscape fake-fullscreen rotates the mirror 90° CW
  if(x<0||x>1||y<0||y>1)return null;return{x:Math.round(x*SW),y:Math.round(y*SH),cx:e.clientX,cy:e.clientY}}
+// A visible mark where you just tapped.
+// The mirror now draws the real pointer (see _draw_cursor), but that only
+// arrives with the NEXT frame - up to a few hundred ms away on a slow link,
+// and longer on the "Lite" speed. Until then a tap produced no feedback at
+// all, so on a screen with no cursor you could not tell whether it had
+// registered, which is half of "i cannot click on buttons on the mirror".
+// WARNING: a static mark that appears once and disappears once, NOT an
+// animated ripple. This is looked at on e-ink, where every frame of an
+// animation is a full panel repaint - the ripple would cost more flashes
+// than the mirror itself.
+let tapMark=null,tapTimer=0;
+function showTap(cx,cy){
+ try{
+  if(!tapMark){
+   tapMark=document.createElement("div");
+   tapMark.id="tapmark";
+   tapMark.style.cssText="position:fixed;width:30px;height:30px;margin:-15px 0 0 -15px;"+
+     "border:3px solid #fff;outline:2px solid #000;border-radius:50%;pointer-events:none;"+
+     "z-index:99999;display:none;box-sizing:border-box;";
+   document.body.appendChild(tapMark);
+  }
+  tapMark.style.left=cx+"px";tapMark.style.top=cy+"px";tapMark.style.display="block";
+  if(tapTimer)clearTimeout(tapTimer);
+  tapTimer=setTimeout(function(){if(tapMark)tapMark.style.display="none";tapTimer=0;},700);
+ }catch(e){}
+}
 let sd=null,screenDrag=false,lastDrag=0;
-hit.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefault();hit.setPointerCapture&&hit.setPointerCapture(e.pointerId);sd=p;screenDrag=dragLock;if(dragLock)post({t:"dragstart",x:p.x,y:p.y});});
+hit.addEventListener("pointerdown",e=>{let p=pxy(e);if(!p)return;e.preventDefault();showTap(e.clientX,e.clientY);hit.setPointerCapture&&hit.setPointerCapture(e.pointerId);sd=p;screenDrag=dragLock;if(dragLock)post({t:"dragstart",x:p.x,y:p.y});});
 hit.addEventListener("pointermove",e=>{if(!sd)return;let p=pxy(e);if(!p)return;e.preventDefault();let moved=Math.abs(p.cx-sd.cx)+Math.abs(p.cy-sd.cy);if(!screenDrag&&moved>9){screenDrag=true;post({t:"dragstart",x:sd.x,y:sd.y});document.getElementById("tag").textContent="dragging"}if(screenDrag&&performance.now()-lastDrag>16){post({t:"dragto",x:p.x,y:p.y});lastDrag=performance.now()}});
 function screenEnd(e){if(!sd)return;let p=pxy(e)||sd;e.preventDefault();if(screenDrag){post({t:"dragend",x:p.x,y:p.y});document.getElementById("tag").textContent="dropped"}else{post({t:"clickat",x:p.x,y:p.y});document.getElementById("tag").textContent="clicked"}sd=null;screenDrag=false;setTimeout(()=>document.getElementById("tag").textContent="live",450)}
 hit.addEventListener("pointerup",screenEnd);hit.addEventListener("pointercancel",screenEnd);
