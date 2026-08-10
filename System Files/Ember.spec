@@ -90,6 +90,9 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[
+        # NumPy stays excluded (it is ~40MB and nothing in Ember needs arrays), so any code
+        # that quietly depends on it must not be on a user-facing path. sounddevice's sd.rec()
+        # is exactly such a call — audio_backend uses RawInputStream instead for that reason.
         "tkinter", "matplotlib", "numpy", "pandas", "scipy",
         "notebook", "jupyter", "IPython",
         "PyQt6.Qt3DAnimation", "PyQt6.Qt3DCore", "PyQt6.Qt3DExtras", "PyQt6.Qt3DInput",

@@ -42,6 +42,7 @@ _OPTS = {
 }
 
 _YIELDED = False         # the last action stopped because the user grabbed the mouse
+_STALLED = False         # the last action stopped because our writes never reached the cursor
 _TAKEOVER_SAMPLE_EVERY = 4   # check the real cursor every Nth path point, not every one
 
 #: How far the real cursor may drift from where Ember last put it before we conclude a human
@@ -57,40 +58,101 @@ def detect_takeover(expected, actual, tolerance: int = TAKEOVER_TOLERANCE) -> bo
 
 
 class TakeoverMonitor:
-    """Tracks whether the user grabbed the mouse while Ember was moving it.
+    """Tells apart two very different reasons the cursor is not where Ember put it.
 
     Ember writes each intermediate point through :meth:`expect`; before the next write it
     calls :meth:`check` with the cursor position it actually reads back. A single sample
-    outside tolerance is treated as noise; ``strikes`` consecutive ones mean the human is
-    driving and Ember should yield.
+    outside tolerance is treated as noise; ``strikes`` consecutive ones are conclusive.
+
+    But "not where I put it" has two causes, and they need opposite responses:
+
+    * **taken_over** — the cursor is elsewhere AND still moving between samples. A human has
+      the mouse. Ember should stop rather than fight for it.
+    * **stalled** — the cursor is elsewhere and completely stationary. Ember's writes are not
+      landing at all; on macOS that is almost always a missing Accessibility permission.
+      Nobody is fighting Ember, so reporting "you took the mouse" is simply wrong, and it
+      sends the user looking for a problem with their hand instead of their settings.
+
+    The old version could not distinguish them: it compared only against the expected point,
+    so a cursor that never moved because Ember had no permission to move it looked exactly
+    like one being dragged away by a person.
     """
+
+    #: Movement below this between two samples counts as "stationary" — pointer jitter and
+    #: sub-pixel rounding should not read as a hand on the mouse.
+    STILL_EPSILON = 2
 
     def __init__(self, tolerance: int = TAKEOVER_TOLERANCE, strikes: int = 2):
         self.tolerance = max(1, int(tolerance))
         self.strikes = max(1, int(strikes))
         self._expected = None
+        self._last_actual = None
         self._misses = 0
+        self._stalls = 0
         self.taken_over = False
+        self.stalled = False
 
     def expect(self, x: int, y: int) -> None:
         self._expected = (int(x), int(y))
 
     def check(self, actual) -> bool:
-        """Feed an observed cursor position. Returns True once a takeover is confirmed."""
-        if actual is None or self._expected is None or self.taken_over:
+        """Feed an observed cursor position. Returns True once a *takeover* is confirmed.
+
+        Sets :attr:`stalled` instead when the cursor is off-target but not moving.
+        """
+        if actual is None or self._expected is None or self.taken_over or self.stalled:
             return self.taken_over
-        if detect_takeover(self._expected, (int(actual[0]), int(actual[1])), self.tolerance):
+        actual = (int(actual[0]), int(actual[1]))
+        off_target = detect_takeover(self._expected, actual, self.tolerance)
+        moving = (self._last_actual is not None
+                  and detect_takeover(self._last_actual, actual, self.STILL_EPSILON))
+        first_sample = self._last_actual is None
+        self._last_actual = actual
+        if not off_target:
+            self._misses = 0     # a single stray sample is pointer noise, not a takeover
+            self._stalls = 0
+            return False
+        if moving or first_sample:
+            # Off-target and travelling: a hand is on the mouse.
             self._misses += 1
             if self._misses >= self.strikes:
                 self.taken_over = True
         else:
-            self._misses = 0     # a single stray sample is pointer noise, not a takeover
+            # Off-target and frozen: our own writes are going nowhere.
+            self._stalls += 1
+            if self._stalls >= self.strikes:
+                self.stalled = True
         return self.taken_over
 
     def reset(self) -> None:
         self._expected = None
+        self._last_actual = None
         self._misses = 0
+        self._stalls = 0
         self.taken_over = False
+        self.stalled = False
+
+
+def input_stalled() -> bool:
+    """True when the last action failed because the cursor never moved.
+
+    Distinct from :func:`yielded_to_human`: nobody took the mouse, Ember simply could not
+    drive it. On macOS that means Ember is missing Accessibility permission.
+    """
+    return _STALLED
+
+
+def stall_hint() -> str:
+    """What to tell the user when the cursor would not move."""
+    import sys
+    if sys.platform == "darwin":
+        return ("Ember could not move the cursor. Grant Accessibility in System Settings ▸ "
+                "Privacy & Security ▸ Accessibility, then restart Ember.")
+    if sys.platform.startswith("win"):
+        return ("Ember could not move the cursor. If the target app runs as administrator, "
+                "Ember has to as well.")
+    return ("Ember could not move the cursor. On Wayland, input injection is blocked — an X11 "
+            "session is required.")
 
 
 def yielded_to_human() -> bool:
@@ -234,8 +296,8 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
     ``real`` is accepted and ignored — Ember always drives the one real cursor now. It is
     kept so existing callers that passed it keep working.
     """
-    global _YIELDED
-    _YIELDED = False
+    global _YIELDED, _STALLED
+    _YIELDED = _STALLED = False
     x, y = int(x), int(y)
     pg = _pg()
     if pg is None:
@@ -276,6 +338,11 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
             if watch is not None and i % _TAKEOVER_SAMPLE_EVERY == 0:
                 if watch.check(_position()):
                     _YIELDED = True
+                    return False
+                if watch.stalled:
+                    # Not a tug-of-war — the cursor is simply not responding to us. Fall
+                    # through as a plain failure so the caller can say what is actually wrong.
+                    _STALLED = True
                     return False
             try:
                 pg.moveTo(px, py, duration=0, _pause=False)

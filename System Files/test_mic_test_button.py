@@ -172,3 +172,74 @@ def test_install_hint_leads_with_sounddevice():
     hint = audio_backend.install_hint()
     assert "sounddevice" in hint
     assert hint.index("sounddevice") < (hint.index("pyaudio") if "pyaudio" in hint else 10**6)
+
+
+# --- recording inside the packaged app ---------------------------------------------
+def test_recording_does_not_need_numpy(monkeypatch):
+    """Ember.app excludes NumPy to keep the bundle small. sd.rec() returns a NumPy array, so
+    using it made recording fail inside the bundle while the mic itself opened fine — the user
+    saw "no working microphone backend" for a microphone that plainly worked."""
+    src = Path(__file__).resolve().parent / "audio_backend.py"
+    body = src.read_text(encoding="utf-8").split("def _record_sounddevice", 1)[1] \
+              .split("\ndef ", 1)[0]
+    # Drop the docstring before matching: it explains why sd.rec() was removed, and a bare
+    # substring check would flag that explanation as the offence.
+    code = body.split('"""', 2)[-1]
+    assert "sd.rec(" not in code, "sd.rec needs NumPy, which the bundle excludes"
+    assert "RawInputStream" in code
+
+
+def test_numpy_is_still_excluded_from_the_bundle():
+    """Guards the premise: if NumPy were bundled, the constraint above would be theatre — and
+    if someone re-adds sd.rec() later, the pairing of these two tests explains why not."""
+    spec = (Path(__file__).resolve().parent / "Ember.spec").read_text(encoding="utf-8")
+    excludes = spec.split("excludes=[", 1)[1].split("]", 1)[0]
+    assert '"numpy"' in excludes
+
+
+def test_record_wav_uses_a_raw_stream(monkeypatch, tmp_path):
+    """Drive the real recorder against a stub sounddevice with no NumPy in sight."""
+    import sys
+    import types
+    import wave
+
+    class _Raw:
+        def __init__(self, **kw):
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+        def read(self, n):
+            return (b"\x01\x02" * n, False)
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.RawInputStream = _Raw
+    fake_sd.rec = lambda *a, **k: pytest.fail("sd.rec needs NumPy; must not be used")
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    out = tmp_path / "rec.wav"
+    audio_backend.record_wav(1, str(out), rate=8000, channels=1)
+    with wave.open(str(out), "rb") as wf:
+        assert wf.getframerate() == 8000
+        assert wf.getnframes() == 8000          # a full second, not a truncated buffer
+
+
+def test_the_frozen_build_does_not_tell_you_to_pip_install(monkeypatch):
+    """sys.executable inside the app is the Ember binary. "Ember -m pip install sounddevice"
+    is advice that can never work."""
+    monkeypatch.setattr(audio_backend.sys, "frozen", True, raising=False)
+    hint = audio_backend.install_hint()
+    assert "pip install" not in hint
+    assert "packaging fault" in hint
+
+
+def test_the_source_build_still_gives_a_pip_command(monkeypatch):
+    monkeypatch.delattr(audio_backend.sys, "frozen", raising=False)
+    assert "pip install" in audio_backend.install_hint()

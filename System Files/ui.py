@@ -11730,11 +11730,25 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         dlg.exec()
 
     def _on_stop(self):
+        """Stop everything the user can see or hear, not just the agent turn.
+
+        Stop used to leave Ember talking: it cancelled the turn but never touched TTS, and an
+        orb conversation carried on listening for the next one. In voice mode that made it
+        impossible to interrupt — the mic is deliberately closed while Ember speaks, so there
+        was no voice route either, and the one button that should have worked did not.
+        """
+        try:
+            import voice
+            voice.stop_speaking()
+        except Exception:
+            pass
+        if getattr(self, "_orb_conversation", False) or getattr(self, "_orb_active", False):
+            self._end_orb_conversation()
         if self._voice_chat_enabled:
             self._stop_voice_chat("Voice chat stopped")
         if self.agent:
             self.agent.stop()
-            self._set_status("Stopping...")
+        self._set_status("Stopped")
 
     def _reset_chat(self):
         if self.agent:
