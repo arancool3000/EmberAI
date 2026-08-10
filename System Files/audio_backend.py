@@ -139,7 +139,17 @@ def open_with_fallback(factories: Sequence, *, verify: Optional[Callable] = None
 
 
 def install_hint() -> str:
-    """What to tell the user when no backend works."""
+    """What to tell the user when no backend works.
+
+    Inside the packaged app there is nothing the user can pip install — ``sys.executable`` is
+    the Ember binary, not a Python they can add packages to. Telling them to run
+    ``"/Applications/Ember.app/Contents/MacOS/Ember" -m pip install sounddevice`` is advice
+    that cannot possibly work, so the frozen build says what is actually true instead.
+    """
+    if getattr(sys, "frozen", False):
+        return ("No microphone backend is available inside this build of Ember. That is a "
+                "packaging fault, not something you can install — please report it. Running "
+                "Ember from source (System Files/Ember.command) works in the meantime.")
     py = sys.executable or "python3"
     base = (f'No working microphone backend. Install the recommended one:\n'
             f'  "{py}" -m pip install sounddevice')
@@ -186,11 +196,36 @@ def record_wav(seconds: int, path: str, *, rate: int = 44100, channels: int = 1,
 
 
 def _record_sounddevice(seconds: int, rate: int, channels: int) -> bytes:
+    """Record via sounddevice WITHOUT NumPy.
+
+    ``sd.rec()`` is the obvious call, and it returns a NumPy array — so it needs NumPy. The
+    packaged Ember.app deliberately excludes NumPy (see Ember.spec), which meant recording
+    failed inside the bundle while the microphone itself opened perfectly well through
+    ``audio_level``'s RawInputStream. The user got "no working microphone backend" for a mic
+    that plainly worked, and was told to pip install into an .app bundle.
+
+    ``RawInputStream`` yields raw frames and has no NumPy dependency, so it works in the
+    bundle and outside it alike.
+    """
+    frames = bytearray()
+    want = int(seconds * rate) * channels * 2      # int16 => 2 bytes per sample
     with quiet_stderr():
         import sounddevice as sd
-        buf = sd.rec(int(seconds * rate), samplerate=rate, channels=channels, dtype="int16")
-        sd.wait()
-    return bytes(buf)
+        stream = sd.RawInputStream(samplerate=rate, channels=channels, dtype="int16",
+                                   blocksize=1024)
+        stream.start()
+        try:
+            while len(frames) < want:
+                data, _overflowed = stream.read(1024)
+                if not data:
+                    break
+                frames.extend(bytes(data))
+        finally:
+            try:
+                stream.stop()
+            finally:
+                stream.close()
+    return bytes(frames[:want])
 
 
 def _record_pyaudio(seconds: int, rate: int, channels: int, chunk: int):

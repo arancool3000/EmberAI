@@ -271,6 +271,10 @@ def click(x, y, button="left", double=False):
                 return {"ok": False, "yielded": True,
                         "error": "You took the mouse, so Ember stopped instead of "
                                  "fighting for it. Ask again when you're done."}
+            if human_mouse.input_stalled():
+                # The cursor never moved. Nobody is fighting Ember — it has no permission
+                # to drive the pointer, which is a completely different fix.
+                return {"ok": False, "error": human_mouse.stall_hint()}
         except Exception:
             pass
         pyautogui.moveTo(int(x), int(y), duration=0.08)
@@ -290,6 +294,8 @@ def move_mouse(x, y, duration=0.2):
                 return {"ok": False, "yielded": True, "x": x, "y": y,
                         "error": "You took the mouse, so Ember stopped instead of "
                                  "fighting for it. Ask again when you're done."}
+            if human_mouse.input_stalled():
+                return {"ok": False, "x": x, "y": y, "error": human_mouse.stall_hint()}
         except Exception:
             pass
         pyautogui.moveTo(x, y, duration=duration)
