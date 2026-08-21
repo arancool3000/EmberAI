@@ -1515,8 +1515,10 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: dict, parent=None, automation_engine=None, only_tab=None):
         super().__init__(parent)
+        self.setObjectName("settingsDialog")
         self.setWindowTitle("Ember Settings")
-        self.setMinimumSize(820, 560)
+        self.setMinimumSize(900, 620)
+        self.resize(1040, 720)
         self.settings = dict(settings)
         self.automation_engine = automation_engine
         # When only_tab is set, this dialog is presented as a single feature's OWN window
@@ -1524,24 +1526,49 @@ class SettingsDialog(QDialog):
         # get_settings() save path is unchanged — we just don't show the others.
         self._only_tab = only_tab
         self._mcp_setup_done.connect(self._on_mcp_setup_done)
-        self._install_ember_hearth()
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(18, 18, 18, 14)
+        outer.setSpacing(12)
         self._settings_header = _dialog_header(
             "Settings", "Configure Ember's models, behavior, privacy, and integrations.",
             eyebrow="EMBER", mark="⚙")
         outer.addWidget(self._settings_header)
+
+        settings_shell = QFrame()
+        settings_shell.setObjectName("settingsShell")
+        shell_layout = QHBoxLayout(settings_shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+
+        self._settings_nav_panel = QFrame()
+        self._settings_nav_panel.setObjectName("settingsNavPanel")
+        self._settings_nav_panel.setFixedWidth(202)
+        nav_layout = QVBoxLayout(self._settings_nav_panel)
+        nav_layout.setContentsMargins(12, 15, 12, 12)
+        nav_layout.setSpacing(8)
+        nav_kicker = QLabel("PREFERENCES")
+        nav_kicker.setObjectName("settingsNavKicker")
+        nav_layout.addWidget(nav_kicker)
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settingsNav")
+        self.settings_nav.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_nav.currentRowChanged.connect(self._on_settings_nav_changed)
+        nav_layout.addWidget(self.settings_nav, 1)
+        nav_note = QLabel("Changes stay on this device unless a setting says otherwise.")
+        nav_note.setObjectName("settingsNavNote")
+        nav_note.setWordWrap(True)
+        nav_layout.addWidget(nav_note)
+        shell_layout.addWidget(self._settings_nav_panel)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("settingsTabs")
-        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setDocumentMode(True)
-        self.tabs.setUsesScrollButtons(False)
-        tab_bar = self.tabs.tabBar()
-        tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
-        tab_bar.setExpanding(True)
-        outer.addWidget(self.tabs)
+        self.tabs.tabBar().hide()
+        self.tabs.currentChanged.connect(self._sync_settings_nav_selection)
+        shell_layout.addWidget(self.tabs, 1)
+        outer.addWidget(settings_shell, 1)
 
         # Build each tab defensively: if one builder raises, the dialog still opens with the rest
         # (and we record which failed) instead of an exception bubbling up to the slot — which on
@@ -1571,12 +1598,20 @@ class SettingsDialog(QDialog):
             lbl.setWordWrap(True)
             ev.addWidget(lbl)
             ev.addStretch()
-            self.tabs.addTab(err_page, "⚠ Issues")
+            self._add_tab(err_page, "Issues")
+
+        self._rebuild_settings_nav()
 
         if self._only_tab:
             self._scope_to_tab(self._only_tab)
 
+        footer = QFrame()
+        footer.setObjectName("settingsFooter")
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(12, 8, 10, 8)
+        footer_note = QLabel("Settings apply when you save.")
+        footer_note.setObjectName("settingsFooterNote")
+        btn_row.addWidget(footer_note)
         btn_row.addStretch()
         save_btn = QPushButton("Save changes")
         save_btn.setObjectName("primaryBtn")
@@ -1586,7 +1621,8 @@ class SettingsDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(save_btn)
-        outer.addLayout(btn_row)
+        footer.setLayout(btn_row)
+        outer.addWidget(footer)
 
         _polish_dialog(self)
 
@@ -1614,9 +1650,38 @@ class SettingsDialog(QDialog):
 
     def _hint(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        lbl.setObjectName("settingsHint")
         lbl.setWordWrap(True)
         return lbl
+
+    def _on_settings_nav_changed(self, row: int) -> None:
+        if 0 <= row < self.tabs.count() and self.tabs.currentIndex() != row:
+            self.tabs.setCurrentIndex(row)
+
+    def _sync_settings_nav_selection(self, index: int) -> None:
+        if not hasattr(self, "settings_nav") or index < 0:
+            return
+        self.settings_nav.blockSignals(True)
+        self.settings_nav.setCurrentRow(index)
+        self.settings_nav.blockSignals(False)
+
+    def _rebuild_settings_nav(self) -> None:
+        """Mirror the hidden compatibility tab bar as a clean, readable navigation rail."""
+        icons = {
+            "Models": "✦", "Appearance": "◐", "Voice": "◉", "Performance": "↗",
+            "Automations": "⌁", "Memory": "▱", "Security": "◇", "About": "i",
+            "Issues": "!",
+        }
+        self.settings_nav.blockSignals(True)
+        self.settings_nav.clear()
+        for index in range(self.tabs.count()):
+            title = self.tabs.tabText(index)
+            item = QListWidgetItem(f"{icons.get(title, '·')}   {title}")
+            item.setData(Qt.ItemDataRole.UserRole, title)
+            item.setToolTip(f"Open {title} settings")
+            self.settings_nav.addItem(item)
+        self.settings_nav.setCurrentRow(max(0, self.tabs.currentIndex()))
+        self.settings_nav.blockSignals(False)
 
     def _set_status(self, text: str) -> None:
         """Forward a status message to the main window (best-effort). The settings dialog has no
@@ -1654,6 +1719,7 @@ class SettingsDialog(QDialog):
             self.tabs.tabBar().hide()
         except Exception:
             pass
+        self._settings_nav_panel.hide()
         self.setWindowTitle(f"Ember — {title}")
         try:
             self._settings_header.heading_label.setText(title)
@@ -1661,19 +1727,49 @@ class SettingsDialog(QDialog):
                 f"Focused {title.lower()} controls. Changes apply when you save.")
         except Exception:
             pass
-        self.setMinimumSize(660, 520)
+        self.setMinimumSize(720, 560)
 
     def _add_tab(self, page, title: str, scroll: bool = True):
-        """Add a tab, optionally wrapped in a scroll area so tall content never clips
-        off the bottom of the dialog."""
+        """Put every settings section inside the same page header and spacing system."""
+        descriptions = {
+            "Models": "Choose Ember's brain and connect the accounts it may use.",
+            "Appearance": "Tune the interface without changing how Ember works.",
+            "Voice": "Control listening, speech, wake words, and push-to-talk.",
+            "Performance": "Manage startup, integrations, offline behavior, and responsiveness.",
+            "Automations": "Create local rules for repetitive background actions.",
+            "Memory": "Review and clear the facts Ember has intentionally remembered.",
+            "Security": "Set boundaries for computer control, files, network access, and auditing.",
+            "About": "Version, capabilities, diagnostics, and product information.",
+            "Issues": "One or more optional settings sections could not be loaded.",
+        }
+        shell = QWidget()
+        shell.setObjectName("settingsPage")
+        column = QVBoxLayout(shell)
+        column.setContentsMargins(24, 21, 24, 22)
+        column.setSpacing(13)
+        heading = QLabel(title)
+        heading.setObjectName("settingsPageTitle")
+        description = QLabel(descriptions.get(title, "Configure this part of Ember."))
+        description.setObjectName("settingsPageDescription")
+        description.setWordWrap(True)
+        column.addWidget(heading)
+        column.addWidget(description)
+        divider = QFrame()
+        divider.setObjectName("settingsDivider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        column.addWidget(divider)
+        page.setObjectName("settingsPageContent")
+        column.addWidget(page, 1)
         if scroll:
             area = QScrollArea()
+            area.setObjectName("settingsScroll")
             area.setWidgetResizable(True)
             area.setFrameShape(QFrame.Shape.NoFrame)
-            area.setWidget(page)
+            area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            area.setWidget(shell)
             self.tabs.addTab(area, title)
         else:
-            self.tabs.addTab(page, title)
+            self.tabs.addTab(shell, title)
 
     def _build_models_tab(self):
         page = QWidget()
@@ -1907,7 +2003,7 @@ class SettingsDialog(QDialog):
             "can see how it got there. Turn off to hide it.")
         layout.addRow(self.show_thinking_check)
 
-        self.glow_check = QCheckBox("Blue glow around the window")
+        self.glow_check = QCheckBox("Soft accent glow around the window")
         self.glow_check.setChecked(bool(self.settings.get("glow_enabled", True)))
         layout.addRow(self.glow_check)
 
@@ -1987,12 +2083,7 @@ class SettingsDialog(QDialog):
             lambda _i: self._apply_theme_preset(self.theme_preset_combo.currentData()))
         layout.addRow("Theme preset:", self.theme_preset_combo)
 
-        note = QLabel(
-            "Appearance changes apply when you save. Restart Ember via Ember.bat to fully refresh."
-        )
-        note.setStyleSheet("color: #8f99ad; font-size: 11px;")
-        note.setWordWrap(True)
-        layout.addRow(note)
+        layout.addRow(self._hint("Appearance updates immediately after you save."))
 
         self._add_tab(page, "Appearance")
 
@@ -2504,12 +2595,13 @@ class SettingsDialog(QDialog):
     def _build_automations_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
 
         head = QLabel(
-            "Background rules. When the trigger fires, Ember runs the action automatically - "
-            "no API calls needed. Edit automations.json next to the exe for advanced tweaks."
+            "Rules run locally when their trigger appears. They do not consume model calls."
         )
-        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        head.setObjectName("settingsHint")
         head.setWordWrap(True)
         v.addWidget(head)
 
@@ -2525,6 +2617,7 @@ class SettingsDialog(QDialog):
         v.addWidget(self.auto_confirm_check)
 
         self.auto_list = QListWidget()
+        self.auto_list.setObjectName("settingsRuleList")
         self._reload_automation_list()
         v.addWidget(self.auto_list, 1)
 
@@ -2534,13 +2627,14 @@ class SettingsDialog(QDialog):
         toggle_btn = QPushButton("Toggle on/off")
         toggle_btn.clicked.connect(self._toggle_automation)
         del_btn = QPushButton("Delete")
+        del_btn.setObjectName("dangerBtn")
         del_btn.clicked.connect(self._delete_automation)
         for b in (add_btn, toggle_btn, del_btn):
             row.addWidget(b)
         row.addStretch()
         v.addLayout(row)
 
-        self.tabs.addTab(page, "Automations")
+        self._add_tab(page, "Automations", scroll=False)
 
     def _reload_automation_list(self):
         if not hasattr(self, "auto_list"):
@@ -2615,12 +2709,15 @@ class SettingsDialog(QDialog):
     def _build_memory_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
-        head = QLabel("Facts Ember has remembered about your system / preferences.")
-        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        v.setContentsMargins(0, 0, 0, 0)
+        head = QLabel("Only explicit, useful preferences are stored here; chat transcripts are separate.")
+        head.setObjectName("settingsHint")
+        head.setWordWrap(True)
         v.addWidget(head)
         import memory
         facts = memory._load().get("facts", {})
         view = QPlainTextEdit()
+        view.setObjectName("memorySurface")
         view.setReadOnly(True)
         if facts:
             lines = []
@@ -2629,22 +2726,27 @@ class SettingsDialog(QDialog):
                 lines.append(f"{k} = {val}")
             view.setPlainText("\n".join(lines))
         else:
-            view.setPlainText("(no facts saved yet — Ember adds them as it works)")
+            view.setPlainText("No remembered facts yet.")
+        self.memory_view = view
         v.addWidget(view, 1)
         clear_btn = QPushButton("Forget all facts")
+        clear_btn.setObjectName("dangerBtn")
         clear_btn.clicked.connect(self._forget_all)
-        v.addWidget(clear_btn)
-        self.tabs.addTab(page, "Memory")
+        v.addWidget(clear_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self._add_tab(page, "Memory", scroll=False)
 
     def _forget_all(self):
         import memory
         n = memory.forget_all().get("forgot_count", 0)  # locked + atomic
         QMessageBox.information(self, "Cleared", f"Forgot {n} facts.")
-        self._build_memory_tab()  # rebuild tab; cheap
+        if hasattr(self, "memory_view"):
+            self.memory_view.setPlainText("No remembered facts yet.")
 
     def _build_about_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
         _hk = (self.settings.get("hotkey") or "ctrl+shift+space").title()
         _diag = "Windows diagnostics" if sys.platform.startswith("win") else "system diagnostics"
         try:
@@ -2652,37 +2754,59 @@ class SettingsDialog(QDialog):
             _ver = _v.__version__
         except Exception:
             _ver = "?"
-        text = QLabel(
-            f"<b>Ember</b> v{_ver} — AI agent for your computer.<br><br>"
-            "Capabilities: hands-free voice chat, vision + mouse/keyboard control, DOM-driven browser, file organization, "
-            f"{_diag}, background automations, voice in/out, persistent memory, "
-            "phone remote control, and Claude fallback for hard reasoning.<br><br>"
-            f"Hotkey: <b>{_hk}</b> summons from anywhere.<br>"
-            "Drop files into the chat to discuss them.<br>"
-            "Voice Chat runs continuous listen → act → speak turns."
-        )
-        text.setTextFormat(Qt.TextFormat.RichText)
-        text.setWordWrap(True)
-        v.addWidget(text)
+        identity = QFrame()
+        identity.setObjectName("aboutIdentity")
+        identity_row = QHBoxLayout(identity)
+        identity_row.setContentsMargins(18, 16, 18, 16)
+        identity_row.setSpacing(14)
+        identity_row.addWidget(StarMark(46))
+        identity_copy = QVBoxLayout()
+        identity_copy.setSpacing(2)
+        name = QLabel("Ember")
+        name.setObjectName("aboutName")
+        version_label = QLabel(f"Version {_ver}  ·  AI computer agent")
+        version_label.setObjectName("settingsHint")
+        identity_copy.addWidget(name)
+        identity_copy.addWidget(version_label)
+        identity_row.addLayout(identity_copy, 1)
+        v.addWidget(identity)
+
+        capability_grid = QGridLayout()
+        capability_grid.setHorizontalSpacing(10)
+        capability_grid.setVerticalSpacing(10)
+        for index, (title, detail) in enumerate((
+                ("Computer control", "Screen understanding, apps, mouse, keyboard, and browser"),
+                ("Create and organize", "Files, documents, scripts, research, and workflows"),
+                ("Always available", f"Summon Ember with {_hk} or use hands-free voice"),
+                ("Private by default", f"Local memory, {_diag}, and encrypted credentials"))):
+            card = QFrame()
+            card.setObjectName("aboutCapability")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(13, 11, 13, 11)
+            card_layout.setSpacing(3)
+            card_title = QLabel(title)
+            card_title.setObjectName("aboutCapabilityTitle")
+            card_detail = QLabel(detail)
+            card_detail.setObjectName("settingsHint")
+            card_detail.setWordWrap(True)
+            card_layout.addWidget(card_title)
+            card_layout.addWidget(card_detail)
+            capability_grid.addWidget(card, index // 2, index % 2)
+        v.addLayout(capability_grid)
         v.addStretch()
-        self.tabs.addTab(page, "About")
+        self._add_tab(page, "About", scroll=False)
 
     def _build_security_tab(self):
         """Security controls: malware protection, web protection, agent mode, VPN, and audit."""
-        from PyQt6.QtWidgets import QScrollArea
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(9)
         try:
             self._populate_security_tab(v)
         except Exception as e:
             v.addWidget(QLabel(f"Security panel unavailable: {e}"))
-        # The panel is taller than the dialog — wrap it so the lower sections (VPN, audit)
-        # are reachable by scrolling instead of being clipped off the bottom.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(page)
-        self.tabs.addTab(scroll, "Security")
+        self._add_tab(page, "Security")
 
     def _populate_security_tab(self, v):
         import antivirus, web_policy, safety, audit, vpn
@@ -2700,7 +2824,7 @@ class SettingsDialog(QDialog):
 
         def _section(text):
             lbl = QLabel(text)
-            lbl.setStyleSheet("color:#8f99ad; font-size:11px; margin-top:8px;")
+            lbl.setObjectName("settingsSectionLabel")
             v.addWidget(lbl)
 
         # --- Malware protection ---
@@ -3957,60 +4081,6 @@ class SettingsDialog(QDialog):
             save_settings(self.settings)   # this tab applies live + sticks immediately
         except Exception:
             pass
-
-    # --- animated hearth ---------------------------------------------------
-    # Settings sits behind a live ember bed rather than a flat panel. The fire is
-    # simulated, not a looping asset, so it never repeats and costs no download.
-
-    def _install_ember_hearth(self):
-        """Start the flame simulation that paints along the bottom of this dialog."""
-        try:
-            import ember_fx
-            # A low intensity: this is a bed of embers under the content, not a bonfire
-            # in front of it. Anything brighter competes with the controls.
-            # Grid resolution drives how sharp the flames read once upscaled. The old 140x74
-            # had to be blurred on the way up to hide its own lattice; this is dense enough to
-            # scale cleanly, and the simulation still costs well under a millisecond a frame.
-            self._hearth = ember_fx.FlameBackground(320, 180, intensity=0.85)
-            self._hearth_timer = QTimer(self)
-            # 20fps made the fire flicker rather than burn — real flames move slower than the
-            # simulation's per-step decay implies. 12fps reads as a settled hearth.
-            self._hearth_timer.setInterval(83)
-            self._hearth_timer.timeout.connect(self._tick_ember_hearth)
-            self._hearth_timer.start()
-        except Exception:
-            self._hearth = None
-
-    def _tick_ember_hearth(self):
-        hearth = getattr(self, "_hearth", None)
-        if hearth is None:
-            return
-        hearth.step()
-        # Only the strip the fire occupies needs repainting; invalidating the whole dialog
-        # every frame would make every control in it redraw 20 times a second.
-        h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
-        self.update(0, self.height() - h, self.width(), h)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        hearth = getattr(self, "_hearth", None)
-        if hearth is None:
-            return
-        try:
-            from PyQt6.QtCore import QRect
-            painter = QPainter(self)
-            painter.setOpacity(0.5)     # sits under the content, never fights it for attention
-            h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
-            hearth.paint(painter, QRect(0, self.height() - h, self.width(), h))
-            painter.end()
-        except Exception:
-            pass
-
-    def closeEvent(self, event):
-        timer = getattr(self, "_hearth_timer", None)
-        if timer is not None:
-            timer.stop()            # don't keep simulating fire for a closed dialog
-        super().closeEvent(event)
 
     def _refresh_mouse_mode_note(self):
         try:

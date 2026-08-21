@@ -89,6 +89,15 @@ def test_independent_pointer_is_visible_honest_and_configurable():
     assert "self._install_ember_pointer()\n        self._apply_mouse_options()" in window
 
 
+def test_settings_is_a_real_page_system_without_the_fire_backdrop():
+    settings = _class_source(UI, "SettingsDialog")
+    for required in ("settingsNavPanel", "settingsNav", "settingsPageTitle",
+                     "settingsPageDescription", "settingsFooter"):
+        assert required in settings, required
+    for forbidden in ("_install_ember_hearth", "FlameBackground", "_hearth_timer"):
+        assert forbidden not in settings, forbidden
+
+
 def test_browser_advanced_tools_live_in_an_overflow_menu():
     browser = _class_source(BROWSER, "EmberBrowser")
     assert "def _show_more_menu" in browser
