@@ -12,11 +12,11 @@ teleport-and-jab. This module moves the pointer the way a person does:
   * sub-pixel micro-jitter along the way and a small overshoot-and-correct on long
     moves, which is what real hands do.
 
-Ember drives the ONE real system cursor — the same one you use. There is no second
-Ember-owned pointer and no "detached" input channel that clicks without moving your mouse;
-that existed, read as a strange growth attached to the user's own cursor, and was removed.
-The only concession to sharing is :class:`TakeoverMonitor`: if the cursor stops being where
-Ember last put it, a human has grabbed it, and Ember stops rather than fighting for it.
+For ordinary clicks Ember prefers a detached input channel and draws a compact, click-through
+agent cursor of its own.  The user's physical pointer stays untouched.  Where the operating
+system cannot target a window independently, Ember borrows the real cursor and puts it back;
+an explicit ``move_mouse`` request still moves the real cursor because that is the requested
+effect.  :class:`TakeoverMonitor` prevents a shared/borrowed action from fighting the user.
 
 The path math (``humanized_path``) is pure and import-light so it can be unit
 tested without a display. ``move`` / ``click`` / ``drag`` drive pyautogui, importing
@@ -38,9 +38,14 @@ _OPTS = {
     "curve": 1.0,       # how much the path bows (0 = straight)
     "jitter": 1.0,      # scale of along-the-way micro deviations
     "overshoot": True,  # slight overshoot + settle on longer moves
+    "show_pointer": True,  # show Ember's compact independent pointer overlay
+    "mode": "detached",   # detached | restore | shared
     "yield_to_human": True,   # abort a move the moment you grab the mouse yourself
 }
 
+_POINTER_HOOK = None    # UI callback: (x, y, action), registered by EmberWindow
+_DETACHED_POS = None    # last synthetic pointer hotspot; never the physical cursor
+_LAST_MODE = ""        # effective mode of the most recent action
 _YIELDED = False         # the last action stopped because the user grabbed the mouse
 _STALLED = False         # the last action stopped because our writes never reached the cursor
 _TAKEOVER_SAMPLE_EVERY = 4   # check the real cursor every Nth path point, not every one
@@ -48,6 +53,50 @@ _TAKEOVER_SAMPLE_EVERY = 4   # check the real cursor every Nth path point, not e
 #: How far the real cursor may drift from where Ember last put it before we conclude a human
 #: is driving. Small enough to notice a deliberate grab, large enough to ignore pointer noise.
 TAKEOVER_TOLERANCE = 24
+
+
+def _detached():
+    """Load native detached input lazily so headless installs still import cleanly."""
+    try:
+        import detached_input
+        return detached_input
+    except Exception:
+        return None
+
+
+def normalize_pointer_mode(value) -> str:
+    layer = _detached()
+    return layer.normalize_mode(value) if layer is not None else "shared"
+
+
+def effective_mode() -> tuple[str, str]:
+    """Mode Ember can actually use here, with an honest user-facing explanation."""
+    layer = _detached()
+    if layer is None:
+        return "shared", "Shared cursor — the independent input layer is unavailable."
+    # Capability probing must stay import-safe: asking pyautogui for a cursor position can
+    # abort the process on a headless/offscreen Qt platform. The real action still validates
+    # that a cursor can be read before using the borrow-and-return fallback.
+    return layer.select_mode(_OPTS.get("mode"), layer.capabilities())
+
+
+def last_mode() -> str:
+    return _LAST_MODE
+
+
+def set_pointer_hook(callback) -> None:
+    """Register the UI's thread-safe agent-pointer callback."""
+    global _POINTER_HOOK
+    _POINTER_HOOK = callback if callable(callback) else None
+
+
+def _notify_pointer(x, y, action="move") -> None:
+    if not _OPTS.get("show_pointer", True) or _POINTER_HOOK is None:
+        return
+    try:
+        _POINTER_HOOK(int(x), int(y), str(action))
+    except Exception:
+        pass  # a cosmetic overlay must never break an input action
 
 
 def detect_takeover(expected, actual, tolerance: int = TAKEOVER_TOLERANCE) -> bool:
@@ -291,22 +340,47 @@ def _pg():
 def move(x, y, duration: float | None = None, real: bool = False) -> bool:
     """Move the pointer to (x, y) like a human.
 
-    Returns True if a humanized move ran, False if it fell back to / used a plain move.
-
-    ``real`` is accepted and ignored — Ember always drives the one real cursor now. It is
-    kept so existing callers that passed it keep working.
+    Internal travel in detached mode animates Ember's overlay but leaves the physical mouse
+    alone. ``real=True`` is reserved for an explicit request to move the system cursor.
     """
-    global _YIELDED, _STALLED
+    global _YIELDED, _STALLED, _DETACHED_POS, _LAST_MODE
     _YIELDED = _STALLED = False
     x, y = int(x), int(y)
+
+    if effective_mode()[0] == "detached" and not real:
+        # Give the independent pointer the same eased path as physical automation. Starting
+        # from the user's cursor on its first appearance makes its arrival legible without
+        # ever moving that cursor.
+        start = _DETACHED_POS or _position() or (x, y)
+        screen = _screen_bounds(_pg()) if _pg() is not None else None
+        distance = math.hypot(x - start[0], y - start[1])
+        if not _OPTS.get("enabled", True) or distance < 2:
+            _notify_pointer(x, y, "park")
+            _DETACHED_POS = (x, y)
+            _LAST_MODE = "detached"
+            return True
+        path = humanized_path(start, (x, y), screen=screen)
+        total = duration if duration is not None else duration_for(distance)
+        per = max(0.001, total / max(1, len(path)))
+        for index, (px, py) in enumerate(path):
+            _notify_pointer(px, py, "move")
+            t = (index + 1) / len(path)
+            time.sleep(per * (0.65 + 0.7 * math.sin(math.pi * t)))
+        _notify_pointer(x, y, "park")
+        _DETACHED_POS = (x, y)
+        _LAST_MODE = "detached"
+        return True
+
     pg = _pg()
     if pg is None:
         return False
+    _LAST_MODE = "shared" if real else effective_mode()[0]
     if not _OPTS["enabled"]:
         # Plain (non-humanized) move still honours the speed setting: faster speed = shorter
         # travel time. duration=0 when speed is very high so it snaps instantly.
         if duration is None:
             duration = max(0.0, 0.2 / max(0.1, _OPTS.get("speed", 1.0)))
+        _notify_pointer(x, y, "move")
         pg.moveTo(x, y, duration=duration)
         return False
     try:
@@ -316,6 +390,7 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
     screen = _screen_bounds(pg)
     dist = math.hypot(x - start[0], y - start[1])
     if dist < 2:
+        _notify_pointer(x, y, "move")
         try:
             pg.moveTo(x, y, duration=0, _pause=False)
         except TypeError:
@@ -337,6 +412,7 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
             # takeover.
             if watch is not None and i % _TAKEOVER_SAMPLE_EVERY == 0:
                 if watch.check(_position()):
+                    _notify_pointer(px, py, "yield")
                     _YIELDED = True
                     return False
                 if watch.stalled:
@@ -344,6 +420,7 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
                     # through as a plain failure so the caller can say what is actually wrong.
                     _STALLED = True
                     return False
+            _notify_pointer(px, py, "move")
             try:
                 pg.moveTo(px, py, duration=0, _pause=False)
             except TypeError:
@@ -355,6 +432,7 @@ def move(x, y, duration: float | None = None, real: bool = False) -> bool:
             time.sleep(per * (0.6 + 0.8 * math.sin(math.pi * t)))
         # Land EXACTLY on target — never leave the pointer a rounded/jittered pixel off.
         _snap(pg, x, y)
+        _notify_pointer(x, y, "move")
     finally:
         pg.PAUSE = saved_pause
     return True
@@ -417,7 +495,7 @@ def _screen_bounds(pg):
 def set_options(**kw) -> dict:
     for k, v in kw.items():
         if k in _OPTS:
-            _OPTS[k] = v
+            _OPTS[k] = normalize_pointer_mode(v) if k == "mode" else v
     return dict(_OPTS)
 
 
@@ -435,18 +513,49 @@ def _snap(pg, x, y) -> None:
 
 def click(x, y, button: str = "left", double: bool = False,
           move_first: bool = True) -> bool:
-    """Click at (x, y) using the real system cursor."""
+    """Click while disturbing the user's physical pointer as little as possible."""
+    global _LAST_MODE
+    x, y = int(x), int(y)
+    mode, _reason = effective_mode()
+    layer = _detached()
+
+    if mode == "detached" and layer is not None:
+        if move_first:
+            move(x, y)
+        _notify_pointer(x, y, "double-click" if double else "click")
+        try:
+            if layer.backend_for().click(x, y, button=button, double=double):
+                _LAST_MODE = "detached"
+                return True
+        except Exception:
+            pass
+        # Some secure/elevated/custom-rendered windows reject posted events. Falling back
+        # to borrow-and-return preserves correctness without pretending the click landed.
+        mode = "restore"
+
     pg = _pg()
     if pg is None:
         return False
-    return _click_shared(pg, int(x), int(y), button, double, move_first)
+    if mode == "restore" and layer is not None:
+        with layer.CursorGuard(_position, lambda px, py: _snap(pg, px, py)):
+            result = _click_shared(pg, x, y, button, double, move_first)
+        # The real move inside _click_shared marks itself shared; report the containing
+        # borrow-and-return transaction instead because that is what the user experienced.
+        _LAST_MODE = "restore"
+        return result
+
+    _LAST_MODE = "shared"
+    return _click_shared(pg, x, y, button, double, move_first)
 
 
 def _click_shared(pg, x, y, button: str, double: bool, move_first: bool) -> bool:
     """The real-cursor click: travel there, land exactly, then press."""
     if move_first:
-        move(x, y)
+        move(x, y, real=True)
+        if yielded_to_human() or input_stalled():
+            return False
     _snap(pg, x, y)                              # guarantee exact position before pressing
+    _notify_pointer(x, y, "double-click" if double else "click")
     time.sleep(random.uniform(0.03, 0.09))      # tiny human pause before the press
     # Press with EXPLICIT coordinates so the click lands on the exact target regardless
     # of any humanized-travel rounding — accuracy first, realism second.
@@ -463,20 +572,28 @@ def _click_shared(pg, x, y, button: str, double: bool, move_first: bool) -> bool
 
 def drag(from_x, from_y, to_x, to_y, button: str = "left",
          duration: float | None = None) -> bool:
-    """Press, travel, release, using the real system cursor.
-
-    The intermediate motion *is* the gesture — apps track a drag through the real pointer —
-    so there is no meaningful way to do this without moving it.
-    """
+    """Drag with the physical cursor, restoring it in detached/restore modes."""
+    global _LAST_MODE
     pg = _pg()
     if pg is None:
         return False
-    return _drag_real(pg, int(from_x), int(from_y), int(to_x), int(to_y), button, duration)
+    points = (int(from_x), int(from_y), int(to_x), int(to_y))
+    mode, _reason = effective_mode()
+    layer = _detached()
+    if mode in ("detached", "restore") and layer is not None:
+        with layer.CursorGuard(_position, lambda px, py: _snap(pg, px, py)):
+            result = _drag_real(pg, *points, button, duration)
+        _LAST_MODE = "restore"
+        return result
+    _LAST_MODE = "shared"
+    return _drag_real(pg, *points, button, duration)
 
 
 def _drag_real(pg, from_x, from_y, to_x, to_y, button: str,
                duration: float | None) -> bool:
-    move(from_x, from_y)
+    move(from_x, from_y, real=True)
+    if yielded_to_human() or input_stalled():
+        return False
     saved_pause = getattr(pg, "PAUSE", 0.0)
     try:
         pg.PAUSE = 0.0
@@ -486,15 +603,23 @@ def _drag_real(pg, from_x, from_y, to_x, to_y, button: str,
             pg.mouseDown(button=button, _pause=False)
         except TypeError:
             pg.mouseDown(button=button)
+        _notify_pointer(from_x, from_y, "down")
         time.sleep(random.uniform(0.03, 0.08))
         # hold the button and trace a human path to the destination
-        move(to_x, to_y, duration=duration)
+        move(to_x, to_y, duration=duration, real=True)
+        if yielded_to_human() or input_stalled():
+            try:
+                pg.mouseUp(button=button, _pause=False)
+            except TypeError:
+                pg.mouseUp(button=button)
+            return False
         _snap(pg, to_x, to_y)                    # release at the exact end point
         time.sleep(random.uniform(0.03, 0.08))
         try:
             pg.mouseUp(button=button, _pause=False)
         except TypeError:
             pg.mouseUp(button=button)
+        _notify_pointer(to_x, to_y, "up")
     finally:
         pg.PAUSE = saved_pause
     return True

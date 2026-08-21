@@ -266,7 +266,8 @@ def click(x, y, button="left", double=False):
             import human_mouse
             if human_mouse.click(int(x), int(y), button=button, double=double):
                 return {"ok": True,
-                        "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
+                        "action": f"{'double-' if double else ''}{button}-click at ({x},{y})",
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
             if human_mouse.yielded_to_human():
                 return {"ok": False, "yielded": True,
                         "error": "You took the mouse, so Ember stopped instead of "
@@ -288,8 +289,9 @@ def move_mouse(x, y, duration=0.2):
     try:
         try:
             import human_mouse
-            if human_mouse.move(int(x), int(y), duration=duration):
-                return {"ok": True, "x": x, "y": y}
+            if human_mouse.move(int(x), int(y), duration=duration, real=True):
+                return {"ok": True, "x": x, "y": y,
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
             if human_mouse.yielded_to_human():
                 return {"ok": False, "yielded": True, "x": x, "y": y,
                         "error": "You took the mouse, so Ember stopped instead of "
@@ -310,7 +312,8 @@ def drag(from_x, from_y, to_x, to_y, button="left", duration=0.4):
             import human_mouse
             if human_mouse.drag(int(from_x), int(from_y), int(to_x), int(to_y),
                                 button=button, duration=duration):
-                return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y]}
+                return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y],
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
         except Exception:
             pass
         pyautogui.moveTo(from_x, from_y, duration=0.15)

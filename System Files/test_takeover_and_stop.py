@@ -119,7 +119,9 @@ class _StuckPG:
 def test_move_reports_a_stall_not_a_yield(monkeypatch):
     monkeypatch.setattr(hm, "_pg", lambda: _StuckPG())
     hm.set_options(enabled=True, yield_to_human=True)
-    assert hm.move(1200, 800, duration=0) is False
+    # Independent-pointer travel intentionally does not touch the hardware cursor.  Request
+    # a real move here because this test is specifically about detecting a blocked OS write.
+    assert hm.move(1200, 800, duration=0, real=True) is False
     assert hm.input_stalled() is True
     assert hm.yielded_to_human() is False, "nobody touched the mouse"
 

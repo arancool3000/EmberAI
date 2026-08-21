@@ -78,6 +78,17 @@ def test_task_activity_is_expandable_and_motion_is_user_controllable():
     assert "QFrame#taskActivity" in STYLES and "QPlainTextEdit#activityDetails" in STYLES
 
 
+def test_independent_pointer_is_visible_honest_and_configurable():
+    window = _class_source(UI, "EmberWindow")
+    settings = _class_source(UI, "SettingsDialog")
+    for token in ("_install_ember_pointer", "show_ember_pointer", "mouse_mode",
+                  "Independent · your mouse stays yours", "Borrow + return"):
+        assert token in window, token
+    for token in ("Independent — keep my mouse untouched", "Borrow and return", "Shared"):
+        assert token in settings, token
+    assert "self._install_ember_pointer()\n        self._apply_mouse_options()" in window
+
+
 def test_browser_advanced_tools_live_in_an_overflow_menu():
     browser = _class_source(BROWSER, "EmberBrowser")
     assert "def _show_more_menu" in browser

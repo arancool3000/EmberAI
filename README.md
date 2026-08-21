@@ -23,14 +23,15 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 - **Autonomous agent** — 290+ tools: move the mouse/keyboard, read the screen with Vision OCR,
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
   **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths),
-  plus Ember's compact animated rainbow-star pointer so its actions are visibly distinct.
+  plus Ember's compact warm agent pointer so its actions are visibly distinct from yours.
 - **Ember's pointer is its own** — by default Ember no longer takes over your physical
   mouse. Clicks are delivered straight to the target window (`CGEventPostToPid` on macOS,
-  `PostMessage` on Windows, `xdotool --window` on X11), so your cursor never moves and you
-  can keep working while the agent does. Where that isn't possible Ember *borrows* the
-  cursor and puts it straight back, and it always tells you which mode you got. If you grab
-  the mouse mid-action, Ember **yields instead of fighting you for it**. Settings → pointer
-  mode: *its own* / *borrow and return* / *share my cursor*.
+  `PostMessage` on Windows), so the target app comes forward but your cursor never moves.
+  The overlay is explicitly excluded from hit-testing, so Ember cannot accidentally target
+  its own pointer window. Where direct delivery is unavailable Ember *borrows* the cursor,
+  puts it straight back, and tells you which mode it actually used. If you grab the mouse
+  mid-action, Ember **yields instead of fighting you for it**. Settings → pointer mode:
+  *independent* / *borrow and return* / *shared*.
 - **Run modes & agents** — pick how Ember works: **auto** (autonomous), **plan** (proposes a
   plan and waits), **chat** (talk only), or **read-only**. Define **named agents** (a goal +
   run mode + tool scope + optional schedule), run them on demand or **on a schedule**; Ember can
