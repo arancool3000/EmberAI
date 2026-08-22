@@ -81,24 +81,30 @@ def test_exec_tool_runs_and_emits(monkey_call=None):
     assert "tool_call" in kinds and "tool_result" in kinds
 
 
-def test_exec_tool_confirmation_denied_blocks_run(monkeypatch):
+def test_exec_tool_confirmation_denied_blocks_run():
     a, events = _agent_with_capture()
     import safety
-    # Force "needs confirmation" and auto-deny on the confirm event. Patched through
-    # monkeypatch so the stubs are undone afterwards: these were previously assigned
-    # directly onto the module, which left every later test in the process seeing a
-    # classify() that returns ("EXFIL", "test risk") for everything.
-    monkeypatch.setattr(safety, "classify", lambda n, ar: ("EXFIL", "test risk"))
-    monkeypatch.setattr(safety, "needs_confirmation", lambda risk: True)
+    # Force "needs confirmation" and auto-deny on the confirm event. Restore every
+    # stub explicitly so this works both under pytest and in this file's standalone
+    # hermetic runner without leaking patched safety behavior into later tests.
+    original_classify = safety.classify
+    original_needs_confirmation = safety.needs_confirmation
+    original_call = ot.call
+    safety.classify = lambda n, ar: ("EXFIL", "test risk")
+    safety.needs_confirmation = lambda risk: True
     ran = {"count": 0}
-    monkeypatch.setattr(ot, "call",
-                        lambda name, args: ran.__setitem__("count", ran["count"] + 1) or {"ok": True})
+    ot.call = lambda name, args: ran.__setitem__("count", ran["count"] + 1) or {"ok": True}
 
     def on_event(ev):
         if ev.kind == "confirm":
             ev.payload.response.put(False)   # user denies
     a.subscribe(on_event)
-    res = a._exec_tool("run_shell", {"command": "rm -rf /"})
+    try:
+        res = a._exec_tool("run_shell", {"command": "rm -rf /"})
+    finally:
+        safety.classify = original_classify
+        safety.needs_confirmation = original_needs_confirmation
+        ot.call = original_call
     assert res["ok"] is False and "denied" in res["error"]
     assert ran["count"] == 0, "denied tool must NOT run"
 
