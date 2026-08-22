@@ -424,6 +424,10 @@ _READ_ONLY_EXTRA = {
     "get_audit_log", "verify_audit_log", "get_security_mode",
     "get_plan", "list_pro_features", "set_plan", "vpn_status", "list_vpn_locations",
     "disk_usage", "list_open_ports", "password_strength", "system_health",
+    # MCP live chat only moves conversation text/status between a loopback client and Ember's UI;
+    # it does not expand that client's permission to invoke any desktop tool.
+    "ember_live_connect", "ember_live_wait", "ember_live_set_status", "ember_live_reply",
+    "ember_live_session", "ember_live_disconnect",
 }
 
 

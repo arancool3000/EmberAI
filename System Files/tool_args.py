@@ -9,6 +9,8 @@ Pure + stdlib so it can be unit tested without importing the (heavy) agent modul
 """
 from __future__ import annotations
 
+import inspect
+
 _TRUE = {"true", "1", "yes", "on", "y", "t"}
 _FALSE = {"false", "0", "no", "off", "n", "f", ""}
 
@@ -102,3 +104,48 @@ def coerce(param_types: dict, args: dict) -> dict:
         except Exception:
             pass
     return out
+
+
+def validate_call(fn, args: dict, tool_name: str = "tool") -> dict | None:
+    """Return a useful argument error before Python raises a vague ``TypeError``.
+
+    Tool declarations and implementations can drift, and models sometimes invent plausible
+    options. A machine-readable response lets the model repair the call immediately instead of
+    repeating it. Callables that intentionally accept ``**kwargs`` remain unrestricted.
+    """
+    if not callable(fn) or not isinstance(args, dict):
+        return None
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return None
+    accepted = [
+        name for name, p in parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    ]
+    unexpected = sorted(str(name) for name in args if name not in accepted)
+    missing = sorted(
+        name for name, p in parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and p.default is inspect.Parameter.empty and name not in args
+    )
+    if not unexpected and not missing:
+        return None
+    problems = []
+    if unexpected:
+        problems.append("unexpected " + ", ".join(repr(name) for name in unexpected))
+    if missing:
+        problems.append("missing required " + ", ".join(repr(name) for name in missing))
+    accepted_text = ", ".join(accepted) if accepted else "no arguments"
+    return {
+        "ok": False,
+        "error": f"invalid arguments for {tool_name}: {'; '.join(problems)}. Accepted: {accepted_text}",
+        "error_code": "invalid_arguments",
+        "unexpected_args": unexpected,
+        "missing_args": missing,
+        "accepted_args": accepted,
+        "retryable": True,
+        "hint": "Correct the arguments before retrying; do not repeat the identical call.",
+    }

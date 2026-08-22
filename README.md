@@ -20,7 +20,7 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
 ## ✨ What's inside
 
 ### 🤖 The agent
-- **Autonomous agent** — 290+ tools: move the mouse/keyboard, read the screen with Vision OCR,
+- **Autonomous agent** — 400+ tools: move the mouse/keyboard, read the screen with Vision OCR,
   drive a real browser via the DOM, run shell, manage files, and chain multi-step tasks.
   **Human-like mouse movement** with an **adjustable pointer speed** (curved, eased paths),
   plus Ember's compact warm agent pointer so its actions are visibly distinct from yours.
@@ -72,6 +72,10 @@ Free, MIT-licensed, and private — your API key stays on your machine; there ar
   or any MCP client. Its live tool registry becomes ChatGPT-compatible MCP tools over stdio or
   Streamable HTTP, with real schemas and impact annotations. Off by default; capability modes and high-risk
   actions blocked unless you opt in. See **[docs/MCP.md](docs/MCP.md)**.
+- **MCP live chat** — use a connected ChatGPT or Claude conversation as Ember's model without
+  putting that model's API key into Ember. Messages, thinking/working status, cancellations,
+  streamed replies, and the complete desktop toolbox travel over one client-neutral protocol.
+  This uses the access and limits of the connected client; it does not bypass provider plans.
 
 ### 🌐 Browser & web
 - **Ember Browser** — a secure, AI-first browser: tracker/ad blocking, an AI-answer search page,

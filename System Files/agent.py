@@ -685,10 +685,17 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "list_directory",
-        "description": "List directory entries; optional glob pattern.",
+        "description": ("List directory entries with an optional glob pattern. Set recursive=true "
+                        "to include subfolders; results are bounded by max_entries."),
         "parameters": {
             "type": "OBJECT",
-            "properties": {"path": {"type": "STRING"}, "pattern": {"type": "STRING"}},
+            "properties": {
+                "path": {"type": "STRING"},
+                "pattern": {"type": "STRING", "description": "glob pattern, default *"},
+                "recursive": {"type": "BOOLEAN", "description": "include subfolders"},
+                "max_entries": {"type": "INTEGER", "description": "result cap, 1-2000"},
+                "include_hidden": {"type": "BOOLEAN", "description": "include dotfiles"},
+            },
             "required": ["path"],
         },
     },
@@ -2286,8 +2293,16 @@ for _feat in (key_vault, usage_tracker, download_guard, fileless_guard, security
               network_adblock, timers, gmail_tools, bulk_tools, security_suite, ember_bridge,
               mcp_setup, octopus, netsecurity, data_protect, adp_watch, phone_intake, adp_organise):
     for _decl in _feat.TOOL_DECLARATIONS:
-        if _decl["name"] not in TOOL_DISPATCH:
+        _existing_index = next((i for i, d in enumerate(TOOL_DECLARATIONS)
+                                if d.get("name") == _decl["name"]), None)
+        if _existing_index is None:
             TOOL_DECLARATIONS.append(_decl)
+        elif _decl["name"] in _feat.TOOL_DISPATCH:
+            # A feature module intentionally replaces a core implementation (for example the
+            # safer dry-run-first bulk tools). Replace its declaration at the same time. The old
+            # code overwrote only the callable and left the model with the stale schema, causing
+            # "unexpected keyword argument" failures even for perfectly declared calls.
+            TOOL_DECLARATIONS[_existing_index] = _decl
     TOOL_DISPATCH.update(_feat.TOOL_DISPATCH)
 
 # self_extend's read-only tools (list/read) are genuinely side-effect-free -> classify them safe
@@ -3217,9 +3232,12 @@ class Agent:
                 result = {"ok": False, "error": f"unknown tool {name}"}
             else:
                 try:
-                    result = fn(**args)
+                    invalid = tool_args.validate_call(fn, args, name)
+                    result = invalid if invalid is not None else fn(**args)
                 except TypeError as e:
-                    result = {"ok": False, "error": f"bad args: {e}"}
+                    result = {"ok": False, "error": f"invalid arguments for {name}: {e}",
+                              "error_code": "invalid_arguments", "retryable": True,
+                              "hint": "Change the arguments before retrying this tool."}
                 except Exception as e:
                     result = {"ok": False, "error": str(e)}
 
@@ -3249,19 +3267,34 @@ class Agent:
         return (name, result)
 
     def _execute_parallel(self, batch) -> list[tuple[str, dict]]:
-        """Run a batch of read-only tool calls concurrently, preserving call order in
-        the returned list so the model sees responses aligned to its requests."""
+        """Run unique read-only calls concurrently while preserving provider call order.
+
+        Providers occasionally emit an identical call twice in one response. Running it once
+        prevents duplicate work and duplicate error cards; the model still receives an aligned
+        result for every call it emitted.
+        """
         import concurrent.futures
         results: list[tuple[str, dict] | None] = [None] * len(batch)
-        max_workers = min(6, len(batch))
+        unique: dict[str, tuple[int, object]] = {}
+        duplicate_of: dict[int, int] = {}
+        for i, fc in enumerate(batch):
+            plain_args = tools._to_plain(dict(fc.args)) if fc.args else {}
+            key = agent_speed.cache_key(fc.name, plain_args)
+            if key in unique:
+                duplicate_of[i] = unique[key][0]
+            else:
+                unique[key] = (i, fc)
+        max_workers = min(6, len(unique))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {ex.submit(self._execute_fc, fc): i for i, fc in enumerate(batch)}
+            futs = {ex.submit(self._execute_fc, fc): i for i, fc in unique.values()}
             for fut in concurrent.futures.as_completed(futs):
                 i = futs[fut]
                 try:
                     results[i] = fut.result()
                 except Exception as e:
                     results[i] = (batch[i].name, {"ok": False, "error": str(e)})
+        for i, source in duplicate_of.items():
+            results[i] = results[source]
         return [r for r in results if r is not None]
 
     def _process_response(self, response):

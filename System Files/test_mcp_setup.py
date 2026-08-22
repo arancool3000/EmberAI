@@ -74,6 +74,15 @@ def test_chatgpt_status_is_free_and_loopback_only():
     assert status["running"] is False
     assert status["host"] == "127.0.0.1"
     assert status["all_tools"] and status["all_features_free"]
+    assert status["live_chat_tools"] and status["desktop_control"]
+    assert status["no_model_api_key_required"]
+
+
+def test_claude_status_has_same_live_capabilities():
+    _with_temp_home()
+    status = m.claude_mcp_status()
+    assert status["all_tools"] and status["live_chat_tools"] and status["desktop_control"]
+    assert status["no_model_api_key_required"]
 
 
 def test_setup_tool_defaults_to_chatgpt():

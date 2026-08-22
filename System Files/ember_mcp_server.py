@@ -128,6 +128,9 @@ class BridgeClient:
             return {"ok": False, "error": res.get("error", "call failed")}
         return res.get("result", {})
 
+    def registry_diagnostics(self) -> dict:
+        return self._request("GET", "/mcp/doctor")
+
 
 def _python_type(schema: dict):
     kind = (schema or {}).get("type")
@@ -180,7 +183,15 @@ def bridge_diagnostics(client: BridgeClient) -> dict:
         for key in ("readOnlyHint", "openWorldHint", "destructiveHint"):
             if not isinstance(annotations.get(key), bool):
                 invalid.append(f"{tool.get('name')}: missing {key}")
+    registry = {"ok": True, "checked": 0, "issues": []}
+    if hasattr(client, "registry_diagnostics"):
+        try:
+            registry = client.registry_diagnostics()
+        except Exception as exc:
+            invalid.append(f"could not run registry diagnostics: {exc}")
+    invalid.extend(registry.get("issues") or [])
     return {"ok": not invalid, "bridge": client.url, "tools": len(tools),
+            "checked_implementations": registry.get("checked", 0),
             "invalid": invalid, "all_features_free": True}
 
 
@@ -197,9 +208,12 @@ def build_server(client: BridgeClient, host: str = "127.0.0.1", port: int = 8781
     try:
         server = FastMCP(
             "ember", host=host, port=int(port),
-            instructions=("Use Ember to operate the user's local computer. Every local Ember "
-                          "tool is free. Respect tool impact annotations and ask before risky "
-                          "or irreversible actions."))
+            instructions=("Use Ember to operate the user's local computer. For live chat, call "
+                          "ember_live_connect once, then loop ember_live_wait → "
+                          "ember_live_set_status → tools → ember_live_reply → ember_live_wait. "
+                          "ChatGPT and Claude receive the same complete tool set, including "
+                          "screen, independent mouse, keyboard, browser, shell, and files. "
+                          "Respect impact annotations and ask before risky actions."))
     except TypeError:  # older MCP SDK; stdio remains supported
         server = FastMCP("ember")
         if hasattr(server, "settings"):

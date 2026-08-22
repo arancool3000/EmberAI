@@ -223,9 +223,11 @@ A running memory of what's shipped and what's next, so ideas aren't lost between
    (no Apple/Windows certs in CI) — mac users run `unblock-mac.sh` or right-click → Open. Adding
    notarization/signing (secrets + `notarize_mac.sh`) is the remaining polish.
 
-The live MCP registry currently exposes **383 unique tools**, including dynamic plugin/runtime
-tools. Compact mode can reduce only the built-in model's prompt when a provider cannot accept a
-large schema; it never hides tools from MCP clients.
+The live MCP registry currently exposes **429 declarations / 426 callable tools**, including six
+bidirectional live-chat tools and dynamic plugin/runtime tools. The built-in registry doctor checks
+every visible schema against its implementation before release. Compact mode can reduce only the
+built-in model's prompt when a provider cannot accept a large schema; it never hides tools from
+MCP clients.
 
 ## 🔭 Backlog (next ideas)
 - **Release signing/notarization** — Apple Developer ID + notarytool (and Windows Authenticode) in CI

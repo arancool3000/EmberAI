@@ -1,6 +1,7 @@
 # Control Ember over MCP (Model Context Protocol)
 
-Ember is a complete **MCP server** for **ChatGPT**, Claude Desktop, Cursor, and other MCP clients.
+Ember is a complete **MCP server** for **ChatGPT**, **Claude Desktop / Claude Code**, Cursor,
+and other MCP clients.
 It mirrors the live canonical registry, including plugin/runtime tools, so every available Ember
 tool is discoverable: move the mouse/keyboard, read the
 screen, run shell, manage files, control the browser, organise Gmail, and more — all executed
@@ -10,9 +11,13 @@ inside your **running** Ember session, with Ember's own safety rules applied.
 or paid MCP feature. External services can still require their own credentials or subscription
 (for example an email account, model API, VPN provider, or VirusTotal key).
 
+Ember's **MCP live-chat mode does not require a model API key**. ChatGPT or Claude remains the
+model host and voluntarily calls Ember's MCP tools. This uses whatever access you already have in
+that client; MCP does not bypass its plan limits, permissions, tool-call limits, or terms.
+
 ```
 ChatGPT ──Secure MCP Tunnel──► Streamable HTTP ┐
-Claude / Cursor ─────stdio─────────────────────┴─► ember_mcp_server.py ─► Ember bridge ─► tools
+Claude / Cursor ─────stdio─────────────────────┴─► ember_mcp_server.py ─► Ember bridge ─► tools + live chat
 ```
 
 There are two pieces, mirroring blender-mcp:
@@ -58,7 +63,7 @@ Manual launch:
 python3 ember_mcp_server.py --transport streamable-http --port 8781
 ```
 
-## 4. Other MCP clients
+## 4. Connect Claude (the same capabilities)
 
 **Claude Desktop** — add to `claude_desktop_config.json`
 (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -76,6 +81,67 @@ python3 ember_mcp_server.py --transport streamable-http --port 8781
 
 Restart Claude Desktop. Ember's tools appear in the MCP tool list. Try: *“Take a screenshot and
 tell me what's on screen,”* or *“Open a terminal and show disk usage.”*
+
+The Settings button writes this file and starts Ember's bridge for you. Claude receives the same
+live-chat and computer-control tools as ChatGPT; there is no reduced Claude tool list.
+
+**Claude Code** — register the same stdio server at user scope:
+
+```bash
+claude mcp add ember --scope user -- python3 "/absolute/path/to/EmberAI/System Files/ember_mcp_server.py"
+claude mcp get ember
+```
+
+Anthropic documents local stdio servers and the `claude mcp` commands in its official
+[MCP guide](https://docs.anthropic.com/en/docs/claude-code/mcp).
+
+## 5. Live chat: send Ember messages to ChatGPT or Claude
+
+After connecting the MCP server, paste this once into the ChatGPT/Claude conversation you want
+to use as Ember's model:
+
+> Connect to Ember live chat. Call `ember_live_connect` with your client/model name. Then call
+> `ember_live_wait` and wait for messages from the Ember UI. For every message, publish useful
+> `thinking`, `working`, or `using_tool` status with `ember_live_set_status`; use Ember's screen,
+> mouse, keyboard, browser, file, or shell tools as needed; return the answer with
+> `ember_live_reply`; then call `ember_live_wait` again using the latest cursor. Continue until
+> Ember sends cancel/disconnect.
+
+When it connects, the **MCP** chip beside Ember's composer turns on and shows the client name.
+Messages typed into Ember now go to that MCP conversation and its status/reply appears directly
+in the Ember UI. Uncheck the chip or type `/local` to use Ember's configured local/API model;
+type `/mcp` to switch back.
+
+| Tool | Purpose |
+|---|---|
+| `ember_live_connect` | Attach this ChatGPT/Claude conversation and get a session ID. |
+| `ember_live_wait` | Long-poll for an Ember message or cancellation; repeat after timeouts. |
+| `ember_live_set_status` | Show `thinking`, `working`, `using_tool`, `idle`, `done`, or `error`. |
+| `ember_live_reply` | Stream or deliver the final response into Ember's chat. |
+| `ember_live_session` | Inspect connection and pending-message state. |
+| `ember_live_disconnect` | End the live session cleanly. |
+
+MCP clients impose tool-call time limits, so `ember_live_wait` uses bounded long polling (up to
+45 seconds) and returns `call_again: true` on a quiet timeout. The client must keep calling it.
+No desktop AI client is guaranteed to run an infinite background turn; if it stops waiting, ask
+it to resume the Ember live-chat loop.
+
+## 6. Desktop control and the independent Ember pointer
+
+Both clients receive Ember's complete live registry, including `take_screenshot`,
+`read_screen_text`, `smart_click`, `click`, `move_mouse`, `drag`, `type_text`, `press_key`,
+browser tools, files, and shell. Enable **Detached** pointer mode in Ember to show the smooth
+agent pointer without stealing focus into the Ember window. The pointer overlay is click-through;
+the actual target application receives the click.
+
+For reliable UI work, clients should inspect before acting and prefer labeled controls:
+
+1. `take_screenshot` or `read_screen_text`
+2. `smart_click("visible label")` for labeled targets
+3. `click(x, y)` only for unlabeled coordinates
+4. inspect again to verify the visible result
+
+## 7. Other MCP clients
 
 **Cursor / other clients** — use the same command/args in that client's MCP config.
 

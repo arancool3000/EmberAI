@@ -106,6 +106,8 @@ SLASH_COMMANDS = {
     "/antivirus": "__antivirus__",
     "/adblock": "__adblock__",
     "/setup": "__setup_tour__",
+    "/mcp": "__mcp_live__",
+    "/local": "__local_chat__",
     "/features": "__features__",
     "/help": "__help__",
     "/clear": "__clear__",
@@ -935,6 +937,7 @@ class EventBridge(QObject):
     ptt_text = pyqtSignal(str)     # final push-to-talk transcript (from the transcribe thread)
     ptt_state = pyqtSignal(str)    # push-to-talk state change: recording/transcribing/idle
     ptt_error = pyqtSignal(str)    # push-to-talk failure message
+    mcp_live_event = pyqtSignal(object)  # bidirectional ChatGPT/Claude live-chat event
 
 
 # macOS virtual key codes -> pynput key-name tokens (so replay's _resolve_key matches). Only
@@ -2415,7 +2418,7 @@ class SettingsDialog(QDialog):
                 button.setEnabled(False)
         self.mcp_setup_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
         self.mcp_setup_status.setText(
-            f"Setting up {client.title()}… installing/verifying the free MCP runtime.")
+            f"Setting up {client.title()}… verifying the local MCP runtime and Ember bridge.")
         def work():
             try:
                 import mcp_setup
@@ -2440,8 +2443,9 @@ class SettingsDialog(QDialog):
                     f"{res.get('url')}\nRefresh its metadata after Ember updates.")
             else:
                 self.mcp_setup_status.setText(
-                    "Claude Desktop is configured. Click Save, fully quit and reopen Claude "
-                    f"Desktop. Config: {res.get('config')}")
+                    "Claude Desktop is configured with the same live chat and desktop tools as "
+                    "ChatGPT. Fully quit and reopen Claude, then say: ‘Connect to Ember live chat "
+                    f"and wait for my messages.’\nConfig: {res.get('config')}")
         else:
             self.mcp_setup_status.setStyleSheet("color: #f7768e; font-size: 11px;")
             self.mcp_setup_status.setText(str(res.get("error", "setup failed")))
@@ -7456,6 +7460,11 @@ class EmberWindow(QWidget):
         self._bridge.ptt_text.connect(self._on_ptt_text)
         self._bridge.ptt_state.connect(self._on_ptt_state)
         self._bridge.ptt_error.connect(self._on_ptt_error)
+        self._bridge.mcp_live_event.connect(self._on_mcp_live_event)
+        self._mcp_live_enabled = False
+        self._mcp_live_session_id = ""
+        self._mcp_live_message_id = ""
+        self._mcp_live_stream_label = None
         self._ptt = None                 # PushToTalk coordinator (built on first install)
         self._ptt_recorder = None        # active voice.HoldRecorder during a press
         self._ptt_listener = None        # pynput key listener (non-macOS)
@@ -7480,6 +7489,16 @@ class EmberWindow(QWidget):
         self._orb_conversation = False   # True during a hands-free "Hey Ember" conversation
         self._title_jobs: set[str] = set()
         self._build_ui()
+        try:
+            import mcp_live
+            mcp_live.set_event_callback(lambda event: self._bridge.mcp_live_event.emit(event))
+            active = mcp_live.active_session()
+            if active:
+                self._mcp_live_enabled = True
+                self._mcp_live_session_id = active["session_id"]
+            self._refresh_mcp_live_button()
+        except Exception:
+            pass
         self._ember_pointer = None
         self._install_ember_pointer()
         self._apply_mouse_options()
@@ -9096,6 +9115,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.mic_btn.clicked.connect(self._toggle_mic)
         composer_bar.addWidget(self.mic_btn)
 
+        self.mcp_live_btn = QPushButton("MCP")
+        self.mcp_live_btn.setObjectName("composerTool")
+        self.mcp_live_btn.setCheckable(True)
+        self.mcp_live_btn.setFixedSize(52, 34)
+        self.mcp_live_btn.setToolTip(
+            "Use a connected ChatGPT or Claude MCP conversation as Ember's live model")
+        self.mcp_live_btn.toggled.connect(self._toggle_mcp_live_chat)
+        composer_bar.addWidget(self.mcp_live_btn)
+
         self.composer_hint = QLabel("Shift+Enter for a new line")
         self.composer_hint.setObjectName("composerHint")
         composer_bar.addWidget(self.composer_hint, 1)
@@ -9547,6 +9575,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._streaming_buffer = ""
         self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self.empty_hint = None
+        self._empty_state_frame = None
 
     def _load_active_chat_into_view(self):
         self._clear_chat_view()
@@ -9609,6 +9638,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         content.addWidget(self.empty_hint)
         self.chat_layout.insertWidget(
             self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_state_frame = frame
         QTimer.singleShot(0, self._clamp_bubble_widths)
 
     def _append_history(self, role: str, text: str, meta: str | None = None):
@@ -9702,6 +9732,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 return
 
     def _new_chat(self):
+        self._cancel_mcp_live_turn("Started a new Ember chat")
         chat = _make_chat("New chat")
         self.chat_history.setdefault("sessions", []).insert(0, chat)
         self.active_chat_id = chat["id"]
@@ -9719,6 +9750,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         chat_id = current.data(Qt.ItemDataRole.UserRole)
         if not chat_id or chat_id == self.active_chat_id:
             return
+        self._cancel_mcp_live_turn("Switched to another Ember chat")
         self.active_chat_id = chat_id
         self.chat_history["active_id"] = chat_id
         save_chat_history(self.chat_history)
@@ -9782,6 +9814,12 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
     def _do_quit(self):
         """Really quit Ember (tray ▸ Quit / explicit quit) — stops the background listeners."""
         self._really_quit = True
+        self._cancel_mcp_live_turn("Ember quit")
+        try:
+            import mcp_live
+            mcp_live.set_event_callback(None)
+        except Exception:
+            pass
         # "Install on Quit": the user chose to update when they close Ember — do it now (the
         # updater installs the new version and relaunches into it).
         if getattr(self, "_install_on_quit", False) and getattr(self, "_pending_update", None):
@@ -9965,6 +10003,18 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             fx.reset()
 
     def _add_bubble(self, kind: str, text: str, meta: str | None = None) -> QFrame:
+        # The welcome card is a true empty state, not a permanent header. Leaving it mounted
+        # after the first message pushed the real conversation below the fold and made Ember
+        # look as if it had ignored the user (especially obvious in MCP live chat).
+        empty = getattr(self, "_empty_state_frame", None)
+        if empty is not None:
+            try:
+                empty.setParent(None)
+                empty.deleteLater()
+            except RuntimeError:
+                pass
+            self._empty_state_frame = None
+            self.empty_hint = None
         frame = QFrame()
         frame.setProperty("messageKind", kind)
         frame.setProperty("plainText", text or "")
@@ -10300,6 +10350,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         label = QLabel("Ember is thinking…")
         label.setStyleSheet("color: #8f99ad; font-size: 11px;")
         h.addWidget(label)
+        self._typing_label = label
         h.addStretch()
         self.chat_layout.insertWidget(
             self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -10327,13 +10378,16 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
 
     def _set_status(self, text: str):
         self.status_label.setText(text)
-        model = self.settings.get("model_id") or self.settings.get("gemini_model") or "Choose model"
+        live = self._current_mcp_live_session() if getattr(self, "_mcp_live_enabled", False) else None
+        model = ((live or {}).get("display_name") or (live or {}).get("client_name")
+                 or self.settings.get("model_id") or self.settings.get("gemini_model")
+                 or "Choose model")
         model_button = getattr(self, "model_btn", None)
         if model_button is not None:
-            model_button.setText(_pretty_model_name(model))
+            model_button.setText((str(model)[:24] + " · Live") if live else _pretty_model_name(model))
         metric = getattr(self, "model_metric", None)
         if metric is not None:
-            metric.setText(_pretty_model_name(model))
+            metric.setText((str(model)[:24] + " · MCP") if live else _pretty_model_name(model))
 
     def _set_run_busy(self, busy: bool):
         """Keep the composer actions honest: send while idle, stop while working."""
@@ -10341,7 +10395,177 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.send_btn.setVisible(not busy)
         self.stop_btn.setVisible(busy)
 
+    def _current_mcp_live_session(self):
+        try:
+            import mcp_live
+            active = mcp_live.active_session()
+            if active and (not self._mcp_live_session_id
+                           or active.get("session_id") == self._mcp_live_session_id):
+                return active
+            if self._mcp_live_session_id:
+                status = mcp_live.session_status(self._mcp_live_session_id)
+                if status.get("ok") and status.get("connected"):
+                    return status
+            return active
+        except Exception:
+            return None
+
+    def _refresh_mcp_live_button(self):
+        button = getattr(self, "mcp_live_btn", None)
+        if button is None:
+            return
+        live = self._current_mcp_live_session()
+        button.blockSignals(True)
+        button.setChecked(bool(live and self._mcp_live_enabled))
+        button.blockSignals(False)
+        if live:
+            name = live.get("display_name") or live.get("client_name") or "MCP"
+            short_name = live.get("client_name") or name
+            button.setText(str(short_name)[:8])
+            button.setToolTip(
+                f"{name} is connected. Checked: messages go there. Uncheck to use Ember's local/API model.")
+        else:
+            button.setText("MCP")
+            button.setToolTip(
+                "No live MCP client yet. In ChatGPT or Claude, ask: ‘Connect to Ember live chat’. ")
+
+    def _toggle_mcp_live_chat(self, enabled: bool):
+        live = self._current_mcp_live_session()
+        if enabled and not live:
+            self._mcp_live_enabled = False
+            self._refresh_mcp_live_button()
+            self._add_bubble(
+                "system", "No MCP chat is connected yet. Set up ChatGPT or Claude in Settings, "
+                          "then tell it: **Connect to Ember live chat and wait for my messages.**")
+            self._open_settings("Performance")
+            return
+        self._mcp_live_enabled = bool(enabled and live)
+        if not enabled:
+            self._cancel_mcp_live_turn("Switched to Ember's local/API model")
+        if live:
+            self._mcp_live_session_id = live.get("session_id", "")
+            name = live.get("display_name") or live.get("client_name") or "MCP client"
+            self._set_status(f"{name} · live chat" if enabled else "Local Ember model selected")
+        self._refresh_mcp_live_button()
+
+    def _on_mcp_live_event(self, event: dict):
+        """Render MCP callbacks on Qt's main thread; ChatGPT and Claude share this path."""
+        event = event if isinstance(event, dict) else {}
+        kind = event.get("kind")
+        sid = event.get("session_id", "")
+        name = event.get("display_name") or event.get("client_name") or "MCP client"
+        if kind == "connected":
+            self._mcp_live_session_id = sid
+            self._mcp_live_enabled = True
+            self._refresh_mcp_live_button()
+            self._add_bubble(
+                "system", f"**{name} connected over MCP.** New messages will go there. "
+                          "Use the MCP button beside the composer to switch back to Ember's local/API model.")
+            self._set_status(f"{name} · connected and waiting")
+            return
+        if sid and self._mcp_live_session_id and sid != self._mcp_live_session_id:
+            return
+        if kind == "disconnected":
+            self._mcp_live_enabled = False
+            self._mcp_live_session_id = ""
+            self._mcp_live_message_id = ""
+            self._hide_typing_indicator()
+            self._set_run_busy(False)
+            self._refresh_mcp_live_button()
+            self._add_bubble("system", f"{name} disconnected from Ember live chat.")
+            self._set_status("MCP live chat disconnected")
+            return
+        if kind == "status":
+            state = str(event.get("state") or "working").replace("_", " ")
+            detail = str(event.get("detail") or "").strip()
+            if state in ("thinking", "working", "using tool"):
+                self._show_typing_indicator()
+            label = getattr(self, "_typing_label", None)
+            if label is not None:
+                label.setText(f"{name}: {detail or state}…")
+            self._set_status(f"{name} · {detail or state}")
+            return
+        if kind != "reply":
+            return
+        text = str(event.get("text") or "")
+        final = bool(event.get("final", True))
+        self._hide_typing_indicator()
+        label = getattr(self, "_mcp_live_stream_label", None)
+        if label is None:
+            frame = self._add_bubble("assistant", text if final else "", meta=f"{name} · MCP")
+            label = next((child for child in frame.findChildren(QLabel)
+                          if child.objectName() == "bubbleBody"), None)
+            if not final:
+                self._mcp_live_stream_label = label
+        if label is not None:
+            label.setText(_md_to_html(text))
+        if final:
+            self._append_history("assistant", text, meta=f"{name} · MCP")
+            self._speak_reply(text)
+            self._mcp_live_stream_label = None
+            self._mcp_live_message_id = ""
+            self._activity_complete()
+            self._set_run_busy(False)
+            self._set_status(f"{name} · connected and ready")
+        QTimer.singleShot(0, self._clamp_bubble_widths)
+        QTimer.singleShot(35, self._scroll_to_bottom_smooth)
+
+    def _cancel_mcp_live_turn(self, reason: str = "Stopped in Ember"):
+        message_id = getattr(self, "_mcp_live_message_id", "")
+        if not message_id:
+            return
+        try:
+            import mcp_live
+            mcp_live.cancel_message(self._mcp_live_session_id, message_id, reason)
+        except Exception:
+            pass
+        self._mcp_live_message_id = ""
+        self._mcp_live_stream_label = None
+        self._hide_typing_indicator()
+        self._set_run_busy(False)
+
     def _submit_user_text(self, text: str, meta: str | None = None, status: str = "Thinking...") -> bool:
+        text = (text or "").strip()
+        if not text:
+            return False
+        if text.startswith("/") and self._handle_slash(text):
+            return True
+        live = self._current_mcp_live_session() if self._mcp_live_enabled else None
+        if self._mcp_live_enabled and not live:
+            self._mcp_live_enabled = False
+            self._mcp_live_session_id = ""
+            self._refresh_mcp_live_button()
+            self._add_bubble("system", "The MCP live session is no longer responding. Your message "
+                             "was not sent; ask ChatGPT or Claude to reconnect, then try again.")
+            self._set_status("MCP live chat needs reconnection")
+            return False
+        if live:
+            corrected = False
+            if self.settings.get("autocorrect_chat", True):
+                text, corrected = autocorrect_chat_text(text)
+            if corrected:
+                meta = f"{meta} · autocorrected" if meta else "autocorrected"
+            name = live.get("display_name") or live.get("client_name") or "MCP client"
+            self._activity_reset()
+            self._add_bubble("user", text, meta=meta)
+            self._append_history("user", text, meta=meta)
+            self._set_status(f"Sending to {name}…")
+            self._set_run_busy(True)
+            self._show_typing_indicator()
+            try:
+                import mcp_live
+                queued = mcp_live.post_user_message(text, str(self.active_chat_id or ""))
+            except Exception as exc:
+                queued = {"ok": False, "error": str(exc)}
+            if not queued.get("ok"):
+                self._hide_typing_indicator()
+                self._set_run_busy(False)
+                self._add_bubble("error", queued.get("error", "Could not reach MCP live chat"),
+                                 meta="MCP live chat")
+                return True
+            self._mcp_live_message_id = queued.get("message_id", "")
+            self._set_status(f"Waiting for {name}…")
+            return True
         if not self.agent:
             # A key IS configured -> the agent likely failed to init earlier (e.g. the
             # working-dir / FileNotFound issue). Try to rebuild it before nagging about a key.
@@ -10363,12 +10587,6 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                         "Open settings (gear) and add your Gemini API key first.")
                     self._open_settings()
                 return False
-        text = (text or "").strip()
-        if not text:
-            return False
-        if text.startswith("/"):
-            if self._handle_slash(text):
-                return True
         corrected = False
         if self.settings.get("autocorrect_chat", True):
             text, corrected = autocorrect_chat_text(text)
@@ -10402,6 +10620,23 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return True
         if target == "__clear__":
             self._reset_chat()
+            return True
+        if target == "__mcp_live__":
+            live = self._current_mcp_live_session()
+            if live:
+                self._mcp_live_enabled = True
+                self._mcp_live_session_id = live.get("session_id", "")
+                self._refresh_mcp_live_button()
+                self._set_status(f"{live.get('display_name') or live.get('client_name')} · live chat")
+            else:
+                self._add_bubble("system", "No MCP client is connected. Open Settings → Performance, "
+                                 "set up ChatGPT or Claude, then ask it to connect to Ember live chat.")
+            return True
+        if target == "__local_chat__":
+            self._cancel_mcp_live_turn("Switched to Ember's local/API model")
+            self._mcp_live_enabled = False
+            self._refresh_mcp_live_button()
+            self._set_status("Local Ember model selected")
             return True
         if target == "__forget_all__":
             import memory as _mem
@@ -12099,6 +12334,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self._stop_voice_chat("Voice chat stopped")
         if self.agent:
             self.agent.stop()
+        cancel_live = getattr(self, "_cancel_mcp_live_turn", None)
+        if callable(cancel_live):
+            cancel_live("Stopped by the user in Ember")
         if hasattr(self, "_set_run_busy"):
             self._set_run_busy(False)
         if hasattr(self, "_activity_complete"):
@@ -12106,6 +12344,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._set_status("Stopped")
 
     def _reset_chat(self):
+        self._cancel_mcp_live_turn("Conversation reset in Ember")
         if self.agent:
             # CANCEL any in-flight turn first. Without this, resetting mid-task (e.g. a long
             # `ollama pull`) leaves that turn running on the single-turn worker, so new messages

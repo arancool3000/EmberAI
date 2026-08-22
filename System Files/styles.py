@@ -890,6 +890,13 @@ QPushButton#composerTool {
     font-size: 15px;
 }
 QPushButton#composerTool:hover { background-color: rgba(255,255,255,0.09); color: #ffffff; }
+QPushButton#composerTool:checked {
+    background-color: rgba(130, 170, 255, 0.18);
+    border: 1px solid rgba(144, 180, 255, 0.34);
+    color: #dbe7ff;
+    font-size: 10px;
+    font-weight: 700;
+}
 QPushButton#send {
     border-radius: 12px;
     min-width: 40px;
