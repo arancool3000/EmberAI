@@ -57,6 +57,16 @@ def this_device(capitalized: bool = False) -> str:
     return word[0].upper() + word[1:] if capitalized else word
 
 
+def _pretty_model_name(value: str) -> str:
+    """Turn provider IDs into compact product labels for the workspace chrome."""
+    text = str(value or "Choose model").split("/")[-1].replace("_", " ").replace("-", " ")
+    words = []
+    for word in text.split():
+        low = word.lower()
+        words.append({"gpt": "GPT", "ai": "AI", "it": "IT"}.get(low, word.capitalize()))
+    return " ".join(words)[:28] or "Choose model"
+
+
 SLASH_COMMANDS = {
     "/autopilot": "Take over the next computer task end-to-end. Use the screen, apps, browser, files, shell, and automation tools as needed. Ask only for credentials, payments, CAPTCHA/2FA, or irreversible decisions.",
     "/do": "Take over the next computer task end-to-end. Use the screen, apps, browser, files, shell, and automation tools as needed. Ask only for credentials, payments, CAPTCHA/2FA, or irreversible decisions.",
@@ -96,6 +106,8 @@ SLASH_COMMANDS = {
     "/antivirus": "__antivirus__",
     "/adblock": "__adblock__",
     "/setup": "__setup_tour__",
+    "/mcp": "__mcp_live__",
+    "/local": "__local_chat__",
     "/features": "__features__",
     "/help": "__help__",
     "/clear": "__clear__",
@@ -254,6 +266,29 @@ COMMAND_CENTER_GROUPS = [
         ("Diagnose this PC",  "/diagnose",  None),
         ("Build a rule",      "/automate",  None),
         ("Schedule a task",   "/schedule",  None),
+    ]),
+]
+
+# The drawer is a focused launchpad, not a second copy of the entire feature directory.
+# Everything remains searchable through Cmd/Ctrl+K; these are the routes people need most.
+PRIMARY_TOOL_GROUPS = [
+    ("Work", [
+        ("Browser", "__browser_app__", "Open Ember's automation-aware browser"),
+        ("Terminal", "__terminal__", "Run shell commands and Python"),
+        ("Files", "__storage__", "Inspect storage, large files, and duplicates"),
+        ("Agents", "__agents__", "Run and monitor parallel agent tasks"),
+    ]),
+    ("Connect", [
+        ("Phone Link", "__remote__", "Control this computer from your phone"),
+        ("Workflows", "__workflow__", "Record and replay repeatable actions"),
+        ("Security", "__antivirus__", "Review local protection and findings"),
+        ("Local AI", "__local_ai__", "Use an offline Ollama model"),
+    ]),
+    ("Quick starts", [
+        ("Research a topic", "/research", None),
+        ("Organize a folder", "/organize", None),
+        ("Create something", "/create", None),
+        ("Diagnose this computer", "/diagnose", None),
     ]),
 ]
 
@@ -492,13 +527,16 @@ def load_settings() -> dict:
         "hotkey_daemon": False,       # always-on login helper so the hotkey works even when quit
         "mouse_humanize": True,       # curved/eased human-like pointer movement
         "mouse_speed": 1.0,           # pointer movement speed multiplier (0.25x–3.0x)
+        "show_ember_pointer": True,   # compact click-through pointer while Ember acts
+        "mouse_mode": "detached",    # detached | restore | shared
+        "mouse_yield_to_human": True,
         "request_timeout_seconds": 15,
         "animations_enabled": True,
         "motion_level": "dynamic",  # dynamic | smooth | reduced | off
         "show_thinking": True,      # show Ember's reasoning ("Thinking…") as a collapsible section
         "glow_enabled": True,
         "font_size": 12,
-        "accent_color": "#7aa2f7",
+        "accent_color": "#ff8a5c",
         "liquid_glass": True,
         "glass_opacity": 75,
         "glass_native_blur": True,
@@ -787,6 +825,55 @@ class StarMark(QWidget):
             pass
 
 
+class PromptCard(QFrame):
+    """Accessible two-line launch card used by the empty workspace."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, icon: str, title: str, description: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("promptCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(title)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(13, 12, 12, 12)
+        row.setSpacing(10)
+        glyph = QLabel(icon)
+        glyph.setObjectName("promptIcon")
+        glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        glyph.setFixedSize(32, 32)
+        copy = QVBoxLayout()
+        copy.setContentsMargins(0, 0, 0, 0)
+        copy.setSpacing(2)
+        heading = QLabel(title)
+        heading.setObjectName("promptTitle")
+        detail = QLabel(description)
+        detail.setObjectName("promptDescription")
+        detail.setWordWrap(True)
+        copy.addWidget(heading)
+        copy.addWidget(detail)
+        arrow = QLabel("›")
+        arrow.setObjectName("promptArrow")
+        row.addWidget(glyph)
+        row.addLayout(copy, 1)
+        row.addWidget(arrow)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 def _dialog_header(title: str, description: str, eyebrow: str = "EMBER",
                    mark: str = STAR_MARK) -> QFrame:
     """Reusable product header for every secondary Ember surface. `mark` is a short text glyph
@@ -850,6 +937,7 @@ class EventBridge(QObject):
     ptt_text = pyqtSignal(str)     # final push-to-talk transcript (from the transcribe thread)
     ptt_state = pyqtSignal(str)    # push-to-talk state change: recording/transcribing/idle
     ptt_error = pyqtSignal(str)    # push-to-talk failure message
+    mcp_live_event = pyqtSignal(object)  # bidirectional ChatGPT/Claude live-chat event
 
 
 # macOS virtual key codes -> pynput key-name tokens (so replay's _resolve_key matches). Only
@@ -1266,6 +1354,8 @@ class ManualModeDialog(QDialog):
 
 # Theme presets: each sets accent color + glass opacity + glow/animations/liquid-glass at once.
 _THEME_PRESETS = {
+    "Ember Warm":    {"accent_color": "#ff8a5c", "glass_opacity": 75, "glow_enabled": True,
+                      "animations_enabled": True, "liquid_glass": True},
     "Midnight Blue": {"accent_color": "#7aa2f7", "glass_opacity": 75, "glow_enabled": True,
                       "animations_enabled": True, "liquid_glass": False},
     "Neon Purple":   {"accent_color": "#bb9af7", "glass_opacity": 60, "glow_enabled": True,
@@ -1428,8 +1518,10 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: dict, parent=None, automation_engine=None, only_tab=None):
         super().__init__(parent)
+        self.setObjectName("settingsDialog")
         self.setWindowTitle("Ember Settings")
-        self.setMinimumSize(820, 560)
+        self.setMinimumSize(900, 620)
+        self.resize(1040, 720)
         self.settings = dict(settings)
         self.automation_engine = automation_engine
         # When only_tab is set, this dialog is presented as a single feature's OWN window
@@ -1437,24 +1529,49 @@ class SettingsDialog(QDialog):
         # get_settings() save path is unchanged — we just don't show the others.
         self._only_tab = only_tab
         self._mcp_setup_done.connect(self._on_mcp_setup_done)
-        self._install_ember_hearth()
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(18, 18, 18, 14)
+        outer.setSpacing(12)
         self._settings_header = _dialog_header(
             "Settings", "Configure Ember's models, behavior, privacy, and integrations.",
             eyebrow="EMBER", mark="⚙")
         outer.addWidget(self._settings_header)
+
+        settings_shell = QFrame()
+        settings_shell.setObjectName("settingsShell")
+        shell_layout = QHBoxLayout(settings_shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+
+        self._settings_nav_panel = QFrame()
+        self._settings_nav_panel.setObjectName("settingsNavPanel")
+        self._settings_nav_panel.setFixedWidth(202)
+        nav_layout = QVBoxLayout(self._settings_nav_panel)
+        nav_layout.setContentsMargins(12, 15, 12, 12)
+        nav_layout.setSpacing(8)
+        nav_kicker = QLabel("PREFERENCES")
+        nav_kicker.setObjectName("settingsNavKicker")
+        nav_layout.addWidget(nav_kicker)
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settingsNav")
+        self.settings_nav.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_nav.currentRowChanged.connect(self._on_settings_nav_changed)
+        nav_layout.addWidget(self.settings_nav, 1)
+        nav_note = QLabel("Changes stay on this device unless a setting says otherwise.")
+        nav_note.setObjectName("settingsNavNote")
+        nav_note.setWordWrap(True)
+        nav_layout.addWidget(nav_note)
+        shell_layout.addWidget(self._settings_nav_panel)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("settingsTabs")
-        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setDocumentMode(True)
-        self.tabs.setUsesScrollButtons(False)
-        tab_bar = self.tabs.tabBar()
-        tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
-        tab_bar.setExpanding(True)
-        outer.addWidget(self.tabs)
+        self.tabs.tabBar().hide()
+        self.tabs.currentChanged.connect(self._sync_settings_nav_selection)
+        shell_layout.addWidget(self.tabs, 1)
+        outer.addWidget(settings_shell, 1)
 
         # Build each tab defensively: if one builder raises, the dialog still opens with the rest
         # (and we record which failed) instead of an exception bubbling up to the slot — which on
@@ -1484,12 +1601,20 @@ class SettingsDialog(QDialog):
             lbl.setWordWrap(True)
             ev.addWidget(lbl)
             ev.addStretch()
-            self.tabs.addTab(err_page, "⚠ Issues")
+            self._add_tab(err_page, "Issues")
+
+        self._rebuild_settings_nav()
 
         if self._only_tab:
             self._scope_to_tab(self._only_tab)
 
+        footer = QFrame()
+        footer.setObjectName("settingsFooter")
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(12, 8, 10, 8)
+        footer_note = QLabel("Settings apply when you save.")
+        footer_note.setObjectName("settingsFooterNote")
+        btn_row.addWidget(footer_note)
         btn_row.addStretch()
         save_btn = QPushButton("Save changes")
         save_btn.setObjectName("primaryBtn")
@@ -1499,7 +1624,8 @@ class SettingsDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(save_btn)
-        outer.addLayout(btn_row)
+        footer.setLayout(btn_row)
+        outer.addWidget(footer)
 
         _polish_dialog(self)
 
@@ -1527,9 +1653,38 @@ class SettingsDialog(QDialog):
 
     def _hint(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        lbl.setObjectName("settingsHint")
         lbl.setWordWrap(True)
         return lbl
+
+    def _on_settings_nav_changed(self, row: int) -> None:
+        if 0 <= row < self.tabs.count() and self.tabs.currentIndex() != row:
+            self.tabs.setCurrentIndex(row)
+
+    def _sync_settings_nav_selection(self, index: int) -> None:
+        if not hasattr(self, "settings_nav") or index < 0:
+            return
+        self.settings_nav.blockSignals(True)
+        self.settings_nav.setCurrentRow(index)
+        self.settings_nav.blockSignals(False)
+
+    def _rebuild_settings_nav(self) -> None:
+        """Mirror the hidden compatibility tab bar as a clean, readable navigation rail."""
+        icons = {
+            "Models": "✦", "Appearance": "◐", "Voice": "◉", "Performance": "↗",
+            "Automations": "⌁", "Memory": "▱", "Security": "◇", "About": "i",
+            "Issues": "!",
+        }
+        self.settings_nav.blockSignals(True)
+        self.settings_nav.clear()
+        for index in range(self.tabs.count()):
+            title = self.tabs.tabText(index)
+            item = QListWidgetItem(f"{icons.get(title, '·')}   {title}")
+            item.setData(Qt.ItemDataRole.UserRole, title)
+            item.setToolTip(f"Open {title} settings")
+            self.settings_nav.addItem(item)
+        self.settings_nav.setCurrentRow(max(0, self.tabs.currentIndex()))
+        self.settings_nav.blockSignals(False)
 
     def _set_status(self, text: str) -> None:
         """Forward a status message to the main window (best-effort). The settings dialog has no
@@ -1567,6 +1722,7 @@ class SettingsDialog(QDialog):
             self.tabs.tabBar().hide()
         except Exception:
             pass
+        self._settings_nav_panel.hide()
         self.setWindowTitle(f"Ember — {title}")
         try:
             self._settings_header.heading_label.setText(title)
@@ -1574,19 +1730,49 @@ class SettingsDialog(QDialog):
                 f"Focused {title.lower()} controls. Changes apply when you save.")
         except Exception:
             pass
-        self.setMinimumSize(660, 520)
+        self.setMinimumSize(720, 560)
 
     def _add_tab(self, page, title: str, scroll: bool = True):
-        """Add a tab, optionally wrapped in a scroll area so tall content never clips
-        off the bottom of the dialog."""
+        """Put every settings section inside the same page header and spacing system."""
+        descriptions = {
+            "Models": "Choose Ember's brain and connect the accounts it may use.",
+            "Appearance": "Tune the interface without changing how Ember works.",
+            "Voice": "Control listening, speech, wake words, and push-to-talk.",
+            "Performance": "Manage startup, integrations, offline behavior, and responsiveness.",
+            "Automations": "Create local rules for repetitive background actions.",
+            "Memory": "Review and clear the facts Ember has intentionally remembered.",
+            "Security": "Set boundaries for computer control, files, network access, and auditing.",
+            "About": "Version, capabilities, diagnostics, and product information.",
+            "Issues": "One or more optional settings sections could not be loaded.",
+        }
+        shell = QWidget()
+        shell.setObjectName("settingsPage")
+        column = QVBoxLayout(shell)
+        column.setContentsMargins(24, 21, 24, 22)
+        column.setSpacing(13)
+        heading = QLabel(title)
+        heading.setObjectName("settingsPageTitle")
+        description = QLabel(descriptions.get(title, "Configure this part of Ember."))
+        description.setObjectName("settingsPageDescription")
+        description.setWordWrap(True)
+        column.addWidget(heading)
+        column.addWidget(description)
+        divider = QFrame()
+        divider.setObjectName("settingsDivider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        column.addWidget(divider)
+        page.setObjectName("settingsPageContent")
+        column.addWidget(page, 1)
         if scroll:
             area = QScrollArea()
+            area.setObjectName("settingsScroll")
             area.setWidgetResizable(True)
             area.setFrameShape(QFrame.Shape.NoFrame)
-            area.setWidget(page)
+            area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            area.setWidget(shell)
             self.tabs.addTab(area, title)
         else:
-            self.tabs.addTab(page, title)
+            self.tabs.addTab(shell, title)
 
     def _build_models_tab(self):
         page = QWidget()
@@ -1820,7 +2006,7 @@ class SettingsDialog(QDialog):
             "can see how it got there. Turn off to hide it.")
         layout.addRow(self.show_thinking_check)
 
-        self.glow_check = QCheckBox("Blue glow around the window")
+        self.glow_check = QCheckBox("Soft accent glow around the window")
         self.glow_check.setChecked(bool(self.settings.get("glow_enabled", True)))
         layout.addRow(self.glow_check)
 
@@ -1873,14 +2059,15 @@ class SettingsDialog(QDialog):
 
         self.accent_combo = QComboBox()
         accents = [
-            ("Blue (default)",   "#7aa2f7"),
+            ("Ember (default)",  "#ff8a5c"),
+            ("Blue",             "#7aa2f7"),
             ("Purple",           "#bb9af7"),
             ("Cyan",             "#7dcfff"),
             ("Mint",             "#9ece6a"),
             ("Pink",             "#f7768e"),
             ("Amber",            "#e0af68"),
         ]
-        cur = self.settings.get("accent_color", "#7aa2f7")
+        cur = self.settings.get("accent_color", "#ff8a5c")
         idx = 0
         for i, (name, color) in enumerate(accents):
             self.accent_combo.addItem(name, userData=color)
@@ -1899,12 +2086,7 @@ class SettingsDialog(QDialog):
             lambda _i: self._apply_theme_preset(self.theme_preset_combo.currentData()))
         layout.addRow("Theme preset:", self.theme_preset_combo)
 
-        note = QLabel(
-            "Appearance changes apply when you save. Restart Ember via Ember.bat to fully refresh."
-        )
-        note.setStyleSheet("color: #8f99ad; font-size: 11px;")
-        note.setWordWrap(True)
-        layout.addRow(note)
+        layout.addRow(self._hint("Appearance updates immediately after you save."))
 
         self._add_tab(page, "Appearance")
 
@@ -2236,7 +2418,7 @@ class SettingsDialog(QDialog):
                 button.setEnabled(False)
         self.mcp_setup_status.setStyleSheet("color: #8f99ad; font-size: 11px;")
         self.mcp_setup_status.setText(
-            f"Setting up {client.title()}… installing/verifying the free MCP runtime.")
+            f"Setting up {client.title()}… verifying the local MCP runtime and Ember bridge.")
         def work():
             try:
                 import mcp_setup
@@ -2261,8 +2443,9 @@ class SettingsDialog(QDialog):
                     f"{res.get('url')}\nRefresh its metadata after Ember updates.")
             else:
                 self.mcp_setup_status.setText(
-                    "Claude Desktop is configured. Click Save, fully quit and reopen Claude "
-                    f"Desktop. Config: {res.get('config')}")
+                    "Claude Desktop is configured with the same live chat and desktop tools as "
+                    "ChatGPT. Fully quit and reopen Claude, then say: ‘Connect to Ember live chat "
+                    f"and wait for my messages.’\nConfig: {res.get('config')}")
         else:
             self.mcp_setup_status.setStyleSheet("color: #f7768e; font-size: 11px;")
             self.mcp_setup_status.setText(str(res.get("error", "setup failed")))
@@ -2416,12 +2599,13 @@ class SettingsDialog(QDialog):
     def _build_automations_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
 
         head = QLabel(
-            "Background rules. When the trigger fires, Ember runs the action automatically - "
-            "no API calls needed. Edit automations.json next to the exe for advanced tweaks."
+            "Rules run locally when their trigger appears. They do not consume model calls."
         )
-        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        head.setObjectName("settingsHint")
         head.setWordWrap(True)
         v.addWidget(head)
 
@@ -2437,6 +2621,7 @@ class SettingsDialog(QDialog):
         v.addWidget(self.auto_confirm_check)
 
         self.auto_list = QListWidget()
+        self.auto_list.setObjectName("settingsRuleList")
         self._reload_automation_list()
         v.addWidget(self.auto_list, 1)
 
@@ -2446,13 +2631,14 @@ class SettingsDialog(QDialog):
         toggle_btn = QPushButton("Toggle on/off")
         toggle_btn.clicked.connect(self._toggle_automation)
         del_btn = QPushButton("Delete")
+        del_btn.setObjectName("dangerBtn")
         del_btn.clicked.connect(self._delete_automation)
         for b in (add_btn, toggle_btn, del_btn):
             row.addWidget(b)
         row.addStretch()
         v.addLayout(row)
 
-        self.tabs.addTab(page, "Automations")
+        self._add_tab(page, "Automations", scroll=False)
 
     def _reload_automation_list(self):
         if not hasattr(self, "auto_list"):
@@ -2527,12 +2713,15 @@ class SettingsDialog(QDialog):
     def _build_memory_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
-        head = QLabel("Facts Ember has remembered about your system / preferences.")
-        head.setStyleSheet("color: #8f99ad; font-size: 11px;")
+        v.setContentsMargins(0, 0, 0, 0)
+        head = QLabel("Only explicit, useful preferences are stored here; chat transcripts are separate.")
+        head.setObjectName("settingsHint")
+        head.setWordWrap(True)
         v.addWidget(head)
         import memory
         facts = memory._load().get("facts", {})
         view = QPlainTextEdit()
+        view.setObjectName("memorySurface")
         view.setReadOnly(True)
         if facts:
             lines = []
@@ -2541,22 +2730,27 @@ class SettingsDialog(QDialog):
                 lines.append(f"{k} = {val}")
             view.setPlainText("\n".join(lines))
         else:
-            view.setPlainText("(no facts saved yet — Ember adds them as it works)")
+            view.setPlainText("No remembered facts yet.")
+        self.memory_view = view
         v.addWidget(view, 1)
         clear_btn = QPushButton("Forget all facts")
+        clear_btn.setObjectName("dangerBtn")
         clear_btn.clicked.connect(self._forget_all)
-        v.addWidget(clear_btn)
-        self.tabs.addTab(page, "Memory")
+        v.addWidget(clear_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self._add_tab(page, "Memory", scroll=False)
 
     def _forget_all(self):
         import memory
         n = memory.forget_all().get("forgot_count", 0)  # locked + atomic
         QMessageBox.information(self, "Cleared", f"Forgot {n} facts.")
-        self._build_memory_tab()  # rebuild tab; cheap
+        if hasattr(self, "memory_view"):
+            self.memory_view.setPlainText("No remembered facts yet.")
 
     def _build_about_tab(self):
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
         _hk = (self.settings.get("hotkey") or "ctrl+shift+space").title()
         _diag = "Windows diagnostics" if sys.platform.startswith("win") else "system diagnostics"
         try:
@@ -2564,37 +2758,59 @@ class SettingsDialog(QDialog):
             _ver = _v.__version__
         except Exception:
             _ver = "?"
-        text = QLabel(
-            f"<b>Ember</b> v{_ver} — AI agent for your computer.<br><br>"
-            "Capabilities: hands-free voice chat, vision + mouse/keyboard control, DOM-driven browser, file organization, "
-            f"{_diag}, background automations, voice in/out, persistent memory, "
-            "phone remote control, and Claude fallback for hard reasoning.<br><br>"
-            f"Hotkey: <b>{_hk}</b> summons from anywhere.<br>"
-            "Drop files into the chat to discuss them.<br>"
-            "Voice Chat runs continuous listen → act → speak turns."
-        )
-        text.setTextFormat(Qt.TextFormat.RichText)
-        text.setWordWrap(True)
-        v.addWidget(text)
+        identity = QFrame()
+        identity.setObjectName("aboutIdentity")
+        identity_row = QHBoxLayout(identity)
+        identity_row.setContentsMargins(18, 16, 18, 16)
+        identity_row.setSpacing(14)
+        identity_row.addWidget(StarMark(46))
+        identity_copy = QVBoxLayout()
+        identity_copy.setSpacing(2)
+        name = QLabel("Ember")
+        name.setObjectName("aboutName")
+        version_label = QLabel(f"Version {_ver}  ·  AI computer agent")
+        version_label.setObjectName("settingsHint")
+        identity_copy.addWidget(name)
+        identity_copy.addWidget(version_label)
+        identity_row.addLayout(identity_copy, 1)
+        v.addWidget(identity)
+
+        capability_grid = QGridLayout()
+        capability_grid.setHorizontalSpacing(10)
+        capability_grid.setVerticalSpacing(10)
+        for index, (title, detail) in enumerate((
+                ("Computer control", "Screen understanding, apps, mouse, keyboard, and browser"),
+                ("Create and organize", "Files, documents, scripts, research, and workflows"),
+                ("Always available", f"Summon Ember with {_hk} or use hands-free voice"),
+                ("Private by default", f"Local memory, {_diag}, and encrypted credentials"))):
+            card = QFrame()
+            card.setObjectName("aboutCapability")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(13, 11, 13, 11)
+            card_layout.setSpacing(3)
+            card_title = QLabel(title)
+            card_title.setObjectName("aboutCapabilityTitle")
+            card_detail = QLabel(detail)
+            card_detail.setObjectName("settingsHint")
+            card_detail.setWordWrap(True)
+            card_layout.addWidget(card_title)
+            card_layout.addWidget(card_detail)
+            capability_grid.addWidget(card, index // 2, index % 2)
+        v.addLayout(capability_grid)
         v.addStretch()
-        self.tabs.addTab(page, "About")
+        self._add_tab(page, "About", scroll=False)
 
     def _build_security_tab(self):
         """Security controls: malware protection, web protection, agent mode, VPN, and audit."""
-        from PyQt6.QtWidgets import QScrollArea
         page = QWidget()
         v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(9)
         try:
             self._populate_security_tab(v)
         except Exception as e:
             v.addWidget(QLabel(f"Security panel unavailable: {e}"))
-        # The panel is taller than the dialog — wrap it so the lower sections (VPN, audit)
-        # are reachable by scrolling instead of being clipped off the bottom.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(page)
-        self.tabs.addTab(scroll, "Security")
+        self._add_tab(page, "Security")
 
     def _populate_security_tab(self, v):
         import antivirus, web_policy, safety, audit, vpn
@@ -2612,7 +2828,7 @@ class SettingsDialog(QDialog):
 
         def _section(text):
             lbl = QLabel(text)
-            lbl.setStyleSheet("color:#8f99ad; font-size:11px; margin-top:8px;")
+            lbl.setObjectName("settingsSectionLabel")
             v.addWidget(lbl)
 
         # --- Malware protection ---
@@ -2809,7 +3025,33 @@ class SettingsDialog(QDialog):
         _section("Pointer")
         try:
             import human_mouse
-            self._human_mouse_chk = QCheckBox("Human-like mouse movement (curved, eased, natural)")
+            self._ember_pointer_chk = QCheckBox("Show Ember's independent pointer while it acts")
+            self._ember_pointer_chk.setChecked(bool(
+                self.settings.get("show_ember_pointer", True)))
+            self._ember_pointer_chk.stateChanged.connect(self._on_ember_pointer_toggled)
+            self._ember_pointer_chk.setToolTip(
+                "A small click-through cursor shows Ember's actions without taking your mouse")
+            v.addWidget(self._ember_pointer_chk)
+
+            self._mouse_mode_combo = QComboBox()
+            for label, value in (
+                ("Independent — keep my mouse untouched", "detached"),
+                ("Borrow and return — restore my mouse after actions", "restore"),
+                ("Shared — move my system cursor", "shared"),
+            ):
+                self._mouse_mode_combo.addItem(label, value)
+            saved_mode = human_mouse.normalize_pointer_mode(
+                self.settings.get("mouse_mode", "detached"))
+            self._mouse_mode_combo.setCurrentIndex(max(0, self._mouse_mode_combo.findData(saved_mode)))
+            self._mouse_mode_combo.currentIndexChanged.connect(self._on_mouse_mode_changed)
+            v.addWidget(self._mouse_mode_combo)
+            self._mouse_mode_note = QLabel("")
+            self._mouse_mode_note.setObjectName("muted")
+            self._mouse_mode_note.setWordWrap(True)
+            v.addWidget(self._mouse_mode_note)
+            self._refresh_mouse_mode_note()
+
+            self._human_mouse_chk = QCheckBox("Smooth, eased pointer travel")
             self._human_mouse_chk.setChecked(bool(human_mouse.get_options().get("enabled", True)))
             self._human_mouse_chk.stateChanged.connect(self._on_mouse_humanize_toggled)
             v.addWidget(self._human_mouse_chk)
@@ -3844,59 +4086,37 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
-    # --- animated hearth ---------------------------------------------------
-    # Settings sits behind a live ember bed rather than a flat panel. The fire is
-    # simulated, not a looping asset, so it never repeats and costs no download.
-
-    def _install_ember_hearth(self):
-        """Start the flame simulation that paints along the bottom of this dialog."""
+    def _refresh_mouse_mode_note(self):
         try:
-            import ember_fx
-            # A low intensity: this is a bed of embers under the content, not a bonfire
-            # in front of it. Anything brighter competes with the controls.
-            # Grid resolution drives how sharp the flames read once upscaled. The old 140x74
-            # had to be blurred on the way up to hide its own lattice; this is dense enough to
-            # scale cleanly, and the simulation still costs well under a millisecond a frame.
-            self._hearth = ember_fx.FlameBackground(320, 180, intensity=0.85)
-            self._hearth_timer = QTimer(self)
-            # 20fps made the fire flicker rather than burn — real flames move slower than the
-            # simulation's per-step decay implies. 12fps reads as a settled hearth.
-            self._hearth_timer.setInterval(83)
-            self._hearth_timer.timeout.connect(self._tick_ember_hearth)
-            self._hearth_timer.start()
-        except Exception:
-            self._hearth = None
-
-    def _tick_ember_hearth(self):
-        hearth = getattr(self, "_hearth", None)
-        if hearth is None:
-            return
-        hearth.step()
-        # Only the strip the fire occupies needs repainting; invalidating the whole dialog
-        # every frame would make every control in it redraw 20 times a second.
-        h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
-        self.update(0, self.height() - h, self.width(), h)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        hearth = getattr(self, "_hearth", None)
-        if hearth is None:
-            return
-        try:
-            from PyQt6.QtCore import QRect
-            painter = QPainter(self)
-            painter.setOpacity(0.5)     # sits under the content, never fights it for attention
-            h = max(64, int(self.height() * 0.42))   # taller bed; the old strip read as a sliver
-            hearth.paint(painter, QRect(0, self.height() - h, self.width(), h))
-            painter.end()
+            import human_mouse
+            _mode, explanation = human_mouse.effective_mode()
+            self._mouse_mode_note.setText(explanation)
         except Exception:
             pass
 
-    def closeEvent(self, event):
-        timer = getattr(self, "_hearth_timer", None)
-        if timer is not None:
-            timer.stop()            # don't keep simulating fire for a closed dialog
-        super().closeEvent(event)
+    def _on_mouse_mode_changed(self, _index):
+        try:
+            import human_mouse
+            mode = self._mouse_mode_combo.currentData() or "detached"
+            self.settings["mouse_mode"] = mode
+            human_mouse.set_options(mode=mode)
+            self._refresh_mouse_mode_note()
+            save_settings(self.settings)
+        except Exception:
+            pass
+
+    def _on_ember_pointer_toggled(self, state):
+        enabled = bool(state)
+        self.settings["show_ember_pointer"] = enabled
+        try:
+            import human_mouse
+            human_mouse.set_options(show_pointer=enabled)
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "_set_ember_pointer_enabled"):
+                parent._set_ember_pointer_enabled(enabled)
+            save_settings(self.settings)
+        except Exception:
+            pass
 
     def _on_mouse_yield_toggled(self, state):
         try:
@@ -4423,7 +4643,7 @@ class SettingsDialog(QDialog):
             self.settings["show_thinking"] = self.show_thinking_check.isChecked()
             self.settings["glow_enabled"] = self.glow_check.isChecked()
             self.settings["font_size"] = int(self.font_size_slider.value())
-            self.settings["accent_color"] = self.accent_combo.currentData() or "#7aa2f7"
+            self.settings["accent_color"] = self.accent_combo.currentData() or "#ff8a5c"
             self.settings["liquid_glass"] = self.liquid_glass_check.isChecked()
             self.settings["glass_opacity"] = int(self.glass_opacity_slider.value())
         return self.settings
@@ -7240,6 +7460,11 @@ class EmberWindow(QWidget):
         self._bridge.ptt_text.connect(self._on_ptt_text)
         self._bridge.ptt_state.connect(self._on_ptt_state)
         self._bridge.ptt_error.connect(self._on_ptt_error)
+        self._bridge.mcp_live_event.connect(self._on_mcp_live_event)
+        self._mcp_live_enabled = False
+        self._mcp_live_session_id = ""
+        self._mcp_live_message_id = ""
+        self._mcp_live_stream_label = None
         self._ptt = None                 # PushToTalk coordinator (built on first install)
         self._ptt_recorder = None        # active voice.HoldRecorder during a press
         self._ptt_listener = None        # pynput key listener (non-macOS)
@@ -7264,6 +7489,19 @@ class EmberWindow(QWidget):
         self._orb_conversation = False   # True during a hands-free "Hey Ember" conversation
         self._title_jobs: set[str] = set()
         self._build_ui()
+        try:
+            import mcp_live
+            mcp_live.set_event_callback(lambda event: self._bridge.mcp_live_event.emit(event))
+            active = mcp_live.active_session()
+            if active:
+                self._mcp_live_enabled = True
+                self._mcp_live_session_id = active["session_id"]
+            self._refresh_mcp_live_button()
+        except Exception:
+            pass
+        self._ember_pointer = None
+        self._install_ember_pointer()
+        self._apply_mouse_options()
         self._restore_position()
         # A successful replacement keeps its .old backup until this new build reaches the UI.
         # Confirm the result here, then clean up; failed swaps are reported after rollback.
@@ -8339,7 +8577,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         compact = (mode == "chatbot")
         # Relax the minimum width for the narrow chat widget; restore it for the full layout
         # (the 3-column layout needs the room).
-        self.setMinimumSize(320, 480) if compact else self.setMinimumSize(780, 600)
+        self.setMinimumSize(320, 480) if compact else self.setMinimumSize(840, 620)
         # The side panels don't fit a narrow chat-widget width, so hide them in compact mode.
         sidebar = getattr(self, "_sidebar", None)
         if sidebar is not None:
@@ -8369,7 +8607,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             if g is not None:
                 self.setGeometry(g)
             else:
-                self.resize(1180, 800)
+                self.resize(1240, 820)
             self.max_btn.setText("□")
             self.max_btn.setToolTip("Window: normal — click for full screen")
         self._size_mode = mode
@@ -8388,8 +8626,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(1180, 800)
-        self.setMinimumSize(780, 600)
+        self.resize(1240, 820)
+        self.setMinimumSize(840, 620)
         # Apply liquid-glass acrylic backdrop if enabled
         if not _SAFE_MODE:
             QTimer.singleShot(100, self._apply_glass_effect)
@@ -8404,7 +8642,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             pass
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 14)  # margin so glow has room
+        outer.setContentsMargins(12, 12, 12, 12)  # margin so glow has room
 
         root = QFrame()
         root.setObjectName("root")
@@ -8413,22 +8651,22 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._apply_glow()
 
         root_row = QHBoxLayout(root)
-        root_row.setContentsMargins(10, 10, 10, 10)
-        root_row.setSpacing(10)
+        root_row.setContentsMargins(0, 0, 0, 0)
+        root_row.setSpacing(0)
 
         sidebar = QFrame()
         sidebar.setObjectName("historyPanel")
-        sidebar.setFixedWidth(248)
+        sidebar.setFixedWidth(228)
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(10, 11, 10, 10)
-        side_layout.setSpacing(9)
+        side_layout.setContentsMargins(14, 14, 12, 13)
+        side_layout.setSpacing(10)
 
         brand = QFrame()
         brand.setObjectName("brandRow")
         brand_row = QHBoxLayout(brand)
         brand_row.setContentsMargins(1, 0, 1, 5)
         brand_row.setSpacing(9)
-        mark = StarMark(34)
+        mark = StarMark(30)
         brand_row.addWidget(mark)
         brand_copy = QVBoxLayout()
         brand_copy.setContentsMargins(0, 0, 0, 0)
@@ -8436,6 +8674,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         brand_name = QLabel("Ember")
         brand_name.setObjectName("brandName")
         brand_copy.addWidget(brand_name)
+        brand_tagline = QLabel("Computer agent")
+        brand_tagline.setObjectName("brandTagline")
+        brand_copy.addWidget(brand_tagline)
         brand_row.addLayout(brand_copy, 1)
         side_layout.addWidget(brand)
 
@@ -8507,29 +8748,33 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
 
         command_panel = QFrame()
         command_panel.setObjectName("commandPanel")
-        command_panel.setFixedWidth(278)
+        command_panel.setFixedWidth(304)
         command_layout = QVBoxLayout(command_panel)
-        command_layout.setContentsMargins(10, 10, 10, 10)
-        command_layout.setSpacing(7)
+        command_layout.setContentsMargins(12, 13, 12, 12)
+        command_layout.setSpacing(9)
 
-        command_title = QLabel("TOOLS & CONTROLS")
+        command_title = QLabel("Toolbox")
         command_title.setObjectName("sectionTitle")
         command_layout.addWidget(command_title)
+        command_subtitle = QLabel("Launch a workspace or tune how Ember acts.")
+        command_subtitle.setObjectName("panelHint")
+        command_subtitle.setWordWrap(True)
+        command_layout.addWidget(command_subtitle)
 
-        palette_btn = QPushButton("⌕  Find anything                         ⌘K")
+        palette_btn = QPushButton("⌕  Search every capability        ⌘K")
         palette_btn.setObjectName("commandPalette")
         palette_btn.setToolTip("Search every Ember capability (Ctrl/Cmd+K)")
         palette_btn.clicked.connect(lambda: self._run_slash("__features__"))
         command_layout.addWidget(palette_btn)
 
-        self.voice_chat_btn = QPushButton("Voice Chat")
+        self.voice_chat_btn = QPushButton("Start voice conversation")
         self.voice_chat_btn.setObjectName("voiceToggle")
         self.voice_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.voice_chat_btn.setToolTip("Toggle hands-free voice conversation")
         self.voice_chat_btn.clicked.connect(self._toggle_voice_chat)
         command_layout.addWidget(self.voice_chat_btn)
 
-        self.voice_status_label = QLabel("Voice idle")
+        self.voice_status_label = QLabel("Voice is ready when you are")
         self.voice_status_label.setObjectName("panelHint")
         command_layout.addWidget(self.voice_status_label)
 
@@ -8538,7 +8783,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         pointer_layout = QVBoxLayout(pointer_card)
         pointer_layout.setContentsMargins(10, 8, 10, 9)
         pointer_layout.setSpacing(5)
-        pointer_title = QLabel("POINTER CONTROL")
+        pointer_title = QLabel("Agent pointer")
         pointer_title.setObjectName("controlTitle")
         pointer_layout.addWidget(pointer_title)
         try:
@@ -8546,7 +8791,28 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             pointer_opts = human_mouse.get_options()
         except Exception:
             pointer_opts = {"enabled": True, "speed": 1.0}
-        self.main_mouse_toggle = QCheckBox("Human motion")
+        self.main_ember_pointer_toggle = QCheckBox("Show agent pointer")
+        self.main_ember_pointer_toggle.setObjectName("pointerToggle")
+        self.main_ember_pointer_toggle.setChecked(bool(
+            self.settings.get("show_ember_pointer", True)))
+        self.main_ember_pointer_toggle.setToolTip(
+            "Show Ember's small click-through cursor while it works")
+        self.main_ember_pointer_toggle.toggled.connect(self._on_main_ember_pointer_toggled)
+        pointer_layout.addWidget(self.main_ember_pointer_toggle)
+
+        self.main_pointer_mode = QComboBox()
+        self.main_pointer_mode.setObjectName("pointerMode")
+        for label, value in (
+                ("Independent · your mouse stays yours", "detached"),
+                ("Borrow + return", "restore"),
+                ("Share system cursor", "shared")):
+            self.main_pointer_mode.addItem(label, value)
+        _mode = str(self.settings.get("mouse_mode", "detached"))
+        self.main_pointer_mode.setCurrentIndex(max(0, self.main_pointer_mode.findData(_mode)))
+        self.main_pointer_mode.currentIndexChanged.connect(self._on_main_pointer_mode_changed)
+        pointer_layout.addWidget(self.main_pointer_mode)
+
+        self.main_mouse_toggle = QCheckBox("Smooth pointer travel")
         self.main_mouse_toggle.setObjectName("pointerToggle")
         self.main_mouse_toggle.setChecked(bool(self.settings.get(
             "mouse_humanize", pointer_opts.get("enabled", True))))
@@ -8579,17 +8845,24 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         live_row.setContentsMargins(0, 0, 0, 2)
         live_dot = QLabel("●")
         live_dot.setObjectName("liveDot")
-        live_label = QLabel("STATUS")
+        live_label = QLabel("SESSION")
         live_label.setObjectName("liveLabel")
         live_row.addWidget(live_dot)
         live_row.addWidget(live_label)
         live_row.addStretch()
         status_layout.addLayout(live_row)
-        self.capability_metric = QLabel("Screen · pointer · keyboard available")
+        try:
+            import human_mouse
+            _pointer_mode, _pointer_reason = human_mouse.effective_mode()
+            _pointer_label = _pointer_reason.split(" — ", 1)[0]
+        except Exception:
+            _pointer_label = "Pointer ready"
+        self.capability_metric = QLabel(_pointer_label)
         self.capability_metric.setObjectName("statusMetric")
-        self.model_metric = QLabel("Model warming up")
+        _model = self.settings.get("model_id") or self.settings.get("gemini_model") or "Model not chosen"
+        self.model_metric = QLabel(_pretty_model_name(_model))
         self.model_metric.setObjectName("statusMetric")
-        self.tool_metric = QLabel("Risky actions require approval")
+        self.tool_metric = QLabel("Sensitive actions ask first")
         self.tool_metric.setObjectName("statusMetric")
         status_layout.addWidget(self.capability_metric)
         status_layout.addWidget(self.model_metric)
@@ -8607,15 +8880,19 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(7)
 
-        action_title = QLabel("LAUNCHERS & QUICK TASKS")
+        action_title = QLabel("Shortcuts")
         action_title.setObjectName("sectionTitle")
         actions_layout.addWidget(action_title)
 
-        for section_title, items in COMMAND_CENTER_GROUPS:
+        for section_title, items in PRIMARY_TOOL_GROUPS:
             sub = QLabel(section_title)
             sub.setObjectName("panelHint")
             actions_layout.addWidget(sub)
-            for label, cmd, tip in items:
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 4)
+            grid.setHorizontalSpacing(6)
+            grid.setVerticalSpacing(6)
+            for index, (label, cmd, tip) in enumerate(items):
                 b = QPushButton(label)
                 is_feature = cmd.startswith("__")
                 # Features OPEN something (solid button); quick tasks TYPE a request (outlined).
@@ -8628,7 +8905,13 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 if tip:
                     b.setToolTip(tip)
                 b.clicked.connect(lambda _=False, c=cmd: self._run_slash(c))
-                actions_layout.addWidget(b)
+                grid.addWidget(b, index // 2, index % 2)
+            actions_layout.addLayout(grid)
+
+        all_tools_btn = QPushButton("Browse all tools and capabilities  →")
+        all_tools_btn.setObjectName("browseAllTools")
+        all_tools_btn.clicked.connect(lambda: self._run_slash("__features__"))
+        actions_layout.addWidget(all_tools_btn)
 
         actions_layout.addStretch(1)
         actions_scroll.setWidget(actions_inner)
@@ -8664,7 +8947,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
 
         model_name = (self.settings.get("model_id") or self.settings.get("gemini_model")
                       or "Choose model")
-        self.model_btn = QPushButton(str(model_name))
+        self.model_btn = QPushButton(_pretty_model_name(model_name))
         self.model_btn.setObjectName("modelPickerBtn")
         self.model_btn.setMaximumWidth(180)
         self.model_btn.setToolTip("Change the model, including local Ollama")
@@ -8807,9 +9090,9 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         composer_layout.setSpacing(2)
         self.input_box = ChatInput(on_attach=self._attach_paths)
         self.input_box.setObjectName("composerInput")
-        self.input_box.setMinimumHeight(46)
-        self.input_box.setMaximumHeight(96)
-        self.input_box.setPlaceholderText("Message Ember or describe a task…")
+        self.input_box.setMinimumHeight(40)
+        self.input_box.setMaximumHeight(76)
+        self.input_box.setPlaceholderText("Describe what you want done…")
         self.input_box.installEventFilter(self)
         self.input_box.textChanged.connect(self._resize_composer)
         composer_layout.addWidget(self.input_box)
@@ -8832,6 +9115,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.mic_btn.clicked.connect(self._toggle_mic)
         composer_bar.addWidget(self.mic_btn)
 
+        self.mcp_live_btn = QPushButton("MCP")
+        self.mcp_live_btn.setObjectName("composerTool")
+        self.mcp_live_btn.setCheckable(True)
+        self.mcp_live_btn.setFixedSize(52, 34)
+        self.mcp_live_btn.setToolTip(
+            "Use a connected ChatGPT or Claude MCP conversation as Ember's live model")
+        self.mcp_live_btn.toggled.connect(self._toggle_mcp_live_chat)
+        composer_bar.addWidget(self.mcp_live_btn)
+
         self.composer_hint = QLabel("Shift+Enter for a new line")
         self.composer_hint.setObjectName("composerHint")
         composer_bar.addWidget(self.composer_hint, 1)
@@ -8841,6 +9133,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.stop_btn.setFixedSize(34, 34)
         self.stop_btn.setToolTip("Stop the current agent run")
         self.stop_btn.clicked.connect(self._on_stop)
+        self.stop_btn.hide()
         composer_bar.addWidget(self.stop_btn)
 
         self.send_btn = QPushButton("↑")
@@ -9012,7 +9305,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         if getattr(self, "_size_mode", "normal") == "chatbot":
             self._apply_size_mode("normal")
         self._tools_open = not bool(getattr(self, "_tools_open", False))
-        self._animate_drawer(panel, self._tools_open, 278)
+        self._animate_drawer(panel, self._tools_open, 304)
         if hasattr(self, "tools_btn"):
             self.tools_btn.setText("Close tools" if self._tools_open else "Tools")
             self.tools_btn.setProperty("open", self._tools_open)
@@ -9063,29 +9356,67 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             cursor.movePosition(cursor.MoveOperation.End)
             self.activity_details.setTextCursor(cursor)
 
+    @staticmethod
+    def _pretty_tool_name(name: str) -> str:
+        labels = {
+            "take_screenshot": "Looked at the screen",
+            "read_screen_text": "Read the screen",
+            "smart_click": "Clicked a control",
+            "click": "Clicked the screen",
+            "type_text": "Typed text",
+            "press_key": "Pressed a key",
+            "browser_open": "Opened a web page",
+            "browser_click": "Used the browser",
+            "browser_type": "Typed in the browser",
+            "run_command": "Ran a command",
+            "read_file": "Read a file",
+            "write_file": "Updated a file",
+            "list_files": "Checked files",
+        }
+        return labels.get(name, str(name or "tool").replace("_", " ").strip().capitalize())
+
+    @staticmethod
+    def _activity_arg_summary(args: dict) -> str:
+        if not isinstance(args, dict) or not args:
+            return ""
+        for key in ("url", "path", "query", "target", "text", "command", "keys"):
+            value = args.get(key)
+            if value not in (None, ""):
+                clean = re.sub(r"\s+", " ", str(value)).strip()
+                return clean[:180] + ("…" if len(clean) > 180 else "")
+        if "x" in args and "y" in args:
+            return f"At {args.get('x')}, {args.get('y')}"
+        keys = [str(key).replace("_", " ") for key in args][:3]
+        return " · ".join(keys)
+
     def _activity_tool_call(self, name: str, args: dict):
         try:
             import redaction
             safe_args = redaction.scrub_obj(args or {})
         except Exception:
             safe_args = args or {}
-        try:
-            args_text = json.dumps(safe_args, ensure_ascii=False, default=str, indent=2)
-        except Exception:
-            args_text = str(safe_args)
-        if len(args_text) > 1800:
-            args_text = args_text[:1800] + "\n…"
+        label = self._pretty_tool_name(name)
+        args_text = self._activity_arg_summary(safe_args)
         self._activity_count += 1
-        self._activity_entries.append(f"{self._activity_count}. RUNNING  {name}\n{args_text}")
-        self.activity_toggle.setText(f"▸  Working · {name}")
+        line = f"●  {label}"
+        if args_text:
+            line += f"\n    {args_text}"
+        self._activity_entries.append(line)
+        self.activity_toggle.setText(f"▸  {label}…")
         self.activity_progress.setRange(0, 0)
         self.activity_card.show()
+        self._set_run_busy(True)
         self._activity_refresh_text()
 
     def _activity_tool_result(self, name: str, result: dict, summary: str):
-        state = "DONE" if result.get("ok", True) else "FAILED"
-        self._activity_entries.append(f"   {state}  {name}\n{summary[:1200]}")
-        self.activity_toggle.setText(f"▸  {state.title()} · {name}")
+        ok = result.get("ok", True)
+        label = self._pretty_tool_name(name)
+        clean = re.sub(r"\s+", " ", str(summary or "")).strip()
+        if len(clean) > 260:
+            clean = clean[:260] + "…"
+        detail = "\n    " + clean if clean else ""
+        self._activity_entries.append(f"{'✓' if ok else '!'}  {label}{detail}")
+        self.activity_toggle.setText(f"▸  {'Done' if ok else 'Needs attention'} · {label}")
         self._activity_refresh_text()
 
     def _activity_complete(self):
@@ -9094,8 +9425,8 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.activity_progress.setRange(0, 1)
         self.activity_progress.setValue(1)
         self.activity_toggle.setText(
-            f"{'▾' if self._activity_expanded else '▸'}  Completed · "
-            f"{self._activity_count} action{'s' if self._activity_count != 1 else ''}")
+            f"{'▾' if self._activity_expanded else '▸'}  Finished · "
+            f"{self._activity_count} step{'s' if self._activity_count != 1 else ''}")
 
     def _filter_history(self, query: str):
         """Filter locally without mutating saved task history or losing the active selection."""
@@ -9128,7 +9459,26 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self.settings["mouse_humanize"] = bool(enabled)
         self._apply_mouse_options()
         save_settings(self.settings)
-        self._set_status("Human pointer motion on" if enabled else "Direct pointer motion on")
+        self._set_status("Smooth pointer travel on" if enabled else "Direct pointer travel on")
+
+    def _on_main_ember_pointer_toggled(self, enabled: bool):
+        self.settings["show_ember_pointer"] = bool(enabled)
+        self._apply_mouse_options()
+        save_settings(self.settings)
+        self._set_status("Agent pointer visible" if enabled else "Agent pointer hidden")
+
+    def _on_main_pointer_mode_changed(self, _index: int):
+        mode = self.main_pointer_mode.currentData() or "detached"
+        self.settings["mouse_mode"] = mode
+        self._apply_mouse_options()
+        save_settings(self.settings)
+        try:
+            import human_mouse
+            effective, explanation = human_mouse.effective_mode()
+            self.capability_metric.setText(explanation.split(" — ", 1)[0])
+            self._set_status(explanation)
+        except Exception:
+            self._set_status(f"Pointer mode · {mode}")
 
     def _on_main_mouse_speed_changed(self, value: int):
         speed = max(0.25, min(3.0, value / 100.0))
@@ -9225,6 +9575,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._streaming_buffer = ""
         self._stream_reset_fx()   # drop any half-faded tail with the bubble
         self.empty_hint = None
+        self._empty_state_frame = None
 
     def _load_active_chat_into_view(self):
         self._clear_chat_view()
@@ -9237,27 +9588,31 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self._add_bubble(msg.get("role", "assistant"), msg.get("text", ""), meta=msg.get("meta"))
 
     def _add_empty_state(self):
-        """A calm conversation-first welcome with useful prompts, not a dashboard card."""
+        """A calm, outcome-led welcome that explains the product by letting people use it."""
         frame = QFrame()
         frame.setObjectName("emptyState")
-        frame.setMaximumWidth(820)
+        frame.setMaximumWidth(790)
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         content = QVBoxLayout(frame)
-        content.setContentsMargins(28, 54, 28, 28)
-        content.setSpacing(10)
-        mark = StarMark(46)
+        content.setContentsMargins(24, 34, 24, 24)
+        content.setSpacing(9)
+        kicker = QLabel("YOUR COMPUTER, WITH HELP")
+        kicker.setObjectName("emptyKicker")
+        kicker.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark = StarMark(42)
         self._start_ambient_pulse(mark)
-        title = QLabel("What can I help you get done?")
+        title = QLabel("What should Ember take care of?")
         title.setObjectName("emptyTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setWordWrap(True)
         body = QLabel(
-            "Ask a question or describe an outcome. Ember can work with your apps, browser, "
-            "files, and screen—and pauses before sensitive actions.")
+            "Describe the outcome. Ember can see the screen, use apps, browse, and work with "
+            "files—while sensitive actions still wait for you.")
         body.setObjectName("emptyBody")
         body.setAlignment(Qt.AlignmentFlag.AlignCenter)
         body.setWordWrap(True)
         content.addWidget(mark, 0, Qt.AlignmentFlag.AlignHCenter)
+        content.addWidget(kicker)
         content.addWidget(title)
         content.addWidget(body)
         suggestions = QWidget()
@@ -9265,18 +9620,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         suggestion_grid.setContentsMargins(8, 8, 8, 8)
         suggestion_grid.setHorizontalSpacing(8)
         suggestion_grid.setVerticalSpacing(8)
-        for index, (label, command) in enumerate((
-                ("Help me use this app", "/apps"),
-                ("Research and compare", "/research"),
-                ("Organize my files", "/organize"),
-                ("Create something new", "/create"))):
-            button = QPushButton(label)
-            button.setObjectName("promptCard")
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setMinimumHeight(48)          # guarantee vertical room so labels never clip
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            button.clicked.connect(lambda _=False, c=command: self._run_slash(c))
-            suggestion_grid.addWidget(button, index // 2, index % 2)
+        for index, (icon, title_text, detail, command) in enumerate((
+                ("⌁", "Use the app on screen", "See it, operate it, and verify the result", "/apps"),
+                ("⌕", "Research and compare", "Browse sources and bring back a clear answer", "/research"),
+                ("✦", "Create something", "Make a file, script, document, or asset", "/create"),
+                ("▱", "Organize my files", "Preview a safe tidy-up before anything moves", "/organize"))):
+            card = PromptCard(icon, title_text, detail)
+            card.clicked.connect(lambda c=command: self._run_slash(c))
+            suggestion_grid.addWidget(card, index // 2, index % 2)
         content.addSpacing(3)
         content.addWidget(suggestions)
         hk = (self.settings.get("hotkey") or "ctrl+shift+space").upper()
@@ -9287,6 +9638,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         content.addWidget(self.empty_hint)
         self.chat_layout.insertWidget(
             self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_state_frame = frame
         QTimer.singleShot(0, self._clamp_bubble_widths)
 
     def _append_history(self, role: str, text: str, meta: str | None = None):
@@ -9380,6 +9732,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 return
 
     def _new_chat(self):
+        self._cancel_mcp_live_turn("Started a new Ember chat")
         chat = _make_chat("New chat")
         self.chat_history.setdefault("sessions", []).insert(0, chat)
         self.active_chat_id = chat["id"]
@@ -9397,6 +9750,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         chat_id = current.data(Qt.ItemDataRole.UserRole)
         if not chat_id or chat_id == self.active_chat_id:
             return
+        self._cancel_mcp_live_turn("Switched to another Ember chat")
         self.active_chat_id = chat_id
         self.chat_history["active_id"] = chat_id
         save_chat_history(self.chat_history)
@@ -9460,6 +9814,12 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
     def _do_quit(self):
         """Really quit Ember (tray ▸ Quit / explicit quit) — stops the background listeners."""
         self._really_quit = True
+        self._cancel_mcp_live_turn("Ember quit")
+        try:
+            import mcp_live
+            mcp_live.set_event_callback(None)
+        except Exception:
+            pass
         # "Install on Quit": the user chose to update when they close Ember — do it now (the
         # updater installs the new version and relaunches into it).
         if getattr(self, "_install_on_quit", False) and getattr(self, "_pending_update", None):
@@ -9557,7 +9917,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return
         try:
             document_height = int(box.document().size().height())
-            box.setFixedHeight(max(46, min(96, document_height + 12)))
+            box.setFixedHeight(max(40, min(76, document_height + 8)))
         except Exception:
             pass
 
@@ -9643,6 +10003,18 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             fx.reset()
 
     def _add_bubble(self, kind: str, text: str, meta: str | None = None) -> QFrame:
+        # The welcome card is a true empty state, not a permanent header. Leaving it mounted
+        # after the first message pushed the real conversation below the fold and made Ember
+        # look as if it had ignored the user (especially obvious in MCP live chat).
+        empty = getattr(self, "_empty_state_frame", None)
+        if empty is not None:
+            try:
+                empty.setParent(None)
+                empty.deleteLater()
+            except RuntimeError:
+                pass
+            self._empty_state_frame = None
+            self.empty_hint = None
         frame = QFrame()
         frame.setProperty("messageKind", kind)
         frame.setProperty("plainText", text or "")
@@ -9978,6 +10350,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         label = QLabel("Ember is thinking…")
         label.setStyleSheet("color: #8f99ad; font-size: 11px;")
         h.addWidget(label)
+        self._typing_label = label
         h.addStretch()
         self.chat_layout.insertWidget(
             self.chat_layout.count() - 1, frame, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -10005,15 +10378,194 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
 
     def _set_status(self, text: str):
         self.status_label.setText(text)
-        model = self.settings.get("model_id") or self.settings.get("gemini_model") or "Choose model"
+        live = self._current_mcp_live_session() if getattr(self, "_mcp_live_enabled", False) else None
+        model = ((live or {}).get("display_name") or (live or {}).get("client_name")
+                 or self.settings.get("model_id") or self.settings.get("gemini_model")
+                 or "Choose model")
         model_button = getattr(self, "model_btn", None)
         if model_button is not None:
-            model_button.setText(str(model))
+            model_button.setText((str(model)[:24] + " · Live") if live else _pretty_model_name(model))
         metric = getattr(self, "model_metric", None)
         if metric is not None:
-            metric.setText(f"{model} · {text}")
+            metric.setText((str(model)[:24] + " · MCP") if live else _pretty_model_name(model))
+
+    def _set_run_busy(self, busy: bool):
+        """Keep the composer actions honest: send while idle, stop while working."""
+        self.send_btn.setEnabled(not busy)
+        self.send_btn.setVisible(not busy)
+        self.stop_btn.setVisible(busy)
+
+    def _current_mcp_live_session(self):
+        try:
+            import mcp_live
+            active = mcp_live.active_session()
+            if active and (not self._mcp_live_session_id
+                           or active.get("session_id") == self._mcp_live_session_id):
+                return active
+            if self._mcp_live_session_id:
+                status = mcp_live.session_status(self._mcp_live_session_id)
+                if status.get("ok") and status.get("connected"):
+                    return status
+            return active
+        except Exception:
+            return None
+
+    def _refresh_mcp_live_button(self):
+        button = getattr(self, "mcp_live_btn", None)
+        if button is None:
+            return
+        live = self._current_mcp_live_session()
+        button.blockSignals(True)
+        button.setChecked(bool(live and self._mcp_live_enabled))
+        button.blockSignals(False)
+        if live:
+            name = live.get("display_name") or live.get("client_name") or "MCP"
+            short_name = live.get("client_name") or name
+            button.setText(str(short_name)[:8])
+            button.setToolTip(
+                f"{name} is connected. Checked: messages go there. Uncheck to use Ember's local/API model.")
+        else:
+            button.setText("MCP")
+            button.setToolTip(
+                "No live MCP client yet. In ChatGPT or Claude, ask: ‘Connect to Ember live chat’. ")
+
+    def _toggle_mcp_live_chat(self, enabled: bool):
+        live = self._current_mcp_live_session()
+        if enabled and not live:
+            self._mcp_live_enabled = False
+            self._refresh_mcp_live_button()
+            self._add_bubble(
+                "system", "No MCP chat is connected yet. Set up ChatGPT or Claude in Settings, "
+                          "then tell it: **Connect to Ember live chat and wait for my messages.**")
+            self._open_settings("Performance")
+            return
+        self._mcp_live_enabled = bool(enabled and live)
+        if not enabled:
+            self._cancel_mcp_live_turn("Switched to Ember's local/API model")
+        if live:
+            self._mcp_live_session_id = live.get("session_id", "")
+            name = live.get("display_name") or live.get("client_name") or "MCP client"
+            self._set_status(f"{name} · live chat" if enabled else "Local Ember model selected")
+        self._refresh_mcp_live_button()
+
+    def _on_mcp_live_event(self, event: dict):
+        """Render MCP callbacks on Qt's main thread; ChatGPT and Claude share this path."""
+        event = event if isinstance(event, dict) else {}
+        kind = event.get("kind")
+        sid = event.get("session_id", "")
+        name = event.get("display_name") or event.get("client_name") or "MCP client"
+        if kind == "connected":
+            self._mcp_live_session_id = sid
+            self._mcp_live_enabled = True
+            self._refresh_mcp_live_button()
+            self._add_bubble(
+                "system", f"**{name} connected over MCP.** New messages will go there. "
+                          "Use the MCP button beside the composer to switch back to Ember's local/API model.")
+            self._set_status(f"{name} · connected and waiting")
+            return
+        if sid and self._mcp_live_session_id and sid != self._mcp_live_session_id:
+            return
+        if kind == "disconnected":
+            self._mcp_live_enabled = False
+            self._mcp_live_session_id = ""
+            self._mcp_live_message_id = ""
+            self._hide_typing_indicator()
+            self._set_run_busy(False)
+            self._refresh_mcp_live_button()
+            self._add_bubble("system", f"{name} disconnected from Ember live chat.")
+            self._set_status("MCP live chat disconnected")
+            return
+        if kind == "status":
+            state = str(event.get("state") or "working").replace("_", " ")
+            detail = str(event.get("detail") or "").strip()
+            if state in ("thinking", "working", "using tool"):
+                self._show_typing_indicator()
+            label = getattr(self, "_typing_label", None)
+            if label is not None:
+                label.setText(f"{name}: {detail or state}…")
+            self._set_status(f"{name} · {detail or state}")
+            return
+        if kind != "reply":
+            return
+        text = str(event.get("text") or "")
+        final = bool(event.get("final", True))
+        self._hide_typing_indicator()
+        label = getattr(self, "_mcp_live_stream_label", None)
+        if label is None:
+            frame = self._add_bubble("assistant", text if final else "", meta=f"{name} · MCP")
+            label = next((child for child in frame.findChildren(QLabel)
+                          if child.objectName() == "bubbleBody"), None)
+            if not final:
+                self._mcp_live_stream_label = label
+        if label is not None:
+            label.setText(_md_to_html(text))
+        if final:
+            self._append_history("assistant", text, meta=f"{name} · MCP")
+            self._speak_reply(text)
+            self._mcp_live_stream_label = None
+            self._mcp_live_message_id = ""
+            self._activity_complete()
+            self._set_run_busy(False)
+            self._set_status(f"{name} · connected and ready")
+        QTimer.singleShot(0, self._clamp_bubble_widths)
+        QTimer.singleShot(35, self._scroll_to_bottom_smooth)
+
+    def _cancel_mcp_live_turn(self, reason: str = "Stopped in Ember"):
+        message_id = getattr(self, "_mcp_live_message_id", "")
+        if not message_id:
+            return
+        try:
+            import mcp_live
+            mcp_live.cancel_message(self._mcp_live_session_id, message_id, reason)
+        except Exception:
+            pass
+        self._mcp_live_message_id = ""
+        self._mcp_live_stream_label = None
+        self._hide_typing_indicator()
+        self._set_run_busy(False)
 
     def _submit_user_text(self, text: str, meta: str | None = None, status: str = "Thinking...") -> bool:
+        text = (text or "").strip()
+        if not text:
+            return False
+        if text.startswith("/") and self._handle_slash(text):
+            return True
+        live = self._current_mcp_live_session() if self._mcp_live_enabled else None
+        if self._mcp_live_enabled and not live:
+            self._mcp_live_enabled = False
+            self._mcp_live_session_id = ""
+            self._refresh_mcp_live_button()
+            self._add_bubble("system", "The MCP live session is no longer responding. Your message "
+                             "was not sent; ask ChatGPT or Claude to reconnect, then try again.")
+            self._set_status("MCP live chat needs reconnection")
+            return False
+        if live:
+            corrected = False
+            if self.settings.get("autocorrect_chat", True):
+                text, corrected = autocorrect_chat_text(text)
+            if corrected:
+                meta = f"{meta} · autocorrected" if meta else "autocorrected"
+            name = live.get("display_name") or live.get("client_name") or "MCP client"
+            self._activity_reset()
+            self._add_bubble("user", text, meta=meta)
+            self._append_history("user", text, meta=meta)
+            self._set_status(f"Sending to {name}…")
+            self._set_run_busy(True)
+            self._show_typing_indicator()
+            try:
+                import mcp_live
+                queued = mcp_live.post_user_message(text, str(self.active_chat_id or ""))
+            except Exception as exc:
+                queued = {"ok": False, "error": str(exc)}
+            if not queued.get("ok"):
+                self._hide_typing_indicator()
+                self._set_run_busy(False)
+                self._add_bubble("error", queued.get("error", "Could not reach MCP live chat"),
+                                 meta="MCP live chat")
+                return True
+            self._mcp_live_message_id = queued.get("message_id", "")
+            self._set_status(f"Waiting for {name}…")
+            return True
         if not self.agent:
             # A key IS configured -> the agent likely failed to init earlier (e.g. the
             # working-dir / FileNotFound issue). Try to rebuild it before nagging about a key.
@@ -10035,12 +10587,6 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                         "Open settings (gear) and add your Gemini API key first.")
                     self._open_settings()
                 return False
-        text = (text or "").strip()
-        if not text:
-            return False
-        if text.startswith("/"):
-            if self._handle_slash(text):
-                return True
         corrected = False
         if self.settings.get("autocorrect_chat", True):
             text, corrected = autocorrect_chat_text(text)
@@ -10051,7 +10597,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._add_bubble("user", text, meta=meta)
         self._append_history("user", text, meta=meta)
         self._set_status(status)
-        self.send_btn.setEnabled(False)
+        self._set_run_busy(True)
         self._show_typing_indicator()
         self.agent.send_user_message(agent_text)
         return True
@@ -10074,6 +10620,23 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             return True
         if target == "__clear__":
             self._reset_chat()
+            return True
+        if target == "__mcp_live__":
+            live = self._current_mcp_live_session()
+            if live:
+                self._mcp_live_enabled = True
+                self._mcp_live_session_id = live.get("session_id", "")
+                self._refresh_mcp_live_button()
+                self._set_status(f"{live.get('display_name') or live.get('client_name')} · live chat")
+            else:
+                self._add_bubble("system", "No MCP client is connected. Open Settings → Performance, "
+                                 "set up ChatGPT or Claude, then ask it to connect to Ember live chat.")
+            return True
+        if target == "__local_chat__":
+            self._cancel_mcp_live_turn("Switched to Ember's local/API model")
+            self._mcp_live_enabled = False
+            self._refresh_mcp_live_button()
+            self._set_status("Local Ember model selected")
             return True
         if target == "__forget_all__":
             import memory as _mem
@@ -10101,7 +10664,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._add_bubble("user", text + f"\n(expanded: {target[:80]}{'…' if len(target) > 80 else ''})")
         self._append_history("user", text)
         self._set_status("Thinking…")
-        self.send_btn.setEnabled(False)
+        self._set_run_busy(True)
         self._show_typing_indicator()
         self.agent.send_user_message(agent_text)
         return True
@@ -11025,9 +11588,32 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             human_mouse.set_options(
                 enabled=bool(self.settings.get("mouse_humanize", True)),
                 speed=max(0.25, min(3.0, float(self.settings.get("mouse_speed", 1.0)))),
+                show_pointer=bool(self.settings.get("show_ember_pointer", True)),
+                mode=human_mouse.normalize_pointer_mode(
+                    self.settings.get("mouse_mode", "detached")),
                 yield_to_human=bool(self.settings.get("mouse_yield_to_human", True)))
+            self._set_ember_pointer_enabled(bool(
+                self.settings.get("show_ember_pointer", True)))
         except Exception:
             pass
+
+    def _install_ember_pointer(self):
+        """Connect the UI overlay to the input driver without coupling the two modules."""
+        try:
+            import human_mouse
+            from ember_pointer import EmberPointerOverlay
+            self._ember_pointer = EmberPointerOverlay()
+            self._ember_pointer.set_enabled(bool(
+                self.settings.get("show_ember_pointer", True)))
+            human_mouse.set_pointer_hook(self._ember_pointer.request)
+        except Exception as exc:
+            self._ember_pointer = None
+            print(f"[Ember pointer unavailable: {exc}]")
+
+    def _set_ember_pointer_enabled(self, enabled: bool):
+        pointer = getattr(self, "_ember_pointer", None)
+        if pointer is not None:
+            pointer.set_enabled(bool(enabled))
 
     def _apply_tts_config(self):
         """Push the read-aloud engine settings to the voice module."""
@@ -11697,7 +12283,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             if self.agent:
                 self.agent.stop()
             self._set_status("Stopped from Ember Link")
-            self.send_btn.setEnabled(True)
+            self._set_run_busy(False)
             self._hide_typing_indicator()
             self._add_bubble("system", "Ember Link asked Ember to stop.")
             if remote_server:
@@ -11748,9 +12334,17 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
             self._stop_voice_chat("Voice chat stopped")
         if self.agent:
             self.agent.stop()
+        cancel_live = getattr(self, "_cancel_mcp_live_turn", None)
+        if callable(cancel_live):
+            cancel_live("Stopped by the user in Ember")
+        if hasattr(self, "_set_run_busy"):
+            self._set_run_busy(False)
+        if hasattr(self, "_activity_complete"):
+            self._activity_complete()
         self._set_status("Stopped")
 
     def _reset_chat(self):
+        self._cancel_mcp_live_turn("Conversation reset in Ember")
         if self.agent:
             # CANCEL any in-flight turn first. Without this, resetting mid-task (e.g. a long
             # `ollama pull`) leaves that turn running on the single-turn worker, so new messages
@@ -11770,7 +12364,7 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
         self._orb_conversation = False
         self._listening = False
         try:
-            self.send_btn.setEnabled(True)
+            self._set_run_busy(False)
         except Exception:
             pass
         self._set_siri(None)
@@ -11856,6 +12450,15 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 self.main_mouse_speed.setValue(int(round(speed * 100)))
                 self.main_mouse_speed.blockSignals(False)
                 self.main_mouse_speed_value.setText(f"{speed:.2f}×")
+                self.main_ember_pointer_toggle.blockSignals(True)
+                self.main_ember_pointer_toggle.setChecked(bool(
+                    self.settings.get("show_ember_pointer", True)))
+                self.main_ember_pointer_toggle.blockSignals(False)
+                mode = str(self.settings.get("mouse_mode", "detached"))
+                self.main_pointer_mode.blockSignals(True)
+                self.main_pointer_mode.setCurrentIndex(max(
+                    0, self.main_pointer_mode.findData(mode)))
+                self.main_pointer_mode.blockSignals(False)
             try:
                 import agents as _ag
                 run_mode = _ag.get_run_mode()
@@ -12240,13 +12843,14 @@ QLabel#bubbleBody {{ font-size: {fs}px; }}
                 self._add_bubble("system", "Claude replied (via API):\n" + (ev.payload.get("auto_reply") or "")[:1500])
             elif ev.kind == "error":
                 self._activity_complete()
+                self._set_run_busy(False)
                 self._add_bubble("error", str(ev.payload))
                 self._append_history("error", str(ev.payload))
                 if _remote:
                     _remote.push_chat("system", "Error: " + str(ev.payload))
             elif ev.kind == "done":
                 self._activity_complete()
-                self.send_btn.setEnabled(True)
+                self._set_run_busy(False)
                 self._hide_typing_indicator()
                 self._set_status(f"Ready ({self.settings.get('model_id') or self.settings.get('gemini_model')})")
                 if getattr(self, "_orb_active", False):

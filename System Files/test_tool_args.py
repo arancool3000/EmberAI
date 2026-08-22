@@ -50,6 +50,21 @@ def test_empty_schema_is_noop():
     assert tool_args.coerce({}, {"a": "1"}) == {"a": "1"}
 
 
+def test_validate_call_reports_unknown_and_missing_arguments():
+    def sample(path, pattern="*"):
+        return path, pattern
+    error = tool_args.validate_call(sample, {"recursive": True}, "list_directory")
+    assert error["error_code"] == "invalid_arguments"
+    assert error["unexpected_args"] == ["recursive"]
+    assert error["missing_args"] == ["path"]
+    assert error["accepted_args"] == ["path", "pattern"]
+
+
+def test_validate_call_allows_kwargs_and_valid_calls():
+    assert tool_args.validate_call(lambda **kwargs: kwargs, {"anything": 1}) is None
+    assert tool_args.validate_call(lambda path, limit=3: None, {"path": "/tmp"}) is None
+
+
 def _run_all() -> bool:
     import types
     funcs = [v for k, v in sorted(globals().items())

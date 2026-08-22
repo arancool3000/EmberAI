@@ -72,6 +72,19 @@ def test_list_tools_includes_dispatch_only_extensions():
     assert tools[1]["inputSchema"] == {"type": "object", "properties": {}}
 
 
+def test_registry_diagnostics_finds_schema_signature_drift():
+    def impl(path, recursive=False):
+        return {"ok": True}
+    report = eb.registry_diagnostics([{
+        "name": "list_directory",
+        "parameters": {"type": "OBJECT", "properties": {
+            "path": {"type": "STRING"}, "wrong": {"type": "BOOLEAN"}},
+            "required": ["path"]},
+    }], {"list_directory": impl})
+    assert report["ok"] is False
+    assert any("unsupported argument 'wrong'" in issue for issue in report["issues"])
+
+
 def test_destructive_annotation_is_conservative():
     destructive = eb.tool_to_mcp({"name": "delete_quarantined"})["annotations"]
     readonly = eb.tool_to_mcp({"name": "security_status"})["annotations"]
@@ -134,6 +147,21 @@ def test_execute_low_risk_runs_and_passes_args():
     r = eb.execute_tool("list_files", {"path": "/tmp"}, {"list_files": fake})
     assert r["ok"] is True and r["action"] == "listed"
     assert captured == {"path": "/tmp"}
+
+
+def test_execute_reports_accepted_arguments_without_calling_tool():
+    called = []
+    def list_directory(path, pattern="*"):
+        called.append(path)
+        return {"ok": True}
+    result = eb.execute_tool(
+        "list_directory", {"path": "/tmp", "recursive": True},
+        {"list_directory": list_directory})
+    assert result["ok"] is False
+    assert result["error_code"] == "invalid_arguments"
+    assert result["unexpected_args"] == ["recursive"]
+    assert result["accepted_args"] == ["path", "pattern"]
+    assert called == []
 
 
 def test_execute_high_risk_blocked_by_default():
@@ -215,6 +243,8 @@ def test_bridge_http_roundtrip():
         assert body["count"] == 1 and body["all_features_free"] is True
         code, body = _get(base + "/mcp/tools?refresh=1", token=token)
         assert code == 200 and body["count"] == 1
+        code, body = _get(base + "/mcp/doctor", token=token)
+        assert code == 200 and body["ok"] is True and body["checked"] == 1
 
         # call requires auth + returns wrapped result
         code, _ = _post(base + "/mcp/call", {"name": "ping_tool", "args": {"n": 7}})
@@ -333,8 +363,11 @@ def test_bridge_diagnostics_requires_chatgpt_annotations():
             return [{"name": "x", "inputSchema": {"type": "object"},
                      "annotations": {"readOnlyHint": True, "openWorldHint": False,
                                      "destructiveHint": False}}]
+        def registry_diagnostics(self):
+            return {"ok": True, "checked": 1, "issues": []}
     result = ems.bridge_diagnostics(Client())
     assert result["ok"] and result["tools"] == 1 and result["all_features_free"]
+    assert result["checked_implementations"] == 1
 
 
 if __name__ == "__main__":

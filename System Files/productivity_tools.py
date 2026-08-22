@@ -430,6 +430,10 @@ def pick_screen_color(x: int, y: int) -> dict:
     try:
         with mss_mod.mss() as sct:
             monitor = sct.monitors[0]  # full virtual screen
+            if int(monitor.get("width", 0) or 0) <= 0 or int(monitor.get("height", 0) or 0) <= 0:
+                return {"ok": False, "error": (
+                    "screen capture unavailable — no usable display was reported; on macOS, "
+                    "grant Ember Screen Recording permission and reopen the app")}
             shot = sct.grab(monitor)
             img = pil_image.frombytes("RGB", shot.size, shot.rgb)
             w, h = img.size

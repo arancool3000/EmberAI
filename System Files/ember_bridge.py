@@ -2,7 +2,7 @@
 
 This is the in-app half of Ember's MCP support (analogous to the blender-mcp *addon* that
 runs inside Blender). It lets an external process — `ember_mcp_server.py`, launched by an MCP
-client such as Claude Desktop or Cursor — list and invoke Ember's ~290 tools **in the live,
+client such as Claude Desktop or Cursor — list and invoke Ember's 400+ tools **in the live,
 running Ember app**, so browser/screen/memory tools operate on the real session. The MCP
 server never imports Ember; it just talks HTTP+JSON to this bridge.
 
@@ -23,6 +23,7 @@ with only the standard library, keeping the hermetic tests and any non-GUI use w
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import secrets
 import sys
@@ -155,6 +156,45 @@ def list_tools_from(declarations: list, dispatch: dict) -> list:
     return out
 
 
+def registry_diagnostics(declarations: list, dispatch: dict) -> dict:
+    """Find declaration/implementation drift before a model discovers it by failing a call."""
+    issues = []
+    checked = 0
+    for declaration in declarations or []:
+        name = declaration.get("name")
+        fn = dispatch.get(name)
+        if not name or not callable(fn):
+            if name and name not in _HOST_SPECIAL_TOOLS:
+                issues.append(f"{name}: declared but has no callable implementation")
+            continue
+        checked += 1
+        try:
+            parameters = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            continue
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+            continue
+        accepted = {
+            field for field, p in parameters.items()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        schema = declaration.get("parameters") or {}
+        properties = set((schema.get("properties") or {}).keys())
+        required = set(schema.get("required") or [])
+        implementation_required = {
+            field for field, p in parameters.items()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            and p.default is inspect.Parameter.empty
+        }
+        for field in sorted(properties - accepted):
+            issues.append(f"{name}: schema advertises unsupported argument '{field}'")
+        for field in sorted(implementation_required - properties):
+            issues.append(f"{name}: required implementation argument '{field}' is missing from schema")
+        for field in sorted(required - properties):
+            issues.append(f"{name}: required schema argument '{field}' has no property definition")
+    return {"ok": not issues, "checked": checked, "issues": issues}
+
+
 def set_host_agent(agent_instance) -> None:
     """Attach the live UI agent so agent-loop-only tools can also work over MCP."""
     global _HOST_AGENT
@@ -265,9 +305,16 @@ def execute_tool(name: str, args: dict, dispatch: dict, *,
             pass
 
     try:
-        result = fn(**args)
+        try:
+            import tool_args
+            invalid = tool_args.validate_call(fn, args, name)
+        except Exception:
+            invalid = None
+        result = invalid if invalid is not None else fn(**args)
     except TypeError as e:
-        return {"ok": False, "error": f"bad args: {e}"}
+        return {"ok": False, "error": f"invalid arguments for {name}: {e}",
+                "error_code": "invalid_arguments", "retryable": True,
+                "hint": "Change the arguments before retrying this tool."}
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if not isinstance(result, dict):
@@ -288,13 +335,16 @@ def execute_tool(name: str, args: dict, dispatch: dict, *,
 def _registries():
     """Return (declarations, dispatch, param_types) from the running app."""
     import agent
+    import mcp_live
+    declarations = [*agent.TOOL_DECLARATIONS, *mcp_live.TOOL_DECLARATIONS]
+    dispatch = {**agent.TOOL_DISPATCH, **mcp_live.TOOL_DISPATCH}
     param_types = {}
     try:
         import tool_args
-        param_types = tool_args.build_param_types(agent.TOOL_DECLARATIONS)
+        param_types = tool_args.build_param_types(declarations)
     except Exception:
         param_types = {}
-    return agent.TOOL_DECLARATIONS, agent.TOOL_DISPATCH, param_types
+    return declarations, dispatch, param_types
 
 
 # --- HTTP server -----------------------------------------------------------------------
@@ -368,6 +418,13 @@ class _Handler(BaseHTTPRequestHandler):
                 tools = list_tools_from(decls, dispatch)
                 return self._send(200, {"ok": True, "tools": tools, "count": len(tools),
                                         "all_features_free": True})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)})
+        if path == "/mcp/doctor":
+            try:
+                decls, dispatch, _pt = _registries()
+                report = registry_diagnostics(decls, dispatch)
+                return self._send(200, report)
             except Exception as e:
                 return self._send(500, {"ok": False, "error": str(e)})
         return self._send(404, {"ok": False, "error": "not found"})

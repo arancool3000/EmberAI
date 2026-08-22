@@ -140,6 +140,18 @@ def setup_claude_desktop(install: bool = True) -> dict:
         steps.append(where)
         return {"ok": False, "steps": steps, "error": where}
     steps.append(f"wrote Claude Desktop config: {where}")
+    try:
+        import ember_bridge
+        bridge = ember_bridge.status()
+        if not bridge.get("running"):
+            bridge = ember_bridge.start()
+        if not bridge.get("ok"):
+            return {"ok": False, "steps": steps,
+                    "error": bridge.get("error", "could not start Ember's MCP bridge")}
+        steps.append("started Ember's loopback MCP bridge")
+    except Exception as exc:
+        return {"ok": False, "steps": steps,
+                "error": f"could not start Ember's MCP bridge: {exc}"}
     command, args = _client_command_and_args()
     return {
         "ok": True,
@@ -147,9 +159,39 @@ def setup_claude_desktop(install: bool = True) -> dict:
         "config": where,
         "launcher": " ".join([command] + args),
         "frozen": _is_frozen(),
+        "bridge": bridge.get("url"),
+        "live_chat_tools": True,
+        "desktop_control": True,
+        "no_model_api_key_required": True,
         "note": ("Now quit Claude Desktop (Cmd/Ctrl+Q) and reopen it, with Ember running and the "
-                 "MCP bridge on. Ember will appear under the tools icon."),
+                 "MCP bridge on. Ember will appear under the tools icon with the same desktop "
+                 "control and live-chat tools as ChatGPT."),
     }
+
+
+def claude_mcp_status() -> dict:
+    """Report Claude configuration and the shared bridge/capability surface."""
+    cfg = claude_desktop_config_path()
+    configured = False
+    try:
+        data = json.loads(cfg.read_text()) if cfg.exists() else {}
+        configured = isinstance((data.get("mcpServers") or {}).get("ember"), dict)
+    except Exception:
+        configured = False
+    try:
+        import ember_bridge
+        bridge = ember_bridge.status()
+    except Exception:
+        bridge = {"running": False, "url": None}
+    return {"ok": True, "configured": configured, "config": str(cfg),
+            "bridge_running": bool(bridge.get("running")), "bridge": bridge.get("url"),
+            "all_tools": True, "live_chat_tools": True, "desktop_control": True,
+            "no_model_api_key_required": True}
+
+
+def start_claude_mcp(install: bool = True) -> dict:
+    """Set up Claude and start the same shared Ember bridge used by ChatGPT."""
+    return setup_claude_desktop(install=install)
 
 
 def _stop_chatgpt_process() -> None:
@@ -174,7 +216,8 @@ def chatgpt_mcp_status() -> dict:
     running = bool(_CHATGPT_PROCESS is not None and _CHATGPT_PROCESS.poll() is None)
     return {"ok": True, "running": running, "host": "127.0.0.1", "port": _CHATGPT_PORT,
             "url": f"http://127.0.0.1:{_CHATGPT_PORT}/mcp" if running else None,
-            "all_tools": True, "all_features_free": True}
+            "all_tools": True, "all_features_free": True, "live_chat_tools": True,
+            "desktop_control": True, "no_model_api_key_required": True}
 
 
 def start_chatgpt_mcp(port: int = 8781, install: bool = True) -> dict:
@@ -261,7 +304,7 @@ TOOL_DECLARATIONS = [
         },
     },
     {"name": "start_chatgpt_mcp",
-     "description": "Start Ember's free loopback Streamable-HTTP MCP endpoint for ChatGPT.",
+     "description": "Start Ember's loopback Streamable-HTTP MCP endpoint for ChatGPT.",
      "parameters": {"type": "OBJECT", "properties": {
          "port": {"type": "INTEGER", "description": "local port, default 8781"},
          "install": {"type": "BOOLEAN", "description": "install/verify MCP SDK first"}},
@@ -272,6 +315,15 @@ TOOL_DECLARATIONS = [
     {"name": "chatgpt_mcp_status",
      "description": "Report the local ChatGPT MCP endpoint and confirm all tools are free.",
      "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
+    {"name": "start_claude_mcp",
+     "description": ("Configure Claude Desktop and start Ember's shared MCP bridge with the "
+                     "same live chat, mouse, screen, keyboard, browser, file, and shell tools."),
+     "parameters": {"type": "OBJECT", "properties": {
+         "install": {"type": "BOOLEAN", "description": "install/verify MCP SDK first"}},
+         "required": []}},
+    {"name": "claude_mcp_status",
+     "description": "Report Claude MCP configuration, bridge state, and live-chat capability.",
+     "parameters": {"type": "OBJECT", "properties": {}, "required": []}},
 ]
 
 TOOL_DISPATCH = {
@@ -279,4 +331,6 @@ TOOL_DISPATCH = {
     "start_chatgpt_mcp": start_chatgpt_mcp,
     "stop_chatgpt_mcp": stop_chatgpt_mcp,
     "chatgpt_mcp_status": chatgpt_mcp_status,
+    "start_claude_mcp": start_claude_mcp,
+    "claude_mcp_status": claude_mcp_status,
 }

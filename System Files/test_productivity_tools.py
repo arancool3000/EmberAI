@@ -153,7 +153,7 @@ def test_screen_record_start_friendly_without_deps():
 def test_pick_screen_color_friendly_without_deps():
     r = pt.pick_screen_color(0, 0)
     if not r["ok"]:
-        assert _missing_dep(r["error"]), r
+        assert _missing_dep(r["error"]) or "screen capture unavailable" in r["error"].lower(), r
 
 
 def test_screenshot_monitor_friendly_without_deps():

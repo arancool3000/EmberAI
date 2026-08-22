@@ -266,7 +266,8 @@ def click(x, y, button="left", double=False):
             import human_mouse
             if human_mouse.click(int(x), int(y), button=button, double=double):
                 return {"ok": True,
-                        "action": f"{'double-' if double else ''}{button}-click at ({x},{y})"}
+                        "action": f"{'double-' if double else ''}{button}-click at ({x},{y})",
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
             if human_mouse.yielded_to_human():
                 return {"ok": False, "yielded": True,
                         "error": "You took the mouse, so Ember stopped instead of "
@@ -288,8 +289,9 @@ def move_mouse(x, y, duration=0.2):
     try:
         try:
             import human_mouse
-            if human_mouse.move(int(x), int(y), duration=duration):
-                return {"ok": True, "x": x, "y": y}
+            if human_mouse.move(int(x), int(y), duration=duration, real=True):
+                return {"ok": True, "x": x, "y": y,
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
             if human_mouse.yielded_to_human():
                 return {"ok": False, "yielded": True, "x": x, "y": y,
                         "error": "You took the mouse, so Ember stopped instead of "
@@ -310,7 +312,8 @@ def drag(from_x, from_y, to_x, to_y, button="left", duration=0.4):
             import human_mouse
             if human_mouse.drag(int(from_x), int(from_y), int(to_x), int(to_y),
                                 button=button, duration=duration):
-                return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y]}
+                return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y],
+                        "pointer_mode": human_mouse.last_mode() or "shared"}
         except Exception:
             pass
         pyautogui.moveTo(from_x, from_y, duration=0.15)
@@ -782,16 +785,43 @@ def write_file(path, content):
         return {"ok": False, "error": str(e)}
 
 
-def list_directory(path, pattern="*"):
+def list_directory(path, pattern="*", recursive=False, max_entries=300, include_hidden=False):
+    """List a folder safely, with bounded recursive traversal when requested."""
     try:
         p = Path(path).expanduser()
         if not p.exists():
             return {"ok": False, "error": "not found"}
-        items = list(p.glob(pattern)) if pattern != "*" else list(p.iterdir())
-        return {"ok": True, "path": str(p),
-                "entries": [{"name": x.name, "type": "dir" if x.is_dir() else "file",
-                              "size": x.stat().st_size if x.is_file() else None}
-                             for x in sorted(items)[:300]]}
+        if not p.is_dir():
+            return {"ok": False, "error": "path is not a directory"}
+        try:
+            limit = max(1, min(2000, int(max_entries or 300)))
+        except (TypeError, ValueError):
+            limit = 300
+        pattern = str(pattern or "*")
+        iterator = p.rglob(pattern) if bool(recursive) else p.glob(pattern)
+        entries = []
+        truncated = False
+        for item in iterator:
+            try:
+                relative = item.relative_to(p)
+                if not include_hidden and any(part.startswith(".") for part in relative.parts):
+                    continue
+                if len(entries) >= limit:
+                    truncated = True
+                    break
+                is_file = item.is_file()
+                entries.append({
+                    "name": str(relative) if recursive else item.name,
+                    "path": str(item),
+                    "type": "file" if is_file else ("dir" if item.is_dir() else "other"),
+                    "size": item.stat().st_size if is_file else None,
+                })
+            except (OSError, ValueError):
+                continue
+        entries.sort(key=lambda value: (value["type"] != "dir", value["name"].casefold()))
+        return {"ok": True, "path": str(p), "recursive": bool(recursive),
+                "pattern": pattern, "entries": entries, "count": len(entries),
+                "truncated": truncated, "max_entries": limit}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

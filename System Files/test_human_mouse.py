@@ -85,24 +85,12 @@ def test_options_roundtrip():
     hm.set_options(speed=1.0, enabled=True)
 
 
-def test_there_is_only_the_users_own_cursor():
-    """Ember used to draw a second, click-through pointer of its own and offer
-    detached/restore/shared modes for keeping the real cursor still. All of it is gone: Ember
-    drives the one system cursor, like any other automation."""
-    for gone in ("set_pointer_hook", "normalize_pointer_mode", "effective_mode", "last_mode"):
-        assert not hasattr(hm, gone), f"{gone} should have been removed with the overlay"
-    assert "show_pointer" not in hm.get_options()
-    assert "mode" not in hm.get_options()
-
-
-def test_the_pointer_modules_are_gone():
-    import importlib
-    for name in ("ember_pointer", "detached_input"):
-        try:
-            importlib.import_module(name)
-        except ImportError:
-            continue
-        raise AssertionError(f"{name} still exists")
+def test_independent_pointer_is_the_default():
+    options = hm.get_options()
+    assert options["show_pointer"] is True
+    assert options["mode"] == "detached"
+    for helper in ("set_pointer_hook", "normalize_pointer_mode", "effective_mode", "last_mode"):
+        assert hasattr(hm, helper), helper
 
 
 # --- driver accuracy (fake pyautogui, no display) ------------------------------
@@ -129,6 +117,7 @@ class _FakePG:
 def _with_fake():
     fake = _FakePG()
     hm._pg = lambda: fake          # inject; restore in finally
+    hm.set_options(mode="shared")
     return fake
 
 
@@ -177,7 +166,7 @@ def test_plain_move_duration_scales_with_speed():
     fake = _DurPG()
     hm._pg = lambda: fake
     try:
-        hm.set_options(enabled=False, speed=1.0)
+        hm.set_options(enabled=False, speed=1.0, mode="shared")
         assert hm.move(500, 500) is False        # plain path
         slow = fake.durations[-1]
         hm.set_options(enabled=False, speed=2.0)
@@ -185,6 +174,95 @@ def test_plain_move_duration_scales_with_speed():
         fast = fake.durations[-1]
         assert slow > 0 and fast < slow, (slow, fast)
     finally:
+        import importlib; importlib.reload(hm)
+
+
+def test_detached_travel_never_moves_the_physical_cursor():
+    fake = _FakePG()
+    seen = []
+    old_caps = __import__("detached_input").capabilities
+    import detached_input
+    hm._pg = lambda: fake
+    detached_input.capabilities = lambda *a, **k: {
+        "detached": True, "restore": True, "backend": "test"
+    }
+    try:
+        hm.set_options(mode="detached", enabled=True)
+        hm.set_pointer_hook(lambda x, y, action: seen.append((x, y, action)))
+        assert hm.move(500, 300, duration=0) is True
+        assert fake.calls == []
+        assert seen[-1] == (500, 300, "park")
+    finally:
+        detached_input.capabilities = old_caps
+        import importlib; importlib.reload(hm)
+
+
+def test_explicit_move_still_moves_the_real_cursor_in_detached_mode():
+    fake = _FakePG()
+    old_caps = __import__("detached_input").capabilities
+    import detached_input
+    hm._pg = lambda: fake
+    detached_input.capabilities = lambda *a, **k: {
+        "detached": True, "restore": True, "backend": "test"
+    }
+    try:
+        hm.set_options(mode="detached", enabled=True)
+        assert hm.move(640, 360, duration=0, real=True) is True
+        assert fake._pos == (640, 360)
+    finally:
+        detached_input.capabilities = old_caps
+        import importlib; importlib.reload(hm)
+
+
+def test_detached_click_targets_backend_without_touching_physical_cursor():
+    fake = _FakePG()
+    seen = []
+    import detached_input
+    old_caps, old_backend = detached_input.capabilities, detached_input.backend_for
+
+    class Backend:
+        def click(self, x, y, button="left", double=False):
+            seen.append((x, y, button, double))
+            return True
+
+    hm._pg = lambda: fake
+    detached_input.capabilities = lambda *a, **k: {
+        "detached": True, "restore": True, "backend": "test"
+    }
+    detached_input.backend_for = lambda *a, **k: Backend()
+    try:
+        hm.set_options(mode="detached", enabled=True)
+        assert hm.click(720, 480, button="left") is True
+        assert seen == [(720, 480, "left", False)]
+        assert fake.calls == []
+        assert hm.last_mode() == "detached"
+    finally:
+        detached_input.capabilities, detached_input.backend_for = old_caps, old_backend
+        import importlib; importlib.reload(hm)
+
+
+def test_rejected_detached_click_borrows_returns_and_reports_restore_mode():
+    fake = _FakePG()
+    fake._pos = (130, 170)
+    import detached_input
+    old_caps, old_backend = detached_input.capabilities, detached_input.backend_for
+
+    class RejectingBackend:
+        def click(self, *_args, **_kwargs):
+            return False
+
+    hm._pg = lambda: fake
+    detached_input.capabilities = lambda *a, **k: {
+        "detached": True, "restore": True, "backend": "test"
+    }
+    detached_input.backend_for = lambda *a, **k: RejectingBackend()
+    try:
+        hm.set_options(mode="detached", enabled=False)
+        assert hm.click(720, 480) is True
+        assert fake._pos == (130, 170), "the user's pointer must be returned"
+        assert hm.last_mode() == "restore"
+    finally:
+        detached_input.capabilities, detached_input.backend_for = old_caps, old_backend
         import importlib; importlib.reload(hm)
 
 
